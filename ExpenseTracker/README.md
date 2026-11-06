@@ -37,6 +37,17 @@ imported are flagged and unticked when you import the same statement again.
 Excel files need an internet connection the first time (the reader library loads from
 cdnjs); CSV import works fully offline.
 
+## Adding from bank SMS
+- **iPhone:** long-press the bank SMS → **Copy**, open the app, tap **💬**, paste
+  (or tap *Paste from clipboard*) and tap **Read messages**. You can paste several messages at once.
+  iOS does not let home-screen web apps appear in the Share sheet, so copy → paste is the quickest route.
+- **Android:** after installing the app, choose **Share → Expenses** on a message and it opens ready to save.
+
+The reader picks out the amount (ignoring "Avl Bal"), debit or credit, date, the payee or payer and the bank,
+then categorises it like a statement row. OTPs, "will be debited" autopay notices, failed and declined
+transactions and payment requests are ignored. Pasting the same SMS twice is detected, and when the same
+transaction later arrives in a statement import it is flagged as a *possible duplicate* and left unticked.
+
 ## Put it on your phone
 The app is static files, so any static host will work. With GitHub Pages:
 

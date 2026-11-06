@@ -173,6 +173,7 @@
     </div>
     <div class="searchrow">
       <input class="search" id="search" type="search" placeholder="Search notes or categories">
+      <button class="iconbtn" id="smsTop" aria-label="Add from bank SMS" title="Add from bank SMS" style="height:auto">💬</button>
       <button class="iconbtn" id="importTop" aria-label="Import bank statement" title="Import bank statement" style="height:auto">📥</button>
     </div>
     <div id="list"></div>
@@ -219,6 +220,8 @@
       <h2>Bank statements</h2>
       <div class="sub">Download your statement from net banking as <b>CSV</b> or <b>Excel (XLS/XLSX)</b> and import it here. Debits become expenses, credits become income, and each one is auto-categorised.</div>
       <button class="btn primary" id="importBtn">📥 Import bank statement</button>
+      <button class="btn ghost" id="smsBtn">💬 Add from bank SMS</button>
+      <div class="sub">Copy one or more bank SMS (long-press → Copy), then tap 💬 and paste.</div>
       <input type="file" id="importFile" accept=".csv,.txt,.tsv,.xls,.xlsx,.ods,text/csv,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" class="hidden">
       <label style="margin-top:16px">Learned rules <span id="ruleCount"></span></label>
       <div class="sub" style="margin:0 0 8px">When you change a category for an imported transaction, the merchant is remembered for future imports.</div>
@@ -281,6 +284,17 @@
   <button type="button" class="btn danger hidden" id="fDelete">Delete</button>
   <button type="button" class="btn ghost" id="fCancel">Cancel</button>
 </form>
+
+<!-- Paste SMS sheet -->
+<div class="sheet" id="smsSheet">
+  <div class="grab"></div>
+  <h2 style="text-align:center">Add from bank SMS</h2>
+  <div class="sub" style="text-align:center;margin-bottom:10px">Paste one or more bank / UPI / card messages. Each becomes a transaction you can review.</div>
+  <textarea id="smsText" rows="7" placeholder="Sent Rs.7500.00 from A/c *9226 on 03-11-26 to SHYAMKANT HARIBHAU MORE.RRN 752628445212…"></textarea>
+  <button type="button" class="btn ghost" id="smsPaste">📋 Paste from clipboard</button>
+  <button type="button" class="btn primary" id="smsGo">Read messages</button>
+  <button type="button" class="btn ghost" id="smsCancel">Cancel</button>
+</div>
 
 <!-- Import preview sheet -->
 <div class="sheet tall" id="impSheet">
@@ -627,7 +641,7 @@
   // ---------- sheets ----------
   function showBg() { $('sheetBg').style.display = 'block'; }
   function closeAll() {
-    $('sheet').classList.remove('open'); $('impSheet').classList.remove('open');
+    $('sheet').classList.remove('open'); $('impSheet').classList.remove('open'); $('smsSheet').classList.remove('open');
     $('sheetBg').style.display = 'none';
     document.activeElement && document.activeElement.blur();
   }
@@ -802,7 +816,7 @@
     if (!s) return null;
     let m;
     if ((m = s.match(/^(\d{4})[-\/.](\d{1,2})[-\/.](\d{1,2})/))) return mkDate(m[1], m[2], m[3]);
-    if ((m = s.match(/^(\d{1,2})[-\/. ]+([A-Za-z]{3,9})[-\/. ,']+(\d{2,4})\b/))) {
+    if ((m = s.match(/^(\d{1,2})[-\/. ]*([A-Za-z]{3,9})[-\/. ,']*(\d{2,4})\b/))) {
       const mi = MONTHS.indexOf(m[2].slice(0, 3).toLowerCase()); return mi < 0 ? null : mkDate(m[3], mi + 1, m[1]);
     }
     if ((m = s.match(/^([A-Za-z]{3,9})[-\/. ]+(\d{1,2}),?[-\/. ,']+(\d{2,4})\b/))) {
@@ -843,9 +857,21 @@
   function refOf(date, type, amount, desc) {
     return [date, type, amount.toFixed(2), String(desc).toLowerCase().replace(/\s+/g, ' ').trim()].join('|');
   }
+  // exact: same statement row / same SMS imported before. maybe: same date, type and amount already recorded
+  // (e.g. added from SMS, now arriving in the statement). Both start unticked.
+  function markDups(items) {
+    const refs = new Set(state.expenses.map(e => e.ref).filter(Boolean));
+    const soft = {};
+    state.expenses.forEach(e => { const k = `${e.date}|${e.type}|${e.amount.toFixed(2)}`; soft[k] = (soft[k] || 0) + 1; });
+    items.forEach(x => {
+      const k = `${x.date}|${x.type}|${x.amount.toFixed(2)}`;
+      x.dup = refs.has(x.ref) ? 'exact' : soft[k] > 0 ? 'maybe' : false;
+      if (x.dup) soft[k] = Math.max(0, (soft[k] || 0) - 1);
+      x.include = !x.dup;
+    });
+  }
   function buildItems() {
     const { map } = imp;
-    const existing = new Set(state.expenses.map(e => e.ref).filter(Boolean));
     const cell = (r, j) => j >= 0 ? r[j] : '';
     const items = [];
     imp.rows.slice(imp.header + 1).forEach(r => {
@@ -857,8 +883,7 @@
         amount = Math.round(Math.abs(amount) * 100) / 100;
         if (!(amount > 0)) return;
         const ref = refOf(date, type, amount, desc);
-        const dup = existing.has(ref);
-        items.push({ date, desc, type, amount, ref, dup, include: !dup, category: classify(desc, type), touched: false });
+        items.push({ date, desc, type, amount, ref, payment: 'Bank', category: classify(desc, type), touched: false });
       };
       if (map.debit >= 0 || map.credit >= 0) {
         const d = Math.abs(parseAmount(cell(r, map.debit))) || 0;
@@ -878,6 +903,7 @@
       }
     });
     items.sort((a, b) => b.date.localeCompare(a.date));
+    markDups(items);
     imp.items = items;
   }
 
@@ -888,10 +914,11 @@
     const dups = it.filter(x => x.dup).length;
     const other = it.filter(x => x.category === 'Other' || x.category === 'Other Income').length;
     $('impInfo').innerHTML = it.length
-      ? `${esc(imp.name)}<br>${deb.length} debits <b>${fmt(sum(deb))}</b> · ${cre.length} credits <b style="color:var(--income)">${fmt(sum(cre))}</b>${dups ? `<br>${dups} already imported (unticked)` : ''}`
+      ? `${esc(imp.name)}<br>${deb.length} debits <b>${fmt(sum(deb))}</b> · ${cre.length} credits <b style="color:var(--income)">${fmt(sum(cre))}</b>${dups ? `<br>${dups} already recorded (unticked)` : ''}`
       : `${esc(imp.name)}<br>No transactions found. Check the columns below.`;
     if (it.length && state.settings.selfName) $('impInfo').innerHTML += `<br><span style="font-size:12px">Payments to/from <b>${esc(state.settings.selfName)}</b> → Transfer</span>`;
-    if (!it.length) $('impMap').open = true;
+    if (!it.length && imp.mode !== 'sms') $('impMap').open = true;
+    $('impMap').classList.toggle('hidden', imp.mode === 'sms');
 
     const filters = [['all', `All ${it.length}`], ['debit', `Debits`], ['credit', `Credits`], ['other', `Uncategorised ${other}`]];
     if (dups) filters.push(['dup', `Duplicates ${dups}`]);
@@ -905,7 +932,7 @@
       <div class="irow ${x.include ? '' : 'off'}" data-i="${i}">
         <input type="checkbox" ${x.include ? 'checked' : ''} aria-label="Include">
         <div class="d"><div class="desc">${esc(x.desc || '(no description)')}</div>
-          <div class="meta">${new Date(x.date + 'T00:00').toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' })}${x.dup ? '<span class="tag warn">already imported</span>' : ''}</div></div>
+          <div class="meta">${new Date(x.date + 'T00:00').toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' })}${x.dup === 'exact' ? '<span class="tag warn">already imported</span>' : x.dup ? '<span class="tag warn">possible duplicate</span>' : ''}</div></div>
         <div class="amt ${x.type === 'credit' ? 'credit' : ''}">${x.type === 'credit' ? '+' : '−'}${fmt(x.amount)}</div>
         <select aria-label="Category">${opts[x.type].map(c => `<option ${c.name === x.category ? 'selected' : ''} value="${esc(c.name)}">${esc(c.emoji)} ${esc(c.name)}</option>`).join('')}</select>
       </div>`).join('');
@@ -934,7 +961,7 @@
     catch (e) { toast(e.message && e.message.length > 20 ? e.message : 'Could not read that file'); return; }
     rows = (rows || []).filter(r => Array.isArray(r) && r.some(c => String(c).trim() !== ''));
     const det = detectColumns(rows);
-    imp.rows = rows; imp.name = file.name; imp.filter = 'all';
+    imp.rows = rows; imp.name = file.name; imp.filter = 'all'; imp.mode = 'file';
     imp.header = det ? det.header : 0;
     imp.map = det ? det.map : { date: -1, desc: -1, debit: -1, credit: -1, amount: -1, type: -1 };
     imp.dateFmt = imp.map.date >= 0 ? guessDateFmt(rows, imp.map.date) : 'dmy';
@@ -954,6 +981,113 @@
     $('impList').scrollTop = 0;
     requestAnimationFrame(() => $('impSheet').classList.add('open'));
   }
+
+  // ---------- bank SMS ----------
+  const SMS_SKIP = /\b(otp|one time password|will be (debited|credited|deducted)|is due|due (date|on|by)|minimum (amount )?due|total (amount )?due|declined|failed|unsuccessful|could not be|has been blocked|requested (money|rs|inr)|collect request|payment request|mandate (has been )?(created|registered|set up)|e-?mandate)\b/i;
+  const SMS_DEBIT = /\b(debited|debit(ed)? by|sent|spent|paid|withdrawn|withdrawal|purchase|txn of|transferred to|trf to|used (at|for)|charged|deducted)\b/i;
+  const SMS_CREDIT = /\b(credited|received|deposited|refunded|refund of|added to|has been credited|reversed)\b/i;
+  const AMT = /(?:rs\.?|inr|₹|usd|us\$|\$)\s*([\d,]+(?:\.\d{1,2})?)/gi;
+  const BAD_PARTY = /^(a\/?c\b|ac\b|acct|account|your|xx|\*|card\b|bank\b|you\b|sms\b|block\b|call\b|the\b|upi\b|imps\b|neft\b|rs\b|inr\b)/i;
+
+  function smsAmount(t) {
+    let m; AMT.lastIndex = 0;
+    while ((m = AMT.exec(t))) {
+      const before = t.slice(Math.max(0, m.index - 22), m.index);
+      if (/bal|balance|limit|avl|avail/i.test(before)) continue;
+      const n = parseFloat(m[1].replace(/,/g, ''));
+      if (n > 0) return n;
+    }
+    m = t.match(/\b(?:debited|credited|sent|received|paid|spent)\s+(?:by|for|with|of)?\s*([\d,]+(?:\.\d{1,2})?)\b/i);
+    return m ? parseFloat(m[1].replace(/,/g, '')) : NaN;
+  }
+  function smsDate(t) {
+    const re = /\b(\d{4}-\d{2}-\d{2}|\d{1,2}[-\/.]\d{1,2}[-\/.]\d{2,4}|\d{1,2}[- ]?[A-Za-z]{3}[a-z]*[- ,']?\d{2,4})\b/g;
+    let m;
+    while ((m = re.exec(t))) {
+      const d = parseDate(m[1], 'dmy');
+      if (d && d <= isoDate(new Date(Date.now() + 864e5))) return d;
+    }
+    return isoDate(new Date());
+  }
+  function smsParty(t, type) {
+    let m = t.match(/;\s*([A-Za-z][\w .&'-]{2,40}?)\s+credited\b/i);
+    if (m && type === 'debit') return m[1].trim();
+    const re = /\b(?:to|at|towards|by|from|in favou?r of|info)\s*:?\s+(?:vpa\s+)?(.+?)(?=\s*(?:\.\s|\.?\s*rrn|\.?\s*ref|\.?\s*utr|\bon\s+\d|\bon\s+[a-z]{3}\b|\bvia\b|\bupi\b|\(|;|,|\bavl|\bavail|\bbal\b|\.\s*$|\.[A-Z]|$|\s-\s))/gi;
+    while ((m = re.exec(t))) {
+      const c = m[1].replace(/\s+/g, ' ').trim().replace(/[.\-]+$/, '');
+      if (c.length < 2 || /^\d/.test(c) || BAD_PARTY.test(c) || /a\/c|\*\d|x{2,}\d/i.test(c)) { re.lastIndex = m.index + 2; continue; }
+      return c.slice(0, 60);
+    }
+    return '';
+  }
+  function bankName(t) {
+    const m = t.match(/-\s*([A-Z][A-Za-z ]{2,25}Bank)\s*$/) || t.match(/\b(HDFC|ICICI|SBI|Axis|Kotak|Indian|Canara|Union|IDFC|Yes|IndusInd|Federal|PNB|Bank of Baroda|BOB)\s*Bank\b/i);
+    return m ? m[1].replace(/\s*bank$/i, '').trim() + ' Bank' : '';
+  }
+  function parseSms(raw) {
+    const t = String(raw).replace(/\s+/g, ' ').trim();
+    if (!t || SMS_SKIP.test(t)) return null;
+    const di = t.search(SMS_DEBIT), ci = t.search(SMS_CREDIT);
+    if (di < 0 && ci < 0) return null;
+    const type = ci < 0 || (di >= 0 && di < ci) ? 'debit' : 'credit';
+    const amount = Math.round(smsAmount(t) * 100) / 100;
+    if (!(amount > 0)) return null;
+    const date = smsDate(t);
+    const party = smsParty(t, type);
+    const bank = bankName(t);
+    const rrn = (t.match(/\b(?:rrn|ref(?:erence)?(?:\s*no)?|utr|upi ref(?: no)?|txn id)[\s.:#-]*([A-Za-z0-9]{6,})/i) || [])[1] || '';
+    const payment = /\bupi\b|vpa|@/i.test(t) ? 'UPI' : /\batm\b|cash withdrawal|withdrawn/i.test(t) ? 'Cash' : /\bcard\b/i.test(t) ? 'Card' : 'Bank';
+    const desc = party ? `${type === 'credit' ? 'From' : 'To'} ${party}${bank ? ' · ' + bank : ''}` : t.slice(0, 120);
+    const cat = classify(party || t, type);
+    return { date, desc, type, amount, payment, category: cat, touched: false,
+      ref: rrn ? `sms|${rrn}|${type}|${amount.toFixed(2)}` : `sms|${date}|${type}|${amount.toFixed(2)}|${(party || t).toLowerCase()}` };
+  }
+  function parseSmsBatch(text) {
+    const chunks = String(text).replace(/\r/g, '').split(/\n\s*\n/).map(c => c.trim()).filter(Boolean);
+    const out = [];
+    chunks.forEach(c => {
+      const lines = c.split('\n').map(l => l.trim()).filter(Boolean);
+      const each = lines.map(parseSms);
+      if (lines.length > 1 && each.filter(Boolean).length >= 2) each.forEach(x => x && out.push(x));
+      else { const x = parseSms(c); if (x) out.push(x); }
+    });
+    return out;
+  }
+  function openSmsPreview(text, source) {
+    const items = parseSmsBatch(text);
+    if (!items.length) return false;
+    items.sort((a, b) => b.date.localeCompare(a.date));
+    markDups(items);
+    Object.assign(imp, { mode: 'sms', rows: [], items, filter: 'all', name: source || `${items.length} message${items.length > 1 ? 's' : ''}` });
+    selfRe = selfPatterns();
+    closeAll();
+    renderImport();
+    showBg();
+    $('impList').scrollTop = 0;
+    requestAnimationFrame(() => $('impSheet').classList.add('open'));
+    return true;
+  }
+  function openSmsSheet(prefill) {
+    $('smsText').value = prefill || '';
+    showBg();
+    requestAnimationFrame(() => $('smsSheet').classList.add('open'));
+    setTimeout(() => $('smsText').focus(), 260);
+  }
+  $('smsTop').addEventListener('click', () => openSmsSheet(''));
+  $('smsBtn').addEventListener('click', () => openSmsSheet(''));
+  $('smsCancel').addEventListener('click', closeAll);
+  $('smsPaste').addEventListener('click', async () => {
+    try {
+      const t = await navigator.clipboard.readText();
+      if (t) { $('smsText').value = ($('smsText').value ? $('smsText').value + '\n\n' : '') + t; }
+      else toast('Clipboard is empty');
+    } catch (e) { toast('Tap the box and choose Paste'); $('smsText').focus(); }
+  });
+  $('smsGo').addEventListener('click', () => {
+    const t = $('smsText').value.trim();
+    if (!t) { toast('Paste a bank SMS first'); return; }
+    if (!openSmsPreview(t)) toast('No transaction found. Is this a debit/credit message?');
+  });
 
   $('impMap').addEventListener('change', e => {
     if (e.target.dataset.map) imp.map[e.target.dataset.map] = +e.target.value;
@@ -985,7 +1119,7 @@
     const now = Date.now();
     const add = imp.items.filter(x => x.include).map((x, i) => ({
       id: uid(), createdAt: now + i, type: x.type, amount: x.amount, category: x.category,
-      date: x.date, note: x.desc, payment: 'Bank', ref: x.ref
+      date: x.date, note: x.desc, payment: x.payment || 'Bank', ref: x.ref
     }));
     state.expenses.push(...add);
     save();
@@ -1081,6 +1215,13 @@
 
   selfRe = selfPatterns();
   render();
+  (() => {
+    const q = new URLSearchParams(location.search);
+    const shared = [q.get('sms'), q.get('text'), q.get('title')].filter(Boolean).join('\n');
+    if (!shared) return;
+    history.replaceState(null, '', location.pathname);
+    if (!openSmsPreview(shared, 'Shared message')) openSmsSheet(shared);
+  })();
   if ('serviceWorker' in navigator && location.protocol !== 'file:') {
     navigator.serviceWorker.register('sw.js').catch(() => {});
   }
