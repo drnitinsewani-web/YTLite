@@ -571,7 +571,7 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     ['🍔','Food','debit'],['🛒','Groceries','debit'],['🚗','Transport','debit'],['🏠','Rent','debit'],['💡','Bills','debit'],
     ['🛍️','Shopping','debit'],['💊','Health','debit'],['🎬','Entertainment','debit'],['✈️','Travel','debit'],
     ['📚','Education','debit'],['🏧','Cash','debit'],['📦','Other','debit'],
-    ['💼','Salary','credit'],['↩️','Refund','credit'],['🏦','Interest','credit'],['💰','Other Income','credit'],
+    ['💼','Salary','credit'],['↩️','Refund','credit'],['🏦','Interest','credit'],['🪙','Other Income','credit'],
     ['🔁','Transfer','both', true],
     ['🧾','Fees & Charges','debit', false, 3],['📈','Investment','both', true, 3]
   ].map(([emoji, name, kind, exclude, since]) => ({ emoji, name, kind, since: since || 2, ...(exclude ? { exclude: true } : {}) }));
@@ -624,7 +624,9 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     s = { ...d, ...s, settings: { ...d.settings, ...(s.settings || {}) } };
     s.rules = s.rules && typeof s.rules === 'object' ? s.rules : {};
     s.categories = (Array.isArray(s.categories) && s.categories.length ? s.categories : d.categories)
-      .map(c => ({ ...c, kind: c.kind || 'debit' }));
+      .map(c => ({ ...c, kind: c.kind || 'debit' }))
+      // 💰 is drawn with a $ sign on iPhone; use a currency-neutral coin
+      .map(c => c.name === 'Other Income' && c.emoji === '💰' ? { ...c, emoji: '🪙' } : c);
     // add default categories introduced after the version this data was saved with
     DEFAULT_CATS.forEach(({ since, ...c }) => {
       if (since > oldVersion && !s.categories.some(x => x.name === c.name)) s.categories.push(c);
@@ -1490,7 +1492,7 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     const clash = (state.accounts || []).find(a => a.digits.some(d => digits.some(n => d.endsWith(n) || n.endsWith(d))));
     if (clash) { toast(`Those digits already belong to ${clash.name}`); return; }
     const kind = $('newAcctKind').value;
-    const emoji = $('newAcctEmoji').value.trim() || ({ bank: '🏦', card: '💳', wallet: '📱', cash: '💵' })[kind];
+    const emoji = $('newAcctEmoji').value.trim() || ({ bank: '🏦', card: '💳', wallet: '📱', cash: '👛' })[kind];
     state.accounts = (state.accounts || []).concat({ id: uid(), name, emoji, kind, digits });
     // attach existing imported entries that mention these digits
     let n = 0;
