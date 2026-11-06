@@ -1206,8 +1206,8 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
 
   // ---------- bank SMS ----------
   const SMS_SKIP = /\b(otp|one time password|will be (debited|credited|deducted)|is due|due (date|on|by)|minimum (amount )?due|total (amount )?due|declined|failed|unsuccessful|could not be|has been blocked|requested (money|rs|inr)|collect request|payment request|mandate (has been )?(created|registered|set up)|e-?mandate)\b/i;
-  const SMS_DEBIT = /\b(debited|debit(ed)? by|sent|spent|paid|withdrawn|withdrawal|purchase|txn of|transferred to|trf to|used (at|for)|charged|deducted)\b/i;
-  const SMS_CREDIT = /\b(credited|received|deposited|refunded|refund of|added to|has been credited|reversed)\b/i;
+  const SMS_DEBIT = /\b(debited|debit(ed)? by|debit\s*(of\s*)?(inr|rs\.?|₹)|dr\.?\s*(inr|rs\.?|₹)|sent|spent|paid|withdrawn|withdrawal|purchase|txn of|transferred to|trf to|used (at|for)|charged|deducted)\b/i;
+  const SMS_CREDIT = /\b(credited|credit\s*(of\s*)?(inr|rs\.?|₹)|cr\.?\s*(inr|rs\.?|₹)|received|deposited|refunded|refund of|added to|has been credited|reversed)\b/i;
   const AMT = /(?:rs\.?|inr|₹|usd|us\$|\$)\s*([\d,]+(?:\.\d{1,2})?)/gi;
   const BAD_PARTY = /^(a\/?c\b|ac\b|acct|account|your|xx|\*|card\b|bank\b|you\b|sms\b|block\b|call\b|the\b|upi\b|imps\b|neft\b|rs\b|inr\b)/i;
 
@@ -1242,6 +1242,16 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     }
     return '';
   }
+  // Banks such as Axis put the narration on its own line: "ACH-DR-IPRUIN 06112026 CAM", "UPI/P2M/6310…/SWIGGY".
+  const NARR_CODES = new Set('UPI P2M P2A P2P ACH DR CR NEFT IMPS RTGS POS ECS NACH BIL MB IB INB IFT TPT MMT INFT ONL ECOM'.split(' '));
+  function narrationParty(raw) {
+    const line = String(raw).split(/\r?\n/).map(l => l.trim())
+      .find(l => /^(UPI|ACH|NEFT|IMPS|RTGS|POS|ECS|NACH|BIL|MB|IB|INB|MMT)[\/\-]/i.test(l));
+    if (!line) return '';
+    const words = line.replace(/\S+@\S+/g, ' ').split(/[\/\-\s]+/)
+      .filter(w => w && !/\d/.test(w) && !NARR_CODES.has(w.toUpperCase()));
+    return words.join(' ').slice(0, 60);
+  }
   function bankName(t) {
     const m = t.match(/-\s*([A-Z][A-Za-z ]{2,25}Bank)\s*$/) || t.match(/\b(HDFC|ICICI|SBI|Axis|Kotak|Indian|Canara|Union|IDFC|Yes|IndusInd|Federal|PNB|Bank of Baroda|BOB)\s*Bank\b/i);
     return m ? m[1].replace(/\s*bank$/i, '').trim() + ' Bank' : '';
@@ -1258,7 +1268,7 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     const amount = Math.round(smsAmount(t) * 100) / 100;
     if (!(amount > 0)) return null;
     const date = smsDate(t, opts.fallbackDate);
-    const party = smsParty(t, type);
+    const party = smsParty(t, type) || narrationParty(raw);
     const bank = bankName(t);
     const rrn = (t.match(/\b(?:rrn|ref(?:erence)?(?:\s*no)?|utr|upi ref(?: no)?|txn id)[\s.:#-]*([A-Za-z0-9]{6,})/i) || [])[1] || '';
     const payment = /\bupi\b|vpa|@/i.test(t) ? 'UPI' : /\batm\b|cash withdrawal|withdrawn/i.test(t) ? 'Cash' : /\bcard\b/i.test(t) ? 'Card' : 'Bank';
