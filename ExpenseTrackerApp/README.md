@@ -8,6 +8,7 @@ The same code runs inside the app, plus:
 - **Durable storage:** data is saved in the app's own storage (Application Support), not browser storage.
 - **Exports** (CSV and backup) open the iOS share sheet, so you can save them to Files, iCloud or WhatsApp.
 - **Excel import works offline** (the SheetJS reader is bundled).
+- **Gmail alerts** work the same as in the web app (see `../ExpenseTracker/README.md`).
 
 The Xcode project is generated with [XcodeGen](https://github.com/yonaskolb/XcodeGen) from `project.yml`.
 GitHub Actions (`.github/workflows/expenses-ios.yml`) builds it on a macOS runner and uploads it to TestFlight.

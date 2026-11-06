@@ -228,6 +228,24 @@
       <div class="chips" id="ruleChips"></div>
     </div>
     <div class="card">
+      <h2>Email (Gmail)</h2>
+      <div class="sub" id="mailStatus">Not connected.</div>
+      <label for="mailUrl">Gmail bridge address</label>
+      <input id="mailUrl" type="url" inputmode="url" autocomplete="off" placeholder="https://script.google.com/macros/s/…/exec">
+      <button class="btn primary" id="mailCheck">✉️ Check email now</button>
+      <details class="map" id="mailHelp">
+        <summary>How to connect Gmail (one time, ~3 min)</summary>
+        <ol class="sub" style="padding-left:18px;line-height:1.5">
+          <li>Tap <b>Copy setup script</b> below. It already contains your private key.</li>
+          <li>Open <b>script.google.com</b> (signed in to the Gmail you get bank alerts on) → <b>New project</b>, delete what's there and paste.</li>
+          <li><b>Deploy → New deployment</b> → type <b>Web app</b>. Execute as: <b>Me</b>. Who has access: <b>Anyone</b>. Tap <b>Deploy</b> and allow Gmail access (choose <i>Advanced → Go to project</i> if Google warns it's unverified — it's your own script).</li>
+          <li>Copy the <b>Web app URL</b> and paste it in the box above.</li>
+        </ol>
+        <div class="sub">The script runs inside your Google account and only answers requests carrying your key. It sends back just the short alert text around each transaction, nothing else from your mailbox.</div>
+        <button class="btn ghost" id="mailScript">📋 Copy setup script</button>
+      </details>
+    </div>
+    <div class="card">
       <h2>Expense categories</h2>
       <div class="chips" id="catChips" style="margin-top:12px"></div>
       <h2 style="margin-top:16px">Income categories</h2>
@@ -284,6 +302,43 @@
   <button type="button" class="btn danger hidden" id="fDelete">Delete</button>
   <button type="button" class="btn ghost" id="fCancel">Cancel</button>
 </form>
+
+<script type="text/plain" id="gmailScriptTpl">// Expenses — Gmail bridge (Google Apps Script)
+// Runs in your own Google account. Deploy as a Web app: Execute as "Me", access "Anyone".
+// Only requests carrying the key below get an answer.
+const KEY = '__KEY__';
+const DEFAULT_DAYS = 45;
+const QUERY = '(debited OR credited OR spent OR withdrawn OR "has been used" OR "transaction of" OR "payment of" OR "transferred") ' +
+  '(Rs OR INR OR "Rs." OR ₹) -in:spam -in:trash -category:promotions -category:social';
+const HIT = /(debited|credited|spent|withdrawn|has been used|used for|transaction of|payment of|transferred|received|paid|sent)/i;
+
+function doGet(e) {
+  const p = (e && e.parameter) || {};
+  if (p.key !== KEY) return out({ error: 'bad key' });
+  const after = Number(p.after) || Math.floor(Date.now() / 1000) - DEFAULT_DAYS * 86400;
+  const threads = GmailApp.search(QUERY + ' after:' + after, 0, 200);
+  const items = [];
+  threads.forEach(function (t) {
+    t.getMessages().forEach(function (m) {
+      const ts = Math.floor(m.getDate().getTime() / 1000);
+      if (ts < after) return;
+      const text = (m.getPlainBody() || '').replace(/\s+/g, ' ').trim();
+      const i = text.search(HIT);
+      if (i < 0) return;
+      items.push({ id: m.getId(), date: m.getDate().toISOString(), from: m.getFrom(), subject: m.getSubject(),
+                   text: text.slice(Math.max(0, i - 160), i + 320) });
+    });
+  });
+  return out({ items: items, now: Math.floor(Date.now() / 1000) });
+}
+
+function out(o) {
+  return ContentService.createTextOutput(JSON.stringify(o)).setMimeType(ContentService.MimeType.JSON);
+}
+
+// Optional: run this once from the editor to grant Gmail access before deploying.
+function authorize() { GmailApp.search('in:inbox', 0, 1); }
+</script>
 
 <!-- Paste SMS sheet -->
 <div class="sheet" id="smsSheet">
@@ -638,6 +693,7 @@
     sel.value = state.settings.currency;
     $('budget').value = state.settings.budget || '';
     $('selfName').value = state.settings.selfName || '';
+    renderMailStatus();
     const chip = (c, i) => `<span class="chip">${esc(c.emoji)} ${esc(c.name)}<span class="x" data-del="${i}" role="button" aria-label="Remove">✕</span></span>`;
     $('catChips').innerHTML = state.categories.map((c, i) => c.kind !== 'credit' ? chip(c, i) : '').join('');
     $('incChips').innerHTML = state.categories.map((c, i) => c.kind === 'credit' ? chip(c, i) : '').join('');
@@ -1012,21 +1068,21 @@
     m = t.match(/\b(?:debited|credited|sent|received|paid|spent)\s+(?:by|for|with|of)?\s*([\d,]+(?:\.\d{1,2})?)\b/i);
     return m ? parseFloat(m[1].replace(/,/g, '')) : NaN;
   }
-  function smsDate(t) {
-    const re = /\b(\d{4}-\d{2}-\d{2}|\d{1,2}[-\/.]\d{1,2}[-\/.]\d{2,4}|\d{1,2}[- ]?[A-Za-z]{3}[a-z]*[- ,']?\d{2,4})\b/g;
+  function smsDate(t, fallback) {
+    const re = /\b(\d{4}-\d{2}-\d{2}|\d{1,2}[-\/.]\d{1,2}[-\/.]\d{2,4}|\d{1,2}[- ]?[A-Za-z]{3}[a-z]*[- ,']?\d{2,4}|[A-Za-z]{3}[a-z]* \d{1,2},? \d{4})\b/g;
     let m;
     while ((m = re.exec(t))) {
       const d = parseDate(m[1], 'dmy');
       if (d && d <= isoDate(new Date(Date.now() + 864e5))) return d;
     }
-    return isoDate(new Date());
+    return fallback || isoDate(new Date());
   }
   function smsParty(t, type) {
     let m = t.match(/;\s*([A-Za-z][\w .&'-]{2,40}?)\s+credited\b/i);
     if (m && type === 'debit') return m[1].trim();
-    const re = /\b(?:to|at|towards|by|from|in favou?r of|info)\s*:?\s+(?:vpa\s+)?(.+?)(?=\s*(?:\.\s|\.?\s*rrn|\.?\s*ref|\.?\s*utr|\bon\s+\d|\bon\s+[a-z]{3}\b|\bvia\b|\bupi\b|\(|;|,|\bavl|\bavail|\bbal\b|\.\s*$|\.[A-Z]|$|\s-\s))/gi;
+    const re = /\b(?:to|at|towards|by|from|in favou?r of|info)\s*[:-]?\s+(?:vpa\s+)?(.+?)(?=\s*(?:\.\s|\.?\s*rrn|\.?\s*ref|\.?\s*utr|\bon\s+\d|\bon\s+[a-z]{3}\b|\bvia\b|\bupi\b|\(|;|,|\bavl|\bavail|\bbal\b|\.\s*$|\.[A-Z]|$|\s-\s))/gi;
     while ((m = re.exec(t))) {
-      const c = m[1].replace(/\s+/g, ' ').trim().replace(/[.\-]+$/, '');
+      const c = m[1].replace(/\S+@\S+/g, ' ').replace(/\s+/g, ' ').trim().replace(/^(neft|imps|upi|rtgs|ach|inft)[\/-]+/i, '').replace(/[.\-]+$/, '');
       if (c.length < 2 || /^\d/.test(c) || BAD_PARTY.test(c) || /a\/c|\*\d|x{2,}\d/i.test(c)) { re.lastIndex = m.index + 2; continue; }
       return c.slice(0, 60);
     }
@@ -1036,15 +1092,18 @@
     const m = t.match(/-\s*([A-Z][A-Za-z ]{2,25}Bank)\s*$/) || t.match(/\b(HDFC|ICICI|SBI|Axis|Kotak|Indian|Canara|Union|IDFC|Yes|IndusInd|Federal|PNB|Bank of Baroda|BOB)\s*Bank\b/i);
     return m ? m[1].replace(/\s*bank$/i, '').trim() + ' Bank' : '';
   }
-  function parseSms(raw) {
+  // opts.email: text is an excerpt of an alert email (bank footers often mention OTPs, so don't skip on that)
+  function parseSms(raw, opts = {}) {
     const t = String(raw).replace(/\s+/g, ' ').trim();
-    if (!t || SMS_SKIP.test(t)) return null;
+    if (!t) return null;
+    const skip = opts.email ? t.replace(/\b(otp|one time password)\b/gi, '') : t;
+    if (SMS_SKIP.test(skip)) return null;
     const di = t.search(SMS_DEBIT), ci = t.search(SMS_CREDIT);
     if (di < 0 && ci < 0) return null;
     const type = ci < 0 || (di >= 0 && di < ci) ? 'debit' : 'credit';
     const amount = Math.round(smsAmount(t) * 100) / 100;
     if (!(amount > 0)) return null;
-    const date = smsDate(t);
+    const date = smsDate(t, opts.fallbackDate);
     const party = smsParty(t, type);
     const bank = bankName(t);
     const rrn = (t.match(/\b(?:rrn|ref(?:erence)?(?:\s*no)?|utr|upi ref(?: no)?|txn id)[\s.:#-]*([A-Za-z0-9]{6,})/i) || [])[1] || '';
@@ -1059,17 +1118,21 @@
     const out = [];
     chunks.forEach(c => {
       const lines = c.split('\n').map(l => l.trim()).filter(Boolean);
-      const each = lines.map(parseSms);
+      const each = lines.map(l => parseSms(l));
       if (lines.length > 1 && each.filter(Boolean).length >= 2) each.forEach(x => x && out.push(x));
       else { const x = parseSms(c); if (x) out.push(x); }
     });
     return out;
   }
   function openSmsPreview(text, source) {
-    const items = parseSmsBatch(text);
+    return openItemsPreview(parseSmsBatch(text), source);
+  }
+  function openItemsPreview(items, source, dropExact) {
     if (!items.length) return false;
     items.sort((a, b) => b.date.localeCompare(a.date));
     markDups(items);
+    if (dropExact) items = items.filter(x => x.dup !== 'exact');
+    if (!items.length) return false;
     Object.assign(imp, { mode: 'sms', rows: [], items, filter: 'all', name: source || `${items.length} message${items.length > 1 ? 's' : ''}` });
     selfRe = selfPatterns();
     closeAll();
@@ -1235,8 +1298,90 @@
     history.replaceState(null, '', location.pathname);
     if (!openSmsPreview(shared, 'Shared message')) openSmsSheet(shared);
   })();
+  // ---------- Gmail bridge ----------
+  function mailCfg() {
+    if (!state.settings.mail) state.settings.mail = {};
+    const m = state.settings.mail;
+    if (!m.key) {
+      const a = new Uint8Array(18);
+      (window.crypto || {}).getRandomValues ? crypto.getRandomValues(a) : a.forEach((_, i) => a[i] = Math.random() * 256);
+      m.key = Array.from(a, b => b.toString(16).padStart(2, '0')).join('');
+      save();
+    }
+    return m;
+  }
+  function renderMailStatus() {
+    const m = state.settings.mail || {};
+    $('mailUrl').value = m.url || '';
+    $('mailStatus').textContent = m.url
+      ? (m.checked ? `Connected · last checked ${new Date(m.checked).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' })}` : 'Connected · not checked yet')
+      : 'Not connected. Connect once and the app looks for bank alert emails each time you open it.';
+    $('mailHelp').open = !m.url;
+  }
+  let mailBusy = false;
+  async function checkMail(silent) {
+    const m = mailCfg();
+    if (!m.url) { if (!silent) toast('Paste your Gmail bridge address first'); return; }
+    if (mailBusy) return;
+    mailBusy = true;
+    if (!silent) toast('Checking email…');
+    try {
+      const after = m.cursor ? m.cursor - 2 * 86400 : '';
+      const url = m.url + (m.url.includes('?') ? '&' : '?') + 'key=' + encodeURIComponent(m.key) + (after ? '&after=' + after : '');
+      const res = await fetch(url, { redirect: 'follow' });
+      const data = await res.json();
+      if (data.error) throw new Error(data.error === 'bad key' ? 'The script has a different key. Copy the setup script again and redeploy.' : data.error);
+      const items = [];
+      const seen = new Set(m.seen || []);
+      const fresh = (data.items || []).filter(e => e && e.id && !seen.has(e.id));
+      fresh.forEach(e => {
+        seen.add(e.id);
+        const x = parseSms(e.text, { email: true, fallbackDate: isoDate(new Date(e.date)) });
+        if (!x) return;
+        x.ref = 'mail|' + e.id;
+        if (x.desc.startsWith('To ') || x.desc.startsWith('From ')) {
+          if (!/ · /.test(x.desc)) {
+            const sender = String(e.from || '').replace(/<.*>/, '').replace(/["']/g, '').trim();
+            const bank = bankName(sender + ' ' + (e.subject || '')) || sender.slice(0, 30);
+            if (bank) x.desc += ' · ' + bank;
+          }
+        } else if (e.subject) x.desc = e.subject + ' — ' + x.desc;
+        items.push(x);
+      });
+      m.seen = [...seen].slice(-1000);
+      m.cursor = data.now || Math.floor(Date.now() / 1000);
+      m.checked = Date.now();
+      save();
+      if (view === 'settings') renderMailStatus();
+      const n = fresh.length;
+      if (!openItemsPreview(items, `Gmail · ${n} new alert email${n === 1 ? '' : 's'}`, true)) {
+        if (!silent) toast('No new transactions in email');
+      }
+    } catch (err) {
+      if (!silent) toast(err && err.message && err.message.length > 25 ? err.message : 'Could not reach the Gmail bridge. Check the address.');
+    } finally { mailBusy = false; }
+  }
+  $('mailUrl').addEventListener('change', e => {
+    const v = e.target.value.trim();
+    if (v && !/^https:\/\/script\.google(usercontent)?\.com\//.test(v)) { toast('That should be a script.google.com …/exec address'); return; }
+    mailCfg().url = v; save(); renderMailStatus();
+    if (v) checkMail(false);
+  });
+  $('mailCheck').addEventListener('click', () => checkMail(false));
+  $('mailScript').addEventListener('click', async () => {
+    const script = $('gmailScriptTpl').textContent.replace('__KEY__', mailCfg().key);
+    try { await navigator.clipboard.writeText(script); toast('Script copied. Paste it in script.google.com'); }
+    catch (e) { download('expenses-gmail-bridge.gs.txt', script, 'text/plain'); }
+  });
+
   window.expensesReceiveShared = text => { if (!openSmsPreview(text, 'Shared message')) openSmsSheet(text); };
   if (NATIVE) native({ type: 'ready' });
+  const autoMail = () => {
+    const m = state.settings.mail;
+    if (m && m.url && Date.now() - (m.checked || 0) > 36e5 && !$('impSheet').classList.contains('open')) checkMail(true);
+  };
+  setTimeout(autoMail, 800);
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) autoMail(); });
   if ('serviceWorker' in navigator && /^https?:$/.test(location.protocol)) {
     navigator.serviceWorker.register('sw.js').catch(() => {});
   }

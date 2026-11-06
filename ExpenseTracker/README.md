@@ -48,6 +48,26 @@ then categorises it like a statement row. OTPs, "will be debited" autopay notice
 transactions and payment requests are ignored. Pasting the same SMS twice is detected, and when the same
 transaction later arrives in a statement import it is flagged as a *possible duplicate* and left unticked.
 
+## Gmail: bank alert emails
+The app can look through your Gmail for bank, UPI and card alert emails (debits and credits) and
+add them through the same review screen as SMS.
+
+It uses a tiny **Google Apps Script** that runs inside your own Google account, so there is no
+server in between and no Google Cloud setup:
+1. **Settings → Email (Gmail) → Copy setup script.** The script already contains a private key
+   that only your app knows.
+2. On [script.google.com](https://script.google.com) (signed in to the Gmail that receives bank alerts):
+   **New project**, replace the contents with the script.
+3. **Deploy → New deployment → Web app.** Execute as **Me**, Who has access **Anyone**. Deploy and allow
+   Gmail access (Google shows an "unverified app" warning for personal scripts: *Advanced → Go to project*).
+4. Copy the **Web app URL** into the app's *Gmail bridge address* box.
+
+The app checks automatically when opened (at most hourly), or tap **Check email now**. The first check
+covers the last 45 days. Each email is only offered once, and anything already added from SMS or a
+statement is flagged as a possible duplicate. The script answers only requests carrying your key, and
+returns just the alert sentence around each amount, nothing else from your mailbox.
+To disconnect, clear the address in the app and delete the deployment in Apps Script.
+
 ## Put it on your phone
 The app is static files, so any static host will work. With GitHub Pages:
 
