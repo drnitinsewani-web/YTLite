@@ -15,12 +15,14 @@
   :root {
     --bg: #f4f6f8; --surface: #ffffff; --surface-2: #eef1f4; --text: #0f172a; --muted: #64748b;
     --border: #e2e8f0; --accent: #0f766e; --accent-soft: #ccfbf1; --danger: #dc2626; --warn: #d97706;
+    --income: #15803d; --on-accent: #ffffff;
     --shadow: 0 1px 2px rgba(15,23,42,.06), 0 4px 16px rgba(15,23,42,.06);
   }
   @media (prefers-color-scheme: dark) {
     :root {
       --bg: #0b1220; --surface: #111a2b; --surface-2: #1a2538; --text: #e5e7eb; --muted: #94a3b8;
       --border: #22304a; --accent: #2dd4bf; --accent-soft: #134e4a; --danger: #f87171; --warn: #fbbf24;
+      --income: #4ade80; --on-accent: #042f2e;
       --shadow: 0 1px 2px rgba(0,0,0,.3);
     }
   }
@@ -35,10 +37,10 @@
     position: sticky; top: 0; z-index: 5; background: var(--bg);
     padding: calc(env(safe-area-inset-top) + 12px) 16px 8px;
   }
-  .monthbar { display: flex; align-items: center; justify-content: space-between; }
+  .monthbar { display: flex; align-items: center; justify-content: space-between; max-width: 640px; margin: 0 auto; }
   .monthbar h1 { font-size: 18px; margin: 0; font-weight: 650; }
   .iconbtn {
-    width: 40px; height: 40px; border-radius: 12px; border: 1px solid var(--border);
+    width: 40px; height: 40px; border-radius: 12px; border: 1px solid var(--border); flex: none;
     background: var(--surface); color: var(--text); font-size: 20px; cursor: pointer;
   }
   main { padding: 0 16px 120px; max-width: 640px; margin: 0 auto; }
@@ -49,8 +51,10 @@
   .progress > div { height: 100%; background: var(--accent); border-radius: 99px; transition: width .3s; }
   .progress.over > div { background: var(--danger); }
   .progress.near > div { background: var(--warn); }
+  .progress.inc > div { background: var(--income); }
   .sub { color: var(--muted); font-size: 13px; margin-top: 6px; }
-  .search { width: 100%; padding: 10px 12px; border-radius: 12px; border: 1px solid var(--border); background: var(--surface); color: var(--text); font-size: 16px; margin-bottom: 12px; }
+  .searchrow { display: flex; gap: 8px; margin-bottom: 12px; }
+  .search { flex: 1; min-width: 0; padding: 10px 12px; border-radius: 12px; border: 1px solid var(--border); background: var(--surface); color: var(--text); font-size: 16px; }
   .day { margin: 16px 4px 6px; display: flex; justify-content: space-between; color: var(--muted); font-size: 13px; font-weight: 600; }
   .list { background: var(--surface); border: 1px solid var(--border); border-radius: 16px; overflow: hidden; }
   .item { display: flex; align-items: center; gap: 12px; padding: 12px 14px; border-bottom: 1px solid var(--border); cursor: pointer; }
@@ -60,15 +64,16 @@
   .item .info { flex: 1; min-width: 0; }
   .item .cat { font-weight: 600; }
   .item .note { color: var(--muted); font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .item .amt { font-weight: 650; font-variant-numeric: tabular-nums; }
+  .amt { font-weight: 650; font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .amt.credit { color: var(--income); }
+  .amt.excluded { color: var(--muted); font-weight: 500; }
   .empty { text-align: center; color: var(--muted); padding: 48px 16px; }
   .empty div { font-size: 44px; margin-bottom: 8px; }
   .fab {
     position: fixed; right: 20px; bottom: calc(84px + env(safe-area-inset-bottom)); z-index: 6;
-    width: 60px; height: 60px; border-radius: 20px; border: 0; background: var(--accent); color: #fff;
+    width: 60px; height: 60px; border-radius: 20px; border: 0; background: var(--accent); color: var(--on-accent);
     font-size: 32px; box-shadow: 0 6px 20px rgba(15,118,110,.4); cursor: pointer;
   }
-  @media (prefers-color-scheme: dark) { .fab { color: #042f2e; } }
   nav {
     position: fixed; bottom: 0; left: 0; right: 0; z-index: 6; display: flex;
     background: var(--surface); border-top: 1px solid var(--border); padding-bottom: env(safe-area-inset-bottom);
@@ -80,6 +85,8 @@
   .bar-row .top { display: flex; justify-content: space-between; font-size: 14px; margin-bottom: 6px; gap: 8px; }
   .bar-row .top b { font-variant-numeric: tabular-nums; }
   .stats { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  .stats .card { margin-bottom: 0; }
+  .stats + .card { margin-top: 12px; }
   .stat .v { font-size: 20px; font-weight: 700; margin-top: 4px; font-variant-numeric: tabular-nums; }
   .chart { display: flex; align-items: flex-end; gap: 8px; height: 140px; margin-top: 12px; }
   .chart .col { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: flex-end; height: 100%; gap: 6px; }
@@ -94,29 +101,55 @@
     background: var(--surface-2); color: var(--text); font-size: 16px; font-family: inherit;
   }
   .btn { display: block; width: 100%; padding: 14px; border-radius: 14px; border: 0; font-size: 16px; font-weight: 600; cursor: pointer; margin-top: 12px; }
-  .btn.primary { background: var(--accent); color: #fff; }
-  @media (prefers-color-scheme: dark) { .btn.primary { color: #042f2e; } }
+  .btn.primary { background: var(--accent); color: var(--on-accent); }
+  .btn.primary:disabled { opacity: .5; }
   .btn.ghost { background: var(--surface-2); color: var(--text); }
   .btn.danger { background: transparent; color: var(--danger); border: 1px solid var(--danger); }
   .chips { display: flex; flex-wrap: wrap; gap: 8px; }
   .chip { padding: 8px 12px; border-radius: 99px; border: 1px solid var(--border); background: var(--surface-2); color: var(--text); font-size: 14px; cursor: pointer; }
-  .chip.sel { background: var(--accent); border-color: var(--accent); color: #fff; }
-  @media (prefers-color-scheme: dark) { .chip.sel { color: #042f2e; } }
-  .chip .x { margin-left: 6px; color: var(--muted); }
+  .chip.sel { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
+  .chip .x { margin-left: 6px; color: var(--muted); cursor: pointer; }
+  .chip small { color: var(--muted); }
+  .seg { display: grid; grid-template-columns: 1fr 1fr; background: var(--surface-2); border-radius: 12px; padding: 4px; gap: 4px; margin-top: 8px; }
+  .seg button { border: 0; background: transparent; color: var(--muted); padding: 10px; border-radius: 9px; font-size: 15px; font-weight: 600; cursor: pointer; }
+  .seg button.sel { background: var(--surface); color: var(--text); box-shadow: var(--shadow); }
+  .seg button.sel[data-type=credit] { color: var(--income); }
   .sheet-bg { position: fixed; inset: 0; background: rgba(0,0,0,.4); z-index: 10; display: none; }
   .sheet {
     position: fixed; left: 0; right: 0; bottom: 0; z-index: 11; background: var(--surface);
     border-radius: 22px 22px 0 0; padding: 12px 16px calc(16px + env(safe-area-inset-bottom));
-    max-height: 92vh; overflow-y: auto; transform: translateY(100%); transition: transform .25s ease;
-    max-width: 640px; margin: 0 auto;
+    max-height: 92vh; overflow-y: auto; transform: translateY(105%); transition: transform .25s ease;
+    max-width: 640px; margin: 0 auto; overscroll-behavior: contain;
   }
   .sheet.open { transform: none; }
-  .sheet .grab { width: 40px; height: 5px; border-radius: 9px; background: var(--border); margin: 0 auto 8px; }
+  .sheet.tall { height: 92vh; display: flex; flex-direction: column; padding-bottom: 0; }
+  .sheet .grab { width: 40px; height: 5px; border-radius: 9px; background: var(--border); margin: 0 auto 8px; flex: none; }
   .amount-input { font-size: 32px; font-weight: 700; text-align: center; padding: 14px; }
   .row2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
-  .toast { position: fixed; left: 50%; bottom: calc(150px + env(safe-area-inset-bottom)); transform: translateX(-50%); background: var(--text); color: var(--bg); padding: 10px 16px; border-radius: 12px; font-size: 14px; z-index: 20; opacity: 0; transition: opacity .2s; pointer-events: none; }
+  .toast { position: fixed; left: 50%; bottom: calc(150px + env(safe-area-inset-bottom)); transform: translateX(-50%); background: var(--text); color: var(--bg); padding: 10px 16px; border-radius: 12px; font-size: 14px; z-index: 30; opacity: 0; transition: opacity .2s; pointer-events: none; max-width: 90vw; text-align: center; }
   .toast.show { opacity: 1; }
   .hidden { display: none !important; }
+
+  /* import sheet */
+  .imp-head { flex: none; }
+  .imp-body { flex: 1; overflow-y: auto; margin: 0 -16px; padding: 0 16px; }
+  .imp-foot { flex: none; padding: 8px 0 calc(12px + env(safe-area-inset-bottom)); border-top: 1px solid var(--border); background: var(--surface); }
+  .imp-foot .btn { margin-top: 8px; }
+  details.map { background: var(--surface-2); border-radius: 12px; padding: 10px 12px; margin: 8px 0; }
+  details.map summary { cursor: pointer; font-size: 14px; font-weight: 600; }
+  details.map select { padding: 8px; background: var(--surface); }
+  details.map label { margin: 8px 0 4px; }
+  .filters { display: flex; gap: 6px; overflow-x: auto; padding: 4px 0 8px; }
+  .filters .chip { white-space: nowrap; padding: 6px 10px; font-size: 13px; }
+  .irow { display: grid; grid-template-columns: 28px 1fr auto; gap: 4px 10px; align-items: center; padding: 10px 0; border-bottom: 1px solid var(--border); }
+  .irow input[type=checkbox] { width: 22px; height: 22px; padding: 0; accent-color: var(--accent); }
+  .irow .d { font-size: 14px; min-width: 0; }
+  .irow .d .desc { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; word-break: break-word; }
+  .irow .d .meta { color: var(--muted); font-size: 12px; margin-top: 2px; }
+  .irow select { grid-column: 2 / 4; padding: 8px 10px; font-size: 14px; border-radius: 10px; }
+  .irow.off { opacity: .45; }
+  .tag { display: inline-block; font-size: 11px; padding: 1px 6px; border-radius: 6px; background: var(--surface-2); color: var(--muted); margin-left: 4px; }
+  .tag.warn { color: var(--warn); }
 </style>
 </head>
 <body>
@@ -136,25 +169,35 @@
       <div class="total" id="monthTotal"></div>
       <div class="progress" id="budgetBar"><div></div></div>
       <div class="sub" id="budgetText"></div>
+      <div class="sub" id="incomeText"></div>
     </div>
-    <input class="search" id="search" type="search" placeholder="Search notes or categories">
+    <div class="searchrow">
+      <input class="search" id="search" type="search" placeholder="Search notes or categories">
+      <button class="iconbtn" id="importTop" aria-label="Import bank statement" title="Import bank statement" style="height:auto">📥</button>
+    </div>
     <div id="list"></div>
   </section>
 
   <!-- Summary view -->
   <section id="view-summary" class="hidden">
     <div class="stats">
-      <div class="card stat"><div class="total-label">Total</div><div class="v" id="sTotal"></div></div>
-      <div class="card stat"><div class="total-label">Daily avg</div><div class="v" id="sAvg"></div></div>
+      <div class="card stat"><div class="total-label">Spent</div><div class="v" id="sTotal"></div></div>
+      <div class="card stat"><div class="total-label">Income</div><div class="v" id="sIncome" style="color:var(--income)"></div></div>
+      <div class="card stat"><div class="total-label">Net saved</div><div class="v" id="sNet"></div></div>
+      <div class="card stat"><div class="total-label">Daily spend</div><div class="v" id="sAvg"></div></div>
       <div class="card stat"><div class="total-label">Transactions</div><div class="v" id="sCount"></div></div>
-      <div class="card stat"><div class="total-label">vs last month</div><div class="v" id="sDiff"></div></div>
+      <div class="card stat"><div class="total-label">Spend vs last mo.</div><div class="v" id="sDiff"></div></div>
     </div>
     <div class="card">
-      <h2>By category</h2>
+      <h2>Spending by category</h2>
       <div id="catBars"></div>
     </div>
+    <div class="card" id="incCard">
+      <h2>Income by category</h2>
+      <div id="incBars"></div>
+    </div>
     <div class="card">
-      <h2>Last 6 months</h2>
+      <h2>Spending, last 6 months</h2>
       <div class="chart" id="chart"></div>
     </div>
   </section>
@@ -169,13 +212,25 @@
       <input id="budget" type="number" inputmode="decimal" min="0" step="any">
     </div>
     <div class="card">
-      <h2>Categories</h2>
+      <h2>Bank statements</h2>
+      <div class="sub">Download your statement from net banking as <b>CSV</b> or <b>Excel (XLS/XLSX)</b> and import it here. Debits become expenses, credits become income, and each one is auto-categorised.</div>
+      <button class="btn primary" id="importBtn">📥 Import bank statement</button>
+      <input type="file" id="importFile" accept=".csv,.txt,.tsv,.xls,.xlsx,.ods,text/csv,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" class="hidden">
+      <label style="margin-top:16px">Learned rules <span id="ruleCount"></span></label>
+      <div class="sub" style="margin:0 0 8px">When you change a category for an imported transaction, the merchant is remembered for future imports.</div>
+      <div class="chips" id="ruleChips"></div>
+    </div>
+    <div class="card">
+      <h2>Expense categories</h2>
       <div class="chips" id="catChips" style="margin-top:12px"></div>
-      <div class="row2" style="grid-template-columns: 64px 1fr auto; margin-top:12px">
+      <h2 style="margin-top:16px">Income categories</h2>
+      <div class="chips" id="incChips" style="margin-top:12px"></div>
+      <div class="row2" style="grid-template-columns: 56px 1fr 96px; margin-top:16px">
         <input id="newCatEmoji" placeholder="🏷️" maxlength="4" aria-label="Emoji">
         <input id="newCatName" placeholder="New category" aria-label="Category name">
-        <button class="chip" id="addCat">Add</button>
+        <select id="newCatKind" aria-label="Category type" style="padding:8px"><option value="debit">Expense</option><option value="credit">Income</option></select>
       </div>
+      <button class="btn ghost" id="addCat">Add category</button>
     </div>
     <div class="card">
       <h2>Data</h2>
@@ -189,7 +244,7 @@
   </section>
 </main>
 
-<button class="fab" id="fab" aria-label="Add expense">+</button>
+<button class="fab" id="fab" aria-label="Add transaction">+</button>
 
 <nav>
   <button data-view="list" class="active"><span>🧾</span>Expenses</button>
@@ -198,10 +253,16 @@
 </nav>
 
 <div class="sheet-bg" id="sheetBg"></div>
+
+<!-- Add / edit sheet -->
 <form class="sheet" id="sheet" autocomplete="off">
   <div class="grab"></div>
-  <h2 id="sheetTitle" style="text-align:center">Add expense</h2>
-  <input class="amount-input" id="fAmount" type="number" inputmode="decimal" step="any" min="0" placeholder="0.00" required>
+  <h2 id="sheetTitle" style="text-align:center">Add transaction</h2>
+  <div class="seg" id="fType">
+    <button type="button" data-type="debit">Expense</button>
+    <button type="button" data-type="credit">Income</button>
+  </div>
+  <input class="amount-input" id="fAmount" type="number" inputmode="decimal" step="any" min="0" placeholder="0.00" required style="margin-top:10px">
   <label>Category</label>
   <div class="chips" id="fCats"></div>
   <div class="row2">
@@ -211,11 +272,41 @@
     </div>
   </div>
   <label for="fNote">Note</label>
-  <input id="fNote" type="text" placeholder="e.g. Lunch with team" maxlength="120">
+  <input id="fNote" type="text" placeholder="e.g. Lunch with team" maxlength="200">
   <button type="submit" class="btn primary">Save</button>
   <button type="button" class="btn danger hidden" id="fDelete">Delete</button>
   <button type="button" class="btn ghost" id="fCancel">Cancel</button>
 </form>
+
+<!-- Import preview sheet -->
+<div class="sheet tall" id="impSheet">
+  <div class="grab"></div>
+  <div class="imp-head">
+    <h2 style="text-align:center">Import statement</h2>
+    <div class="sub" id="impInfo" style="text-align:center;margin-top:2px"></div>
+    <details class="map" id="impMap">
+      <summary>Columns &amp; format</summary>
+      <div class="row2">
+        <div><label>Date</label><select data-map="date"></select></div>
+        <div><label>Description</label><select data-map="desc"></select></div>
+        <div><label>Debit / Withdrawal</label><select data-map="debit"></select></div>
+        <div><label>Credit / Deposit</label><select data-map="credit"></select></div>
+        <div><label>Single amount column</label><select data-map="amount"></select></div>
+        <div><label>Dr/Cr type column</label><select data-map="type"></select></div>
+        <div><label>Date format</label>
+          <select id="impDateFmt"><option value="dmy">Day / Month / Year</option><option value="mdy">Month / Day / Year</option></select></div>
+        <div><label>Single amount: debits are</label>
+          <select id="impSign"><option value="neg-debit">Negative (bank)</option><option value="pos-debit">Positive (credit card)</option></select></div>
+      </div>
+    </details>
+    <div class="filters" id="impFilters"></div>
+  </div>
+  <div class="imp-body" id="impList"></div>
+  <div class="imp-foot">
+    <button class="btn primary" id="impGo">Import</button>
+    <button class="btn ghost" id="impCancel">Cancel</button>
+  </div>
+</div>
 
 <div class="toast" id="toast"></div>
 
@@ -223,11 +314,37 @@
 (() => {
   'use strict';
   const KEY = 'expense-tracker-v1';
+  const SHEETJS = 'https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js';
   const DEFAULT_CATS = [
-    ['🍔','Food'],['🛒','Groceries'],['🚗','Transport'],['🏠','Rent'],['💡','Bills'],
-    ['🛍️','Shopping'],['💊','Health'],['🎬','Entertainment'],['✈️','Travel'],['📚','Education'],['📦','Other']
-  ].map(([emoji, name]) => ({ emoji, name }));
+    ['🍔','Food','debit'],['🛒','Groceries','debit'],['🚗','Transport','debit'],['🏠','Rent','debit'],['💡','Bills','debit'],
+    ['🛍️','Shopping','debit'],['💊','Health','debit'],['🎬','Entertainment','debit'],['✈️','Travel','debit'],
+    ['📚','Education','debit'],['🏧','Cash','debit'],['📦','Other','debit'],
+    ['💼','Salary','credit'],['↩️','Refund','credit'],['🏦','Interest','credit'],['💰','Other Income','credit'],
+    ['🔁','Transfer','both', true]
+  ].map(([emoji, name, kind, exclude]) => ({ emoji, name, kind, ...(exclude ? { exclude: true } : {}) }));
   const CURRENCIES = ['INR','USD','EUR','GBP','AED','AUD','CAD','SGD','JPY','CNY','CHF','SAR','ZAR','BRL','MXN','NZD','HKD','SEK','NOK','PKR','BDT','LKR','NPR'];
+
+  // Keyword rules used to auto-categorise statement lines. First match wins.
+  const AUTO_RULES = [
+    ['Transfer', /payment received.*thank|thank you for (your )?payment|autopay si|credit ?card|cc ?(payment|pymt|bill)|card ?(payment|pymt)|cred club|\bcred\b|\bself\b|own a\/?c|own account|sweep|fd booking|to fd|rd instal|mutual fund|zerodha|groww|upstox|sip\b/],
+    ['Salary', /salary|\bsal\b|payroll|stipend|wages/],
+    ['Interest', /interest|\bint\.? ?(pd|paid|cr|credit)|\bint pd\b|savings int|\bsb int/],
+    ['Refund', /refund|reversal|reversed|\brev\b|cashback|cash back|chargeback/],
+    ['Food', /swiggy|zomato|restaurant|resto|cafe|coffee|starbucks|chaayos|mcdonald|kfc|domino|pizza|burger|subway|eatsure|eat ?fit|haldiram|food|dine|dining|bakery|barbeque|biryani|dhaba/],
+    ['Groceries', /bigbasket|big basket|blinkit|grofers|zepto|instamart|dmart|d ?mart|avenue supermarts|reliance (fresh|smart|retail)|jiomart|more retail|spencer|nature.?s basket|grocery|groceries|supermarket|kirana|milk|dairy|walmart|kroger|aldi|tesco|costco|whole foods|safeway|sainsbury|lidl/],
+    ['Transport', /\buber\b|\bola\b|olacabs|rapido|irctc|metro|petrol|diesel|fuel|hpcl|bpcl|indian ?oil|iocl|filling station|fastag|parking|\btoll\b|redbus|lyft|taxi|\bcab\b|railway|namma yatri|blusmart/],
+    ['Travel', /makemytrip|goibibo|cleartrip|yatra|ixigo|airbnb|\boyo\b|booking\.com|indigo|interglobe|air ?india|vistara|spicejet|akasa|airline|airways|hotel|resort|expedia|agoda|thomas cook/],
+    ['Shopping', /amazon|amzn|flipkart|myntra|ajio|meesho|nykaa|tata ?cliq|croma|reliance digital|decathlon|ikea|lifestyle|shoppers stop|westside|trends|zara|h ?& ?m|uniqlo|ebay|etsy|target|apple store|lenskart|firstcry|pepperfry|urban ?company/],
+    ['Bills', /electricity|bescom|msedcl|mseb|tneb|tangedco|tata power|adani (elec|power)|torrent power|bses|cesc|water (bill|board)|gas bill|indane|hp ?gas|bharat ?gas|mahanagar gas|igl\b|airtel|\bjio\b|vodafone|\bvi\b|bsnl|act fibernet|hathway|broadband|recharge|\bdth\b|tata ?play|postpaid|prepaid|insurance|\blic\b|premium|policy|\bemi\b|loan|bill ?pay|billdesk|bbps|utility|municipal|property tax/],
+    ['Health', /pharma|pharmacy|chemist|apollo|medplus|netmeds|1mg|tata 1mg|pharmeasy|hospital|clinic|diagnostic|pathlab|lal path|thyrocare|doctor|dental|medical|medicine|health|practo|cult\.?fit|gym/],
+    ['Entertainment', /netflix|spotify|hotstar|disney|prime ?video|primevideo|sonyliv|zee5|jiocinema|youtube|google ?play|bookmyshow|paytm ?movies|\bpvr\b|inox|cinepolis|gaming|steam|playstation|xbox|apple\.com|itunes|audible|kindle/],
+    ['Education', /school|college|university|tuition|coaching|course|udemy|coursera|byju|unacademy|vedantu|upgrad|books?\b|exam|fees?\b/],
+    ['Rent', /\brent\b|nobroker|nestaway|landlord|housing society|society maint|maintenance charge/],
+    ['Cash', /\batm\b|cash ?wdl|cash withdrawal|\bnwd\b|\bawb\b|\batw\b|cash wd/]
+  ];
+  const STOP = new Set(('UPI NEFT IMPS RTGS POS ATM TXN TRF TRANSFER REF NO PAYMENT PAY PAID TO FROM BY DR CR VPS IPS ACH NACH ECS MB INB IB NET BIL BILL ONL ECOM PURCHASE PUR DEBIT CREDIT CARD THE AND FOR VIA ' +
+    'OK OKAXIS OKICICI OKSBI OKHDFCBANK YBL IBL AXL PAYTM APL HDFCBANK ICICI HDFC AXIS SBI SBIN KOTAK KKBK UTIB ICIC BANK BNK LTD PVT LIMITED INDIA PRIVATE ' +
+    'COLLECT REQUEST SENT RECEIVED MOB MOBILE MMT NFS CHQ CHEQUE DEP WDL INFT TPT IFT SI IMPSP UPIOUT UPIIN UPIAR UPIRET').split(' '));
 
   const $ = id => document.getElementById(id);
   const esc = s => String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -240,40 +357,81 @@
   function defaultState() {
     const lang = navigator.language || 'en-US';
     return {
-      expenses: [],
-      categories: DEFAULT_CATS,
+      v: 2, expenses: [], rules: {},
+      categories: DEFAULT_CATS.map(c => ({ ...c })),
       settings: { currency: /-IN$/i.test(lang) ? 'INR' : 'USD', budget: 0 }
     };
+  }
+  function migrate(s) {
+    const d = defaultState();
+    const oldVersion = +s.v || 1;
+    s = { ...d, ...s, settings: { ...d.settings, ...(s.settings || {}) } };
+    s.rules = s.rules && typeof s.rules === 'object' ? s.rules : {};
+    s.categories = (Array.isArray(s.categories) && s.categories.length ? s.categories : d.categories)
+      .map(c => ({ ...c, kind: c.kind || 'debit' }));
+    if (oldVersion < 2) {
+      DEFAULT_CATS.forEach(c => { if (!s.categories.some(x => x.name === c.name)) s.categories.push({ ...c }); });
+      s.v = 2;
+    }
+    s.expenses = s.expenses.map(e => ({ ...e, type: e.type === 'credit' ? 'credit' : 'debit' }));
+    return s;
   }
   function load() {
     try {
       const s = JSON.parse(localStorage.getItem(KEY));
-      if (s && Array.isArray(s.expenses)) return { ...defaultState(), ...s, settings: { ...defaultState().settings, ...s.settings } };
+      if (s && Array.isArray(s.expenses)) return migrate(s);
     } catch (e) {}
     return defaultState();
   }
   let state = load();
   function save() {
     try { localStorage.setItem(KEY, JSON.stringify(state)); }
-    catch (e) { toast('Could not save — storage unavailable'); }
+    catch (e) { toast('Could not save — storage full or unavailable'); }
   }
 
   let current = new Date(); current.setDate(1);
   let view = 'list';
-  let editingId = null;
-  let selectedCat = null;
+  let editingId = null, editingOrigCat = null;
+  let selectedCat = null, formType = 'debit';
 
   const fmt = n => {
     try { return new Intl.NumberFormat(undefined, { style: 'currency', currency: state.settings.currency }).format(n); }
     catch (e) { return n.toFixed(2); }
   };
-  const catOf = name => state.categories.find(c => c.name === name) || { emoji: '📦', name };
-  const inMonth = (mk) => state.expenses.filter(e => e.date.slice(0, 7) === mk);
+  const catOf = name => state.categories.find(c => c.name === name) || { emoji: '📦', name, kind: 'both' };
+  const catsFor = type => state.categories.filter(c => c.kind === type || c.kind === 'both');
+  const counted = e => !catOf(e.category).exclude;
+  const inMonth = mk => state.expenses.filter(e => e.date.slice(0, 7) === mk);
   const sum = arr => arr.reduce((a, e) => a + e.amount, 0);
+  const spentOf = arr => sum(arr.filter(e => e.type === 'debit' && counted(e)));
+  const incomeOf = arr => sum(arr.filter(e => e.type === 'credit' && counted(e)));
 
   function toast(msg) {
     const t = $('toast'); t.textContent = msg; t.classList.add('show');
-    clearTimeout(toast._t); toast._t = setTimeout(() => t.classList.remove('show'), 1800);
+    clearTimeout(toast._t); toast._t = setTimeout(() => t.classList.remove('show'), 2200);
+  }
+
+  // ---------- classification ----------
+  function merchantKey(desc) {
+    const seen = [];
+    String(desc).toUpperCase().replace(/[^A-Z&]+/g, ' ').split(' ').forEach(t => {
+      if (t.length >= 3 && !/^X+$/.test(t) && !STOP.has(t) && !seen.includes(t)) seen.push(t);
+    });
+    return seen.slice(0, 2).join(' ');
+  }
+  function classify(desc, type) {
+    const allowed = new Set(catsFor(type).map(c => c.name));
+    const learned = state.rules[merchantKey(desc)];
+    if (learned && allowed.has(learned)) return learned;
+    const d = ' ' + String(desc).toLowerCase().replace(/[_/|*]+/g, ' ') + ' ';
+    for (const [cat, re] of AUTO_RULES) if (allowed.has(cat) && re.test(d)) return cat;
+    const fallback = type === 'credit' ? 'Other Income' : 'Other';
+    return allowed.has(fallback) ? fallback : (catsFor(type)[0] || {}).name || fallback;
+  }
+  function learn(desc, cat) {
+    const k = merchantKey(desc);
+    if (k.length >= 3) state.rules[k] = cat;
+    return k;
   }
 
   // ---------- render ----------
@@ -300,12 +458,17 @@
       : `${fmt(b - total)} left of ${fmt(b)} (${Math.round(pct)}% used)`;
   }
 
+  function amtHtml(e) {
+    const cls = !counted(e) ? 'excluded' : e.type === 'credit' ? 'credit' : '';
+    return `<div class="amt ${cls}">${e.type === 'credit' ? '+' : ''}${fmt(e.amount)}</div>`;
+  }
+
   function renderList() {
-    const mk = monthKey(current);
-    const items = inMonth(mk);
-    const total = sum(items);
-    $('monthTotal').textContent = fmt(total);
-    renderBudget(total);
+    const items = inMonth(monthKey(current));
+    const spent = spentOf(items), income = incomeOf(items);
+    $('monthTotal').textContent = fmt(spent);
+    renderBudget(spent);
+    $('incomeText').innerHTML = income ? `Income <b style="color:var(--income)">${fmt(income)}</b> · Net ${fmt(income - spent)}` : '';
 
     const q = $('search').value.trim().toLowerCase();
     const shown = items
@@ -313,7 +476,7 @@
       .sort((a, b) => b.date.localeCompare(a.date) || b.createdAt - a.createdAt);
 
     if (!shown.length) {
-      $('list').innerHTML = `<div class="empty"><div>🪙</div>${q ? 'No matches' : 'No expenses this month.<br>Tap <b>+</b> to add one.'}</div>`;
+      $('list').innerHTML = `<div class="empty"><div>🪙</div>${q ? 'No matches' : 'Nothing this month.<br>Tap <b>+</b> to add, or <b>📥</b> to import a bank statement.'}</div>`;
       return;
     }
     const groups = {};
@@ -323,49 +486,62 @@
     $('list').innerHTML = Object.keys(groups).map(d => {
       const label = d === today ? 'Today' : d === yest ? 'Yesterday'
         : new Date(d + 'T00:00').toLocaleDateString(undefined, { weekday: 'short', day: 'numeric', month: 'short' });
-      return `<div class="day"><span>${label}</span><span>${fmt(sum(groups[d]))}</span></div>
+      const ds = spentOf(groups[d]), di = incomeOf(groups[d]);
+      const right = [ds ? fmt(ds) : '', di ? `<span style="color:var(--income)">+${fmt(di)}</span>` : ''].filter(Boolean).join(' · ');
+      return `<div class="day"><span>${label}</span><span>${right}</span></div>
         <div class="list">${groups[d].map(e => {
           const c = catOf(e.category);
           return `<div class="item" data-id="${e.id}">
             <div class="emoji">${esc(c.emoji)}</div>
             <div class="info"><div class="cat">${esc(c.name)}</div>
               <div class="note">${esc(e.note || '')}${e.note && e.payment ? ' · ' : ''}${esc(e.payment || '')}</div></div>
-            <div class="amt">${fmt(e.amount)}</div></div>`;
+            ${amtHtml(e)}</div>`;
         }).join('')}</div>`;
+    }).join('');
+  }
+
+  function barsHtml(items, cls) {
+    const total = sum(items);
+    const by = {};
+    items.forEach(e => by[e.category] = (by[e.category] || 0) + e.amount);
+    const rows = Object.entries(by).sort((a, b) => b[1] - a[1]);
+    return rows.map(([name, v]) => {
+      const c = catOf(name); const pct = v / total * 100;
+      return `<div class="bar-row"><div class="top"><span>${esc(c.emoji)} ${esc(name)}</span>
+        <span><b>${fmt(v)}</b> <span class="sub">${Math.round(pct)}%</span></span></div>
+        <div class="progress ${cls}"><div style="width:${pct}%"></div></div></div>`;
     }).join('');
   }
 
   function renderSummary() {
     const mk = monthKey(current);
     const items = inMonth(mk);
-    const total = sum(items);
+    const spent = spentOf(items), income = incomeOf(items);
     const now = new Date();
     const days = mk === monthKey(now) ? now.getDate() : new Date(current.getFullYear(), current.getMonth() + 1, 0).getDate();
-    const prev = new Date(current.getFullYear(), current.getMonth() - 1, 1);
-    const prevTotal = sum(inMonth(monthKey(prev)));
+    const prevSpent = spentOf(inMonth(monthKey(new Date(current.getFullYear(), current.getMonth() - 1, 1))));
 
-    $('sTotal').textContent = fmt(total);
-    $('sAvg').textContent = fmt(total / days);
+    $('sTotal').textContent = fmt(spent);
+    $('sIncome').textContent = fmt(income);
+    $('sNet').textContent = fmt(income - spent);
+    $('sNet').style.color = income - spent < 0 ? 'var(--danger)' : '';
+    $('sAvg').textContent = fmt(spent / days);
     $('sCount').textContent = items.length;
-    if (prevTotal) {
-      const d = (total - prevTotal) / prevTotal * 100;
+    if (prevSpent) {
+      const d = (spent - prevSpent) / prevSpent * 100;
       $('sDiff').textContent = (d > 0 ? '▲ ' : d < 0 ? '▼ ' : '') + Math.abs(Math.round(d)) + '%';
       $('sDiff').style.color = d > 0 ? 'var(--danger)' : 'var(--accent)';
     } else { $('sDiff').textContent = '—'; $('sDiff').style.color = ''; }
 
-    const byCat = {};
-    items.forEach(e => byCat[e.category] = (byCat[e.category] || 0) + e.amount);
-    const rows = Object.entries(byCat).sort((a, b) => b[1] - a[1]);
-    $('catBars').innerHTML = rows.length ? rows.map(([name, v]) => {
-      const c = catOf(name); const pct = v / total * 100;
-      return `<div class="bar-row"><div class="top"><span>${esc(c.emoji)} ${esc(name)}</span>
-        <span><b>${fmt(v)}</b> <span class="sub">${Math.round(pct)}%</span></span></div>
-        <div class="progress"><div style="width:${pct}%"></div></div></div>`;
-    }).join('') : '<div class="sub">Nothing spent this month.</div>';
+    const debits = items.filter(e => e.type === 'debit' && counted(e));
+    const credits = items.filter(e => e.type === 'credit' && counted(e));
+    $('catBars').innerHTML = debits.length ? barsHtml(debits, '') : '<div class="sub">Nothing spent this month.</div>';
+    $('incCard').classList.toggle('hidden', !credits.length);
+    $('incBars').innerHTML = barsHtml(credits, 'inc');
 
     const months = [];
     for (let i = 5; i >= 0; i--) months.push(new Date(current.getFullYear(), current.getMonth() - i, 1));
-    const totals = months.map(m => sum(inMonth(monthKey(m))));
+    const totals = months.map(m => spentOf(inMonth(monthKey(m))));
     const max = Math.max(...totals, 1);
     $('chart').innerHTML = months.map((m, i) => `
       <div class="col ${i === 5 ? 'cur' : ''}" title="${fmt(totals[i])}">
@@ -387,87 +563,405 @@
     }
     sel.value = state.settings.currency;
     $('budget').value = state.settings.budget || '';
-    $('catChips').innerHTML = state.categories.map((c, i) =>
-      `<span class="chip">${esc(c.emoji)} ${esc(c.name)}<span class="x" data-del="${i}" role="button" aria-label="Remove">✕</span></span>`).join('');
+    const chip = (c, i) => `<span class="chip">${esc(c.emoji)} ${esc(c.name)}<span class="x" data-del="${i}" role="button" aria-label="Remove">✕</span></span>`;
+    $('catChips').innerHTML = state.categories.map((c, i) => c.kind !== 'credit' ? chip(c, i) : '').join('');
+    $('incChips').innerHTML = state.categories.map((c, i) => c.kind === 'credit' ? chip(c, i) : '').join('');
+    const rules = Object.entries(state.rules);
+    $('ruleCount').textContent = rules.length ? `(${rules.length})` : '';
+    $('ruleChips').innerHTML = rules.length
+      ? rules.sort((a, b) => a[0].localeCompare(b[0])).map(([k, v]) =>
+          `<span class="chip">${esc(k)} <small>→</small> ${esc(catOf(v).emoji)} ${esc(v)}<span class="x" data-rule="${esc(k)}" role="button" aria-label="Forget">✕</span></span>`).join('')
+      : '<span class="sub" style="margin:0">None yet.</span>';
   }
 
-  // ---------- form sheet ----------
-  function renderFormCats() {
-    $('fCats').innerHTML = state.categories.map(c =>
-      `<button type="button" class="chip ${c.name === selectedCat ? 'sel' : ''}" data-cat="${esc(c.name)}">${esc(c.emoji)} ${esc(c.name)}</button>`).join('');
-  }
-  function openSheet(exp) {
-    editingId = exp ? exp.id : null;
-    $('sheetTitle').textContent = exp ? 'Edit expense' : 'Add expense';
-    $('fAmount').value = exp ? exp.amount : '';
-    $('fNote').value = exp ? exp.note : '';
-    $('fPay').value = exp ? (exp.payment || 'Other') : (localStorage.getItem(KEY + ':pay') || 'Cash');
-    const today = new Date();
-    const defDate = monthKey(current) === monthKey(today) ? isoDate(today) : isoDate(current);
-    $('fDate').value = exp ? exp.date : defDate;
-    selectedCat = exp ? exp.category : (state.categories[0] && state.categories[0].name);
-    $('fDelete').classList.toggle('hidden', !exp);
-    renderFormCats();
-    $('sheetBg').style.display = 'block';
-    requestAnimationFrame(() => $('sheet').classList.add('open'));
-    if (!exp) setTimeout(() => $('fAmount').focus(), 260);
-  }
-  function closeSheet() {
-    $('sheet').classList.remove('open');
+  // ---------- sheets ----------
+  function showBg() { $('sheetBg').style.display = 'block'; }
+  function closeAll() {
+    $('sheet').classList.remove('open'); $('impSheet').classList.remove('open');
     $('sheetBg').style.display = 'none';
     document.activeElement && document.activeElement.blur();
   }
 
+  // ---------- add / edit ----------
+  function renderFormCats() {
+    $('fType').querySelectorAll('button').forEach(b => b.classList.toggle('sel', b.dataset.type === formType));
+    $('fCats').innerHTML = catsFor(formType).map(c =>
+      `<button type="button" class="chip ${c.name === selectedCat ? 'sel' : ''}" data-cat="${esc(c.name)}">${esc(c.emoji)} ${esc(c.name)}</button>`).join('');
+  }
+  function openSheet(exp) {
+    editingId = exp ? exp.id : null;
+    editingOrigCat = exp ? exp.category : null;
+    formType = exp ? exp.type : 'debit';
+    $('sheetTitle').textContent = exp ? 'Edit transaction' : 'Add transaction';
+    $('fAmount').value = exp ? exp.amount : '';
+    $('fNote').value = exp ? exp.note : '';
+    let pay = 'Cash'; try { pay = localStorage.getItem(KEY + ':pay') || pay; } catch (e) {}
+    $('fPay').value = exp ? (exp.payment || 'Other') : pay;
+    const today = new Date();
+    $('fDate').value = exp ? exp.date : (monthKey(current) === monthKey(today) ? isoDate(today) : isoDate(current));
+    selectedCat = exp ? exp.category : (catsFor(formType)[0] || {}).name;
+    $('fDelete').classList.toggle('hidden', !exp);
+    renderFormCats();
+    showBg();
+    requestAnimationFrame(() => $('sheet').classList.add('open'));
+    if (!exp) setTimeout(() => $('fAmount').focus(), 260);
+  }
+  $('fType').addEventListener('click', e => {
+    const b = e.target.closest('[data-type]'); if (!b || b.dataset.type === formType) return;
+    formType = b.dataset.type;
+    if (!catsFor(formType).some(c => c.name === selectedCat)) selectedCat = (catsFor(formType)[0] || {}).name;
+    renderFormCats();
+  });
   $('sheet').addEventListener('submit', ev => {
     ev.preventDefault();
     const amount = parseFloat($('fAmount').value);
     if (!(amount > 0)) { toast('Enter an amount'); return; }
     if (!selectedCat) { toast('Pick a category'); return; }
     const data = {
-      amount: Math.round(amount * 100) / 100, category: selectedCat,
+      type: formType, amount: Math.round(amount * 100) / 100, category: selectedCat,
       date: $('fDate').value || isoDate(new Date()), note: $('fNote').value.trim(), payment: $('fPay').value
     };
     try { localStorage.setItem(KEY + ':pay', data.payment); } catch (e) {}
     if (editingId) {
-      Object.assign(state.expenses.find(e => e.id === editingId), data);
-      toast('Updated');
+      const e = state.expenses.find(x => x.id === editingId);
+      Object.assign(e, data);
+      if (e.ref && data.category !== editingOrigCat && data.note) {
+        const k = learn(data.note, data.category);
+        toast(k ? `Updated · will file “${k}” under ${data.category}` : 'Updated');
+      } else toast('Updated');
     } else {
       state.expenses.push({ id: uid(), createdAt: Date.now(), ...data });
-      toast('Added ' + fmt(data.amount));
+      toast((data.type === 'credit' ? 'Added income ' : 'Added ') + fmt(data.amount));
     }
     save();
     const d = new Date(data.date + 'T00:00'); current = new Date(d.getFullYear(), d.getMonth(), 1);
-    closeSheet(); render();
+    closeAll(); render();
   });
   $('fCats').addEventListener('click', e => {
     const b = e.target.closest('[data-cat]'); if (!b) return;
     selectedCat = b.dataset.cat; renderFormCats();
   });
   $('fDelete').addEventListener('click', () => {
-    if (!confirm('Delete this expense?')) return;
+    if (!confirm('Delete this transaction?')) return;
     state.expenses = state.expenses.filter(e => e.id !== editingId);
-    save(); closeSheet(); render(); toast('Deleted');
+    save(); closeAll(); render(); toast('Deleted');
   });
-  $('fCancel').addEventListener('click', closeSheet);
-  $('sheetBg').addEventListener('click', closeSheet);
+  $('fCancel').addEventListener('click', closeAll);
+  $('sheetBg').addEventListener('click', closeAll);
   $('fab').addEventListener('click', () => openSheet(null));
   $('list').addEventListener('click', e => {
     const it = e.target.closest('.item'); if (!it) return;
     openSheet(state.expenses.find(x => x.id === it.dataset.id));
   });
 
+  // ---------- statement import: file reading ----------
+  function loadScript(src) {
+    return new Promise((res, rej) => {
+      if (window.XLSX) return res();
+      const s = document.createElement('script');
+      s.src = src; s.onload = res; s.onerror = () => rej(new Error('load'));
+      document.head.appendChild(s);
+    });
+  }
+  function parseDelimited(text) {
+    text = text.replace(/^﻿/, '');
+    const sample = text.split(/\r?\n/).slice(0, 30).join('\n');
+    const count = ch => (sample.match(new RegExp('\\' + ch, 'g')) || []).length;
+    const delim = [',', ';', '\t', '|'].sort((a, b) => count(b) - count(a))[0];
+    const rows = []; let row = [], field = '', q = false;
+    for (let i = 0; i < text.length; i++) {
+      const c = text[i];
+      if (q) {
+        if (c === '"') { if (text[i + 1] === '"') { field += '"'; i++; } else q = false; }
+        else field += c;
+      } else if (c === '"') q = true;
+      else if (c === delim) { row.push(field); field = ''; }
+      else if (c === '\n' || c === '\r') {
+        if (c === '\r' && text[i + 1] === '\n') i++;
+        row.push(field); rows.push(row); row = []; field = '';
+      } else field += c;
+    }
+    if (field || row.length) { row.push(field); rows.push(row); }
+    return rows;
+  }
+  async function readStatement(file) {
+    if (/\.(xlsx?|ods)$/i.test(file.name)) {
+      try { await loadScript(SHEETJS); }
+      catch (e) { throw new Error('Excel support needs an internet connection the first time. Or save the file as CSV and import that.'); }
+      const wb = XLSX.read(await file.arrayBuffer(), { type: 'array', cellDates: true });
+      // pick the sheet with the most rows
+      let best = [];
+      wb.SheetNames.forEach(n => {
+        const rows = XLSX.utils.sheet_to_json(wb.Sheets[n], { header: 1, raw: true, defval: '' });
+        if (rows.length > best.length) best = rows;
+      });
+      return best;
+    }
+    if (/\.pdf$/i.test(file.name)) throw new Error('PDF statements can’t be read reliably. Download the CSV or Excel version from net banking.');
+    return parseDelimited(await file.text());
+  }
+
+  // ---------- statement import: column detection ----------
+  const normH = h => String(h == null ? '' : h).toLowerCase().replace(/[^a-z/ ]+/g, ' ').replace(/\s+/g, ' ').trim();
+  function detectColumns(rows) {
+    for (let i = 0; i < Math.min(rows.length, 60); i++) {
+      const h = rows[i].map(normH);
+      const find = (tests, skip = []) => {
+        for (const t of tests) {
+          const idx = h.findIndex((x, j) => x && !skip.includes(j) && !/balance|bal\b/.test(x) && t.test(x));
+          if (idx >= 0) return idx;
+        }
+        return -1;
+      };
+      const type = find([/^(dr ?\/ ?cr|cr ?\/ ?dr|dr cr|debit ?\/ ?credit|type|txn type|transaction type|d\/c|c\/d)$/]);
+      const date = find([/^(txn|transaction|tran|trans|posting|post|booking)\.? ?(date|dt)/, /^date$/, /date(?!.*value)/, /^value ?(date|dt)/, /\bdt\b/], [type]);
+      const desc = find([/narration/, /description/, /particulars/, /remarks/, /transaction (details|info)/, /details/, /memo|payee|merchant|name/], [type, date]);
+      const debit = find([/withdrawal|debit|\bdr\b|paid out|money out|outflow/], [type, date, desc]);
+      const credit = find([/deposit|credit|\bcr\b|paid in|money in|inflow/], [type, date, desc, debit]);
+      const amount = find([/^amount|amount$|\bamt\b|^value$/], [type, date, desc, debit, credit]);
+      if (date >= 0 && (debit >= 0 && credit >= 0 || amount >= 0)) {
+        return { header: i, map: { date, desc, debit, credit, amount: (debit >= 0 && credit >= 0) ? -1 : amount, type } };
+      }
+    }
+    // no header row found: guess from the data itself
+    const first = rows.findIndex(r => r.some(c => parseDate(c, 'dmy')));
+    if (first < 0) return null;
+    const r = rows[first];
+    const date = r.findIndex(c => parseDate(c, 'dmy'));
+    const nums = r.map((c, j) => j !== date && !isNaN(parseAmount(c)) ? j : -1).filter(j => j >= 0);
+    const desc = r.findIndex((c, j) => j !== date && typeof c === 'string' && /[a-z]{3}/i.test(c));
+    if (!nums.length) return null;
+    return { header: first - 1, map: { date, desc, debit: -1, credit: -1, amount: nums[0], type: -1 } };
+  }
+
+  const MONTHS = ['jan','feb','mar','apr','may','jun','jul','aug','sep','oct','nov','dec'];
+  function mkDate(y, m, d) {
+    y = +y; m = +m; d = +d;
+    if (y < 100) y += 2000;
+    if (!(m >= 1 && m <= 12 && d >= 1 && d <= 31 && y > 1970 && y < 2100)) return null;
+    const dt = new Date(y, m - 1, d);
+    return dt.getMonth() === m - 1 ? isoDate(dt) : null;
+  }
+  function parseDate(v, fmt) {
+    if (v instanceof Date && !isNaN(v)) return isoDate(new Date(v.getTime() + 12 * 36e5));
+    if (typeof v === 'number') {
+      if (v > 20000 && v < 80000) { const d = new Date(Date.UTC(1899, 11, 30) + Math.round(v) * 864e5); return mkDate(d.getUTCFullYear(), d.getUTCMonth() + 1, d.getUTCDate()); }
+      return null;
+    }
+    const s = String(v || '').trim();
+    if (!s) return null;
+    let m;
+    if ((m = s.match(/^(\d{4})[-\/.](\d{1,2})[-\/.](\d{1,2})/))) return mkDate(m[1], m[2], m[3]);
+    if ((m = s.match(/^(\d{1,2})[-\/. ]+([A-Za-z]{3,9})[-\/. ,']+(\d{2,4})\b/))) {
+      const mi = MONTHS.indexOf(m[2].slice(0, 3).toLowerCase()); return mi < 0 ? null : mkDate(m[3], mi + 1, m[1]);
+    }
+    if ((m = s.match(/^([A-Za-z]{3,9})[-\/. ]+(\d{1,2}),?[-\/. ,']+(\d{2,4})\b/))) {
+      const mi = MONTHS.indexOf(m[1].slice(0, 3).toLowerCase()); return mi < 0 ? null : mkDate(m[3], mi + 1, m[2]);
+    }
+    if ((m = s.match(/^(\d{1,2})[-\/.](\d{1,2})[-\/.](\d{2,4})\b/))) {
+      return fmt === 'mdy' ? mkDate(m[3], m[1], m[2]) : mkDate(m[3], m[2], m[1]);
+    }
+    return null;
+  }
+  function guessDateFmt(rows, col) {
+    let dmy = 0, mdy = 0;
+    rows.forEach(r => {
+      const m = String(r[col] || '').trim().match(/^(\d{1,2})[-\/.](\d{1,2})[-\/.](\d{2,4})\b/);
+      if (m) { if (+m[1] > 12) dmy++; if (+m[2] > 12) mdy++; }
+    });
+    if (dmy > mdy) return 'dmy';
+    if (mdy > dmy) return 'mdy';
+    return state.settings.currency === 'USD' ? 'mdy' : 'dmy';
+  }
+  // Signed number: "(1,200.00)", "-1200", "1,200.00 Dr" are negative; "1,200 Cr" positive.
+  function parseAmount(v) {
+    if (typeof v === 'number') return v;
+    const s = String(v == null ? '' : v).trim();
+    if (!s || !/\d/.test(s)) return NaN;
+    const n = parseFloat(s.replace(/[^0-9.\-]/g, '').replace(/(?!^)-/g, ''));
+    if (isNaN(n)) return NaN;
+    if (/\(.*\)/.test(s) || /\bdr\.?$/i.test(s) || /^-|-$/.test(s.replace(/[^\d.\-]/g, ''))) return -Math.abs(n);
+    if (/\bcr\.?$/i.test(s)) return Math.abs(n);
+    return n;
+  }
+
+  const drcrSuffix = v => /\bdr\.?\s*$/i.test(String(v)) ? 'debit' : /\bcr\.?\s*$/i.test(String(v)) ? 'credit' : null;
+
+  // ---------- statement import: building the preview ----------
+  const imp = { rows: [], header: 0, map: {}, dateFmt: 'dmy', sign: 'neg-debit', items: [], filter: 'all', name: '' };
+
+  function refOf(date, type, amount, desc) {
+    return [date, type, amount.toFixed(2), String(desc).toLowerCase().replace(/\s+/g, ' ').trim()].join('|');
+  }
+  function buildItems() {
+    const { map } = imp;
+    const existing = new Set(state.expenses.map(e => e.ref).filter(Boolean));
+    const cell = (r, j) => j >= 0 ? r[j] : '';
+    const items = [];
+    imp.rows.slice(imp.header + 1).forEach(r => {
+      if (!Array.isArray(r)) return;
+      const date = parseDate(cell(r, map.date), imp.dateFmt);
+      if (!date) return;
+      const desc = String(cell(r, map.desc) || '').replace(/\s+/g, ' ').trim();
+      const push = (type, amount) => {
+        amount = Math.round(Math.abs(amount) * 100) / 100;
+        if (!(amount > 0)) return;
+        const ref = refOf(date, type, amount, desc);
+        const dup = existing.has(ref);
+        items.push({ date, desc, type, amount, ref, dup, include: !dup, category: classify(desc, type), touched: false });
+      };
+      if (map.debit >= 0 || map.credit >= 0) {
+        const d = Math.abs(parseAmount(cell(r, map.debit))) || 0;
+        const c = Math.abs(parseAmount(cell(r, map.credit))) || 0;
+        if (d) push('debit', d);
+        if (c) push('credit', c);
+      } else if (map.amount >= 0) {
+        const a = parseAmount(cell(r, map.amount));
+        if (isNaN(a) || !a) return;
+        let type = drcrSuffix(cell(r, map.amount));
+        const t = normH(cell(r, map.type));
+        if (type) {}
+        else if (map.type >= 0 && /^(dr|d|debit|withdrawal|w)\b/.test(t)) type = 'debit';
+        else if (map.type >= 0 && /^(cr|c|credit|deposit)\b/.test(t)) type = 'credit';
+        else type = (a < 0) === (imp.sign === 'neg-debit') ? 'debit' : 'credit';
+        push(type, a);
+      }
+    });
+    items.sort((a, b) => b.date.localeCompare(a.date));
+    imp.items = items;
+  }
+
+  function renderImport() {
+    const it = imp.items;
+    const inc = it.filter(x => x.include);
+    const deb = inc.filter(x => x.type === 'debit'), cre = inc.filter(x => x.type === 'credit');
+    const dups = it.filter(x => x.dup).length;
+    const other = it.filter(x => x.category === 'Other' || x.category === 'Other Income').length;
+    $('impInfo').innerHTML = it.length
+      ? `${esc(imp.name)}<br>${deb.length} debits <b>${fmt(sum(deb))}</b> · ${cre.length} credits <b style="color:var(--income)">${fmt(sum(cre))}</b>${dups ? `<br>${dups} already imported (unticked)` : ''}`
+      : `${esc(imp.name)}<br>No transactions found. Check the columns below.`;
+    if (!it.length) $('impMap').open = true;
+
+    const filters = [['all', `All ${it.length}`], ['debit', `Debits`], ['credit', `Credits`], ['other', `Uncategorised ${other}`]];
+    if (dups) filters.push(['dup', `Duplicates ${dups}`]);
+    $('impFilters').innerHTML = filters.map(([k, l]) => `<button class="chip ${imp.filter === k ? 'sel' : ''}" data-f="${k}">${l}</button>`).join('');
+
+    const pass = x => imp.filter === 'all' || (imp.filter === 'dup' ? x.dup : imp.filter === 'other'
+      ? (x.category === 'Other' || x.category === 'Other Income') : x.type === imp.filter);
+    const opts = {};
+    ['debit', 'credit'].forEach(t => opts[t] = catsFor(t));
+    const rows = it.map((x, i) => !pass(x) ? '' : `
+      <div class="irow ${x.include ? '' : 'off'}" data-i="${i}">
+        <input type="checkbox" ${x.include ? 'checked' : ''} aria-label="Include">
+        <div class="d"><div class="desc">${esc(x.desc || '(no description)')}</div>
+          <div class="meta">${new Date(x.date + 'T00:00').toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' })}${x.dup ? '<span class="tag warn">already imported</span>' : ''}</div></div>
+        <div class="amt ${x.type === 'credit' ? 'credit' : ''}">${x.type === 'credit' ? '+' : '−'}${fmt(x.amount)}</div>
+        <select aria-label="Category">${opts[x.type].map(c => `<option ${c.name === x.category ? 'selected' : ''} value="${esc(c.name)}">${esc(c.emoji)} ${esc(c.name)}</option>`).join('')}</select>
+      </div>`).join('');
+    $('impList').innerHTML = rows || '<div class="empty">Nothing here.</div>';
+    $('impGo').textContent = `Import ${inc.length} transaction${inc.length === 1 ? '' : 's'}`;
+    $('impGo').disabled = !inc.length;
+  }
+
+  function fillMapSelects() {
+    const header = imp.header >= 0 ? imp.rows[imp.header] || [] : [];
+    const width = Math.max(...imp.rows.slice(0, 80).map(r => (r || []).length), 0);
+    const names = [];
+    for (let j = 0; j < width; j++) names.push(String(header[j] || '').trim() || `Column ${j + 1}`);
+    document.querySelectorAll('[data-map]').forEach(sel => {
+      sel.innerHTML = `<option value="-1">— none —</option>` + names.map((n, j) => `<option value="${j}">${esc(n)}</option>`).join('');
+      sel.value = String(imp.map[sel.dataset.map] ?? -1);
+    });
+    $('impDateFmt').value = imp.dateFmt;
+    $('impSign').value = imp.sign;
+  }
+
+  async function startImport(file) {
+    toast('Reading ' + file.name + '…');
+    let rows;
+    try { rows = await readStatement(file); }
+    catch (e) { toast(e.message && e.message.length > 20 ? e.message : 'Could not read that file'); return; }
+    rows = (rows || []).filter(r => Array.isArray(r) && r.some(c => String(c).trim() !== ''));
+    const det = detectColumns(rows);
+    imp.rows = rows; imp.name = file.name; imp.filter = 'all';
+    imp.header = det ? det.header : 0;
+    imp.map = det ? det.map : { date: -1, desc: -1, debit: -1, credit: -1, amount: -1, type: -1 };
+    imp.dateFmt = imp.map.date >= 0 ? guessDateFmt(rows, imp.map.date) : 'dmy';
+    if (imp.map.amount >= 0 && imp.map.type < 0) {
+      const anyNeg = rows.slice(imp.header + 1).some(r => parseAmount(r[imp.map.amount]) < 0);
+      imp.sign = anyNeg ? 'neg-debit' : 'pos-debit';
+    } else imp.sign = 'neg-debit';
+    $('impMap').open = !det;
+    $('toast').classList.remove('show');
+    fillMapSelects();
+    buildItems();
+    renderImport();
+    showBg();
+    $('impList').scrollTop = 0;
+    requestAnimationFrame(() => $('impSheet').classList.add('open'));
+  }
+
+  $('impMap').addEventListener('change', e => {
+    if (e.target.dataset.map) imp.map[e.target.dataset.map] = +e.target.value;
+    if (e.target.id === 'impDateFmt') imp.dateFmt = e.target.value;
+    if (e.target.id === 'impSign') imp.sign = e.target.value;
+    buildItems(); renderImport();
+  });
+  $('impFilters').addEventListener('click', e => {
+    const b = e.target.closest('[data-f]'); if (!b) return;
+    imp.filter = b.dataset.f; renderImport(); $('impList').scrollTop = 0;
+  });
+  $('impList').addEventListener('change', e => {
+    const row = e.target.closest('.irow'); if (!row) return;
+    const x = imp.items[+row.dataset.i];
+    if (e.target.type === 'checkbox') { x.include = e.target.checked; renderImport(); return; }
+    if (e.target.tagName === 'SELECT') {
+      x.category = e.target.value; x.touched = true;
+      const k = learn(x.desc, x.category);
+      let n = 0;
+      if (k) imp.items.forEach(y => {
+        if (y !== x && !y.touched && y.type === x.type && merchantKey(y.desc) === k && y.category !== x.category) { y.category = x.category; n++; }
+      });
+      save();
+      renderImport();
+      if (n) toast(`Also set ${n} other “${k}” transaction${n > 1 ? 's' : ''} to ${x.category}`);
+    }
+  });
+  $('impGo').addEventListener('click', () => {
+    const now = Date.now();
+    const add = imp.items.filter(x => x.include).map((x, i) => ({
+      id: uid(), createdAt: now + i, type: x.type, amount: x.amount, category: x.category,
+      date: x.date, note: x.desc, payment: 'Bank', ref: x.ref
+    }));
+    state.expenses.push(...add);
+    save();
+    const latest = add.reduce((m, x) => x.date > m ? x.date : m, '');
+    if (latest) { const d = new Date(latest + 'T00:00'); current = new Date(d.getFullYear(), d.getMonth(), 1); }
+    closeAll();
+    view = 'list'; syncNav(); render();
+    toast(`Imported ${add.length} transactions`);
+  });
+  $('impCancel').addEventListener('click', closeAll);
+  const pickStatement = () => $('importFile').click();
+  $('importBtn').addEventListener('click', pickStatement);
+  $('importTop').addEventListener('click', pickStatement);
+  $('importFile').addEventListener('change', e => {
+    const f = e.target.files[0]; e.target.value = '';
+    if (f) startImport(f);
+  });
+
   // ---------- navigation ----------
   $('prevM').addEventListener('click', () => { current = new Date(current.getFullYear(), current.getMonth() - 1, 1); render(); });
   $('nextM').addEventListener('click', () => { current = new Date(current.getFullYear(), current.getMonth() + 1, 1); render(); });
   $('search').addEventListener('input', renderList);
-  document.querySelectorAll('nav button').forEach(b => b.addEventListener('click', () => {
-    view = b.dataset.view;
-    document.querySelectorAll('nav button').forEach(x => x.classList.toggle('active', x === b));
+  function syncNav() {
+    document.querySelectorAll('nav button').forEach(x => x.classList.toggle('active', x.dataset.view === view));
     ['list', 'summary', 'settings'].forEach(v => $('view-' + v).classList.toggle('hidden', v !== view));
     $('fab').classList.toggle('hidden', view === 'settings');
     document.querySelector('header').classList.toggle('hidden', view === 'settings');
-    window.scrollTo(0, 0);
-    render();
+  }
+  document.querySelectorAll('nav button').forEach(b => b.addEventListener('click', () => {
+    view = b.dataset.view; syncNav(); window.scrollTo(0, 0); render();
   }));
 
   // ---------- settings ----------
@@ -475,18 +969,22 @@
   $('budget').addEventListener('change', e => { state.settings.budget = Math.max(0, parseFloat(e.target.value) || 0); save(); toast('Budget saved'); });
   $('addCat').addEventListener('click', () => {
     const name = $('newCatName').value.trim();
-    if (!name) return;
+    if (!name) { toast('Type a category name'); return; }
     if (state.categories.some(c => c.name.toLowerCase() === name.toLowerCase())) { toast('Category exists'); return; }
-    state.categories.push({ emoji: $('newCatEmoji').value.trim() || '🏷️', name });
+    state.categories.push({ emoji: $('newCatEmoji').value.trim() || '🏷️', name, kind: $('newCatKind').value });
     $('newCatName').value = ''; $('newCatEmoji').value = '';
-    save(); renderSettings();
+    save(); renderSettings(); toast('Category added');
   });
-  $('catChips').addEventListener('click', e => {
+  document.querySelectorAll('#catChips, #incChips').forEach(el => el.addEventListener('click', e => {
     const x = e.target.closest('[data-del]'); if (!x) return;
     const c = state.categories[+x.dataset.del];
-    if (state.categories.length <= 1) { toast('Keep at least one category'); return; }
-    if (!confirm(`Remove "${c.name}"? Existing expenses keep their category.`)) return;
+    if (catsFor(c.kind === 'credit' ? 'credit' : 'debit').length <= 1) { toast('Keep at least one category'); return; }
+    if (!confirm(`Remove "${c.name}"? Existing transactions keep their category.`)) return;
     state.categories.splice(+x.dataset.del, 1); save(); renderSettings();
+  }));
+  $('ruleChips').addEventListener('click', e => {
+    const x = e.target.closest('[data-rule]'); if (!x) return;
+    delete state.rules[x.dataset.rule]; save(); renderSettings();
   });
 
   function download(name, text, type) {
@@ -498,10 +996,10 @@
   }
   $('exportCsv').addEventListener('click', () => {
     const q = v => `"${String(v).replace(/"/g, '""')}"`;
-    const rows = [['Date', 'Category', 'Amount', 'Currency', 'Payment', 'Note']]
+    const rows = [['Date', 'Type', 'Category', 'Amount', 'Currency', 'Payment', 'Note']]
       .concat([...state.expenses].sort((a, b) => a.date.localeCompare(b.date))
-        .map(e => [e.date, e.category, e.amount, state.settings.currency, e.payment || '', e.note]));
-    download(`expenses-${isoDate(new Date())}.csv`, rows.map(r => r.map(q).join(',')).join('\n'), 'text/csv');
+        .map(e => [e.date, e.type === 'credit' ? 'Credit' : 'Debit', e.category, e.amount, state.settings.currency, e.payment || '', e.note]));
+    download(`transactions-${isoDate(new Date())}.csv`, rows.map(r => r.map(q).join(',')).join('\n'), 'text/csv');
   });
   $('backup').addEventListener('click', () =>
     download(`expenses-backup-${isoDate(new Date())}.json`, JSON.stringify(state, null, 2), 'application/json'));
@@ -512,16 +1010,17 @@
       const data = JSON.parse(await f.text());
       if (!Array.isArray(data.expenses)) throw new Error('bad file');
       const valid = data.expenses.filter(x => x && typeof x.amount === 'number' && /^\d{4}-\d{2}-\d{2}$/.test(x.date))
-        .map(x => ({ id: String(x.id || uid()), createdAt: +x.createdAt || Date.now(), amount: x.amount,
-          category: String(x.category || 'Other'), date: x.date, note: String(x.note || ''), payment: String(x.payment || '') }));
-      if (!confirm(`Replace current data with ${valid.length} expenses from backup?`)) return;
-      state = { ...defaultState(), ...data, expenses: valid, settings: { ...defaultState().settings, ...data.settings } };
+        .map(x => ({ id: String(x.id || uid()), createdAt: +x.createdAt || Date.now(), type: x.type === 'credit' ? 'credit' : 'debit',
+          amount: x.amount, category: String(x.category || 'Other'), date: x.date, note: String(x.note || ''),
+          payment: String(x.payment || ''), ...(x.ref ? { ref: String(x.ref) } : {}) }));
+      if (!confirm(`Replace current data with ${valid.length} transactions from backup?`)) return;
+      state = migrate({ ...data, expenses: valid });
       save(); $('currency').innerHTML = ''; render(); toast('Restored');
     } catch (err) { toast('Not a valid backup file'); }
     e.target.value = '';
   });
   $('wipe').addEventListener('click', () => {
-    if (!confirm('Delete ALL expenses and settings? This cannot be undone.')) return;
+    if (!confirm('Delete ALL transactions, rules and settings? This cannot be undone.')) return;
     state = defaultState(); save(); $('currency').innerHTML = ''; render(); toast('All data deleted');
   });
 
