@@ -15,7 +15,7 @@ on:
 
 concurrency:
   group: expenses-ios-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: false   # a newer push replaces a waiting build, never a running one
 
 jobs:
   build:
