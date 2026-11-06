@@ -206,8 +206,9 @@
 
   /* header becomes a glass bar */
   header {
-    background: linear-gradient(var(--bg-base), rgba(0,0,0,0));
-    background: transparent;
+    background: color-mix(in srgb, var(--bg-base) 55%, transparent);
+    -webkit-backdrop-filter: var(--glass-blur-strong); backdrop-filter: var(--glass-blur-strong);
+    border-bottom: 1px solid var(--glass-line); padding-bottom: 10px;
   }
   header .iconbtn, .searchrow .iconbtn {
     background: var(--glass); border: 1px solid var(--glass-edge);
@@ -405,6 +406,7 @@
       <label for="mailUrl">Gmail bridge address</label>
       <input id="mailUrl" type="url" inputmode="url" autocomplete="off" placeholder="https://script.google.com/macros/s/…/exec">
       <button class="btn primary" id="mailCheck">✉️ Check email now</button>
+      <button class="btn ghost" id="mailResync">↻ Re-sync email (removes and re-adds email entries)</button>
       <details class="map" id="mailHelp">
         <summary>How to connect Gmail (one time, ~3 min)</summary>
         <ol class="sub" style="padding-left:18px;line-height:1.5">
@@ -1290,6 +1292,7 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
 
   // ---------- bank SMS ----------
   const SMS_SKIP = /\b(otp|one time password|will be (debited|credited|deducted)|is due|due (date|on|by)|minimum (amount )?due|total (amount )?due|declined|failed|unsuccessful|could not be|has been blocked|requested (money|rs|inr)|collect request|payment request|mandate (has been )?(created|registered|set up)|e-?mandate)\b/i;
+  const SMS_PROMO = /\b(up ?to|at ?least|earn|win|won|chance|offers?|apply( now)?|eligible|pre-?approved|instant loan|loan (of|up)|credit limit|reward points?|voucher|coupon|discount|sale|shop now|click|download|unsubscribe|t&c|terms (and|&) conditions|newsletter|webinar|invest now|hurry|limited period)\b/i;
   const SMS_DEBIT = /\b(debited|debit(ed)? by|debit\s*(of\s*)?(inr|rs\.?|₹)|dr\.?\s*(inr|rs\.?|₹)|sent|spent|paid|withdrawn|withdrawal|purchase|txn of|transferred to|trf to|used (at|for)|charged|deducted)\b/i;
   const SMS_CREDIT = /\b(credited|credit\s*(of\s*)?(inr|rs\.?|₹)|cr\.?\s*(inr|rs\.?|₹)|received|deposited|refunded|refund of|added to|has been credited|reversed)\b/i;
   const AMT = /(?:rs\.?|inr|₹|usd|us\$|\$)\s*([\d,]+(?:\.\d{1,2})?)/gi;
@@ -1346,6 +1349,10 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     if (!t) return null;
     const skip = opts.email ? t.replace(/\b(otp|one time password)\b/gi, '') : t;
     if (SMS_SKIP.test(skip)) return null;
+    // Real alerts carry an account/card reference (XX8810, *9226, UPI/RRN/UTR). Emails must have one;
+    // anything with promotional wording must have one too.
+    const strong = acctDigitsIn(t).length > 0 || /\b(vpa|rrn|utr|upi ref|ref(erence)? no|txn id|transaction id)\b|\w@[a-z]/i.test(t);
+    if ((opts.email && !strong) || (SMS_PROMO.test(t) && !strong)) return null;
     const di = t.search(SMS_DEBIT), ci = t.search(SMS_CREDIT);
     if (di < 0 && ci < 0) return null;
     const type = ci < 0 || (di >= 0 && di < ci) ? 'debit' : 'credit';
@@ -1357,7 +1364,10 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     const rrn = (t.match(/\b(?:rrn|ref(?:erence)?(?:\s*no)?|utr|upi ref(?: no)?|txn id)[\s.:#-]*([A-Za-z0-9]{6,})/i) || [])[1] || '';
     const payment = /\bupi\b|vpa|@/i.test(t) ? 'UPI' : /\batm\b|cash withdrawal|withdrawn/i.test(t) ? 'Cash' : /\bcard\b/i.test(t) ? 'Card' : 'Bank';
     const desc = party ? `${type === 'credit' ? 'From' : 'To'} ${party}${bank ? ' · ' + bank : ''}` : t.slice(0, 120);
-    const cat = classify(party || t, type);
+    let cat = classify(party || t, type);
+    // "We have received your payment … towards your credit card" is a bill payment, not income
+    if (type === 'credit' && /credit ?card|card (ending|no\.?|number|x+|\*)|towards (your )?\w*\s*card/i.test(t) &&
+        /payment|received|thank/i.test(t) && catsFor('credit').some(c => c.name === 'Transfer')) cat = 'Transfer';
     const acct = matchAccount(t);
     return { date, desc, type, amount, payment, category: cat, touched: false, account: acct.id, acctDigits: acct.digits,
       ref: rrn ? `sms|${rrn}|${type}|${amount.toFixed(2)}` : `sms|${date}|${type}|${amount.toFixed(2)}|${(party || t).toLowerCase()}` };
@@ -1648,6 +1658,16 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     if (v) checkMail(false);
   });
   $('mailCheck').addEventListener('click', () => checkMail(false));
+  $('mailResync').addEventListener('click', () => {
+    const m = mailCfg();
+    if (!m.url) { toast('Connect Gmail first'); return; }
+    const n = state.expenses.filter(e => String(e.ref || '').startsWith('mail|')).length;
+    if (!confirm(`Remove ${n} entr${n === 1 ? 'y' : 'ies'} added from Gmail and check the last 45 days again with the latest rules? Category changes made to those entries will be lost.`)) return;
+    state.expenses = state.expenses.filter(e => !String(e.ref || '').startsWith('mail|'));
+    m.seen = []; m.cursor = 0; m.checked = 0;
+    save(); render();
+    checkMail(false);
+  });
   $('mailScript').addEventListener('click', async () => {
     const script = $('gmailScriptTpl').textContent.replace('__KEY__', mailCfg().key);
     try { await navigator.clipboard.writeText(script); toast('Script copied. Paste it in script.google.com'); }
