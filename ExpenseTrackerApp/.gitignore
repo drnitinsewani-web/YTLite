@@ -1,0 +1,5 @@
+www/
+Expenses.xcodeproj/
+Config/
+build/
+*.xcarchive

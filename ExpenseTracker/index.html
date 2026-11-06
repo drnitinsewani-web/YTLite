@@ -332,7 +332,10 @@
 (() => {
   'use strict';
   const KEY = 'expense-tracker-v1';
-  const SHEETJS = 'https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js';
+  const SHEETJS = ['vendor/xlsx.full.min.js', 'https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js'];
+  // Running inside the iOS app: data is also kept in native storage and files are exported via the share sheet.
+  const NATIVE = !!(window.__EXPENSES_NATIVE__ && window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.expenses);
+  const native = msg => { try { window.webkit.messageHandlers.expenses.postMessage(msg); } catch (e) {} };
   const DEFAULT_CATS = [
     ['🍔','Food','debit'],['🛒','Groceries','debit'],['🚗','Transport','debit'],['🏠','Rent','debit'],['💡','Bills','debit'],
     ['🛍️','Shopping','debit'],['💊','Health','debit'],['🎬','Entertainment','debit'],['✈️','Travel','debit'],
@@ -400,6 +403,12 @@
     return s;
   }
   function load() {
+    if (NATIVE && window.__EXPENSES_NATIVE_STATE__) {
+      try {
+        const s = JSON.parse(window.__EXPENSES_NATIVE_STATE__);
+        if (s && Array.isArray(s.expenses)) return migrate(s);
+      } catch (e) {}
+    }
     try {
       const s = JSON.parse(localStorage.getItem(KEY));
       if (s && Array.isArray(s.expenses)) return migrate(s);
@@ -408,8 +417,10 @@
   }
   let state = load();
   function save() {
-    try { localStorage.setItem(KEY, JSON.stringify(state)); }
-    catch (e) { toast('Could not save — storage full or unavailable'); }
+    const json = JSON.stringify(state);
+    if (NATIVE) native({ type: 'save', data: json });
+    try { localStorage.setItem(KEY, json); }
+    catch (e) { if (!NATIVE) toast('Could not save — storage full or unavailable'); }
   }
 
   let current = new Date(); current.setDate(1);
@@ -719,13 +730,14 @@
   });
 
   // ---------- statement import: file reading ----------
-  function loadScript(src) {
-    return new Promise((res, rej) => {
-      if (window.XLSX) return res();
+  function loadScript(srcs) {
+    const one = src => new Promise((res, rej) => {
       const s = document.createElement('script');
-      s.src = src; s.onload = res; s.onerror = () => rej(new Error('load'));
+      s.src = src; s.onload = res; s.onerror = () => { s.remove(); rej(new Error('load')); };
       document.head.appendChild(s);
     });
+    return srcs.reduce((p, src) => p.then(() => { if (!window.XLSX) return one(src).catch(() => {}); }), Promise.resolve())
+      .then(() => { if (!window.XLSX) throw new Error('load'); });
   }
   function parseDelimited(text) {
     text = text.replace(/^﻿/, '');
@@ -1177,6 +1189,7 @@
   });
 
   function download(name, text, type) {
+    if (NATIVE) { native({ type: 'export', name, text, mime: type }); return; }
     const blob = new Blob([text], { type });
     const a = document.createElement('a');
     a.href = URL.createObjectURL(blob); a.download = name;
@@ -1222,7 +1235,9 @@
     history.replaceState(null, '', location.pathname);
     if (!openSmsPreview(shared, 'Shared message')) openSmsSheet(shared);
   })();
-  if ('serviceWorker' in navigator && location.protocol !== 'file:') {
+  window.expensesReceiveShared = text => { if (!openSmsPreview(text, 'Shared message')) openSmsSheet(text); };
+  if (NATIVE) native({ type: 'ready' });
+  if ('serviceWorker' in navigator && /^https?:$/.test(location.protocol)) {
     navigator.serviceWorker.register('sw.js').catch(() => {});
   }
 })();
