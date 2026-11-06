@@ -129,6 +129,13 @@
   .toast { position: fixed; left: 50%; bottom: calc(150px + env(safe-area-inset-bottom)); transform: translateX(-50%); background: var(--text); color: var(--bg); padding: 10px 16px; border-radius: 12px; font-size: 14px; z-index: 30; opacity: 0; transition: opacity .2s; pointer-events: none; max-width: 90vw; text-align: center; }
   .toast.show { opacity: 1; }
   .hidden { display: none !important; }
+  .mrow { display: grid; grid-template-columns: 1fr auto; gap: 4px 10px; align-items: center; padding: 12px 0; border-bottom: 1px solid var(--border); }
+  .mrow .subj { font-weight: 600; font-size: 14px; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; word-break: break-word; }
+  .mrow .meta { color: var(--muted); font-size: 12px; margin-top: 2px; }
+  .mrow .snip { color: var(--muted); font-size: 12px; margin-top: 4px; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; word-break: break-word; }
+  .mrow .parsed { font-size: 13px; margin-top: 6px; font-variant-numeric: tabular-nums; }
+  .mrow .parsed.credit b { color: var(--income); }
+  .mrow.done { opacity: .55; }
 
   /* import sheet */
   .imp-head { flex: none; }
@@ -406,6 +413,7 @@
       <label for="mailUrl">Gmail bridge address</label>
       <input id="mailUrl" type="url" inputmode="url" autocomplete="off" placeholder="https://script.google.com/macros/s/…/exec">
       <button class="btn primary" id="mailCheck">✉️ Check email now</button>
+      <button class="btn ghost" id="mailBrowse">📧 Browse emails &amp; add one by one</button>
       <button class="btn ghost" id="mailResync">↻ Re-sync email (removes and re-adds email entries)</button>
       <details class="map" id="mailHelp">
         <summary>How to connect Gmail (one time, ~3 min)</summary>
@@ -522,8 +530,21 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
   <div class="sub" style="text-align:center;margin-bottom:10px">Paste one or more bank / UPI / card messages. Each becomes a transaction you can review.</div>
   <textarea id="smsText" rows="7" placeholder="Sent Rs.7500.00 from A/c *9226 on 03-11-26 to SHYAMKANT HARIBHAU MORE.RRN 752628445212…"></textarea>
   <button type="button" class="btn ghost" id="smsPaste">📋 Paste from clipboard</button>
+  <button type="button" class="btn ghost hidden" id="smsMail">📧 Pick from Gmail</button>
   <button type="button" class="btn primary" id="smsGo">Read messages</button>
   <button type="button" class="btn ghost" id="smsCancel">Cancel</button>
+</div>
+
+<!-- Gmail browser: pick emails one by one -->
+<div class="sheet tall" id="mailSheet">
+  <div class="grab"></div>
+  <div class="imp-head">
+    <h2 style="text-align:center">Emails</h2>
+    <div class="sub" id="mailInfo" style="text-align:center;margin-top:2px"></div>
+    <input class="search" id="mailFilter" type="search" placeholder="Filter by sender, merchant or amount" style="width:100%;margin:10px 0 6px">
+  </div>
+  <div class="imp-body" id="mailList"></div>
+  <div class="imp-foot"><button class="btn ghost" id="mailClose">Close</button></div>
 </div>
 
 <!-- Import preview sheet -->
@@ -591,9 +612,9 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     ['Transport', /\buber\b|\bola\b|olacabs|rapido|irctc|metro|petrol|diesel|fuel|hpcl|bpcl|indian ?oil|iocl|filling station|fastag|parking|\btoll\b|redbus|lyft|taxi|\bcab\b|railway|namma yatri|blusmart/],
     ['Travel', /makemytrip|goibibo|cleartrip|yatra|ixigo|airbnb|\boyo\b|booking\.com|indigo|interglobe|air ?india|vistara|spicejet|akasa|airline|airways|hotel|resort|expedia|agoda|thomas cook/],
     ['Shopping', /amazon|amzn|flipkart|myntra|ajio|meesho|nykaa|tata ?cliq|croma|reliance digital|decathlon|ikea|lifestyle|shoppers stop|westside|trends|zara|h ?& ?m|uniqlo|ebay|etsy|target|apple store|lenskart|firstcry|pepperfry|urban ?company/],
+    ['Entertainment', /netflix|spotify|hotstar|disney|prime ?video|primevideo|sonyliv|zee5|jiocinema|youtube|google ?play|bookmyshow|paytm ?movies|\bpvr\b|inox|cinepolis|gaming|steam|playstation|xbox|apple\.com|itunes|audible|kindle/],
     ['Bills', /electricity|bescom|msedcl|mseb|tneb|tangedco|tata power|adani (elec|power)|torrent power|bses|cesc|water (bill|board)|gas bill|indane|hp ?gas|bharat ?gas|mahanagar gas|igl\b|airtel|\bjio\b|vodafone|\bvi\b|bsnl|act fibernet|hathway|broadband|recharge|\bdth\b|tata ?play|postpaid|prepaid|insurance|\blic\b|premium|policy|\bemi\b|loan|bill ?pay|billdesk|bbps|utility|municipal|property tax/],
     ['Health', /pharma|pharmacy|chemist|apollo|medplus|netmeds|1mg|tata 1mg|pharmeasy|hospital|clinic|diagnostic|pathlab|lal path|thyrocare|doctor|dental|medical|medicine|health|practo|cult\.?fit|gym/],
-    ['Entertainment', /netflix|spotify|hotstar|disney|prime ?video|primevideo|sonyliv|zee5|jiocinema|youtube|google ?play|bookmyshow|paytm ?movies|\bpvr\b|inox|cinepolis|gaming|steam|playstation|xbox|apple\.com|itunes|audible|kindle/],
     ['Education', /school|college|university|tuition|coaching|course|udemy|coursera|byju|unacademy|vedantu|upgrad|books?\b|exam|fees?\b/],
     ['Rent', /\brent\b|nobroker|nestaway|landlord|housing society|society maint|maintenance charge/],
     ['Cash', /\batm\b|cash ?wdl|cash withdrawal|\bnwd\b|\bawb\b|\batw\b|cash wd/]
@@ -929,7 +950,7 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
   // ---------- sheets ----------
   function showBg() { $('sheetBg').style.display = 'block'; }
   function closeAll() {
-    $('sheet').classList.remove('open'); $('impSheet').classList.remove('open'); $('smsSheet').classList.remove('open');
+    $('sheet').classList.remove('open'); $('impSheet').classList.remove('open'); $('smsSheet').classList.remove('open'); $('mailSheet').classList.remove('open');
     $('sheetBg').style.display = 'none';
     document.activeElement && document.activeElement.blur();
   }
@@ -940,27 +961,30 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     $('fCats').innerHTML = catsFor(formType).map(c =>
       `<button type="button" class="chip ${c.name === selectedCat ? 'sel' : ''}" data-cat="${esc(c.name)}">${esc(c.emoji)} ${esc(c.name)}</button>`).join('');
   }
-  function openSheet(exp) {
+  let pendingRef = '', returnToMail = false;
+  function openSheet(exp, pre) {
+    const src = exp || pre;
+    pendingRef = !exp && pre && pre.ref ? pre.ref : '';
     editingId = exp ? exp.id : null;
     editingOrigCat = exp ? exp.category : null;
-    formType = exp ? exp.type : 'debit';
-    $('sheetTitle').textContent = exp ? 'Edit transaction' : 'Add transaction';
-    $('fAmount').value = exp ? exp.amount : '';
-    $('fNote').value = exp ? exp.note : '';
+    formType = src ? src.type : 'debit';
+    $('sheetTitle').textContent = exp ? 'Edit transaction' : pre ? 'Add from email' : 'Add transaction';
+    $('fAmount').value = src && src.amount ? src.amount : '';
+    $('fNote').value = src ? src.note || '' : '';
     let pay = 'Cash'; try { pay = localStorage.getItem(KEY + ':pay') || pay; } catch (e) {}
-    $('fPay').value = exp ? (exp.payment || 'Other') : pay;
+    $('fPay').value = src ? (src.payment || 'Other') : pay;
     const today = new Date();
-    $('fDate').value = exp ? exp.date : (monthKey(current) === monthKey(today) ? isoDate(today) : isoDate(current));
-    selectedCat = exp ? exp.category : (catsFor(formType)[0] || {}).name;
+    $('fDate').value = src && src.date ? src.date : (monthKey(current) === monthKey(today) ? isoDate(today) : isoDate(current));
+    selectedCat = src && src.category ? src.category : (catsFor(formType)[0] || {}).name;
     $('fDelete').classList.toggle('hidden', !exp);
     let lastAcct = ''; try { lastAcct = localStorage.getItem(KEY + ':acct') || ''; } catch (e) {}
-    const defAcct = exp ? (exp.account || '') : (acctFilter || (acctById(lastAcct) ? lastAcct : ''));
+    const defAcct = src ? (src.account || '') : (acctFilter || (acctById(lastAcct) ? lastAcct : ''));
     $('fAcct').innerHTML = acctOptions(defAcct, 'No account');
     $('fAcctWrap').classList.toggle('hidden', !(state.accounts || []).length);
     renderFormCats();
     showBg();
     requestAnimationFrame(() => $('sheet').classList.add('open'));
-    if (!exp) setTimeout(() => $('fAmount').focus(), 260);
+    if (!src || !src.amount) setTimeout(() => $('fAmount').focus(), 260);
   }
   $('fType').addEventListener('click', e => {
     const b = e.target.closest('[data-type]'); if (!b || b.dataset.type === formType) return;
@@ -988,12 +1012,14 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
         toast(k ? `Updated · will file “${k}” under ${data.category}` : 'Updated');
       } else toast('Updated');
     } else {
-      state.expenses.push({ id: uid(), createdAt: Date.now(), ...data });
+      state.expenses.push({ id: uid(), createdAt: Date.now(), ...data, ...(pendingRef ? { ref: pendingRef } : {}) });
+      if (pendingRef.startsWith('mail|')) { const m = mailCfg(); m.seen = [...new Set([...(m.seen || []), pendingRef.slice(5)])].slice(-1000); }
       toast((data.type === 'credit' ? 'Added income ' : 'Added ') + fmt(data.amount));
     }
     save();
     const d = new Date(data.date + 'T00:00'); current = new Date(d.getFullYear(), d.getMonth(), 1);
     closeAll(); render();
+    if (returnToMail) { returnToMail = false; openMailSheet(); }
   });
   $('fCats').addEventListener('click', e => {
     const b = e.target.closest('[data-cat]'); if (!b) return;
@@ -1004,8 +1030,11 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     state.expenses = state.expenses.filter(e => e.id !== editingId);
     save(); closeAll(); render(); toast('Deleted');
   });
-  $('fCancel').addEventListener('click', closeAll);
-  $('sheetBg').addEventListener('click', closeAll);
+  $('fCancel').addEventListener('click', () => {
+    closeAll();
+    if (returnToMail) { returnToMail = false; openMailSheet(); }
+  });
+  $('sheetBg').addEventListener('click', () => { returnToMail = false; closeAll(); });
   $('fab').addEventListener('click', () => openSheet(null));
   $('list').addEventListener('click', e => {
     const it = e.target.closest('.item'); if (!it) return;
@@ -1354,7 +1383,7 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     // Real alerts carry an account/card reference (XX8810, *9226, UPI/RRN/UTR). Emails must have one;
     // anything with promotional wording must have one too.
     const strong = acctDigitsIn(t).length > 0 || /\b(vpa|rrn|utr|upi ref|ref(erence)? no|txn id|transaction id)\b|\w@[a-z]/i.test(t);
-    if ((opts.email && !strong) || (SMS_PROMO.test(t) && !strong)) return null;
+    if (!opts.lenient && ((opts.email && !strong) || (SMS_PROMO.test(t) && !strong))) return null;
     const di = t.search(SMS_DEBIT), ci = t.search(SMS_CREDIT);
     if (di < 0 && ci < 0) return null;
     const type = ci < 0 || (di >= 0 && di < ci) ? 'debit' : 'credit';
@@ -1405,6 +1434,7 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
   }
   function openSmsSheet(prefill) {
     $('smsText').value = prefill || '';
+    $('smsMail').classList.toggle('hidden', !(state.settings.mail && state.settings.mail.url));
     showBg();
     requestAnimationFrame(() => $('smsSheet').classList.add('open'));
     setTimeout(() => $('smsText').focus(), 260);
@@ -1660,6 +1690,80 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     if (v) checkMail(false);
   });
   $('mailCheck').addEventListener('click', () => checkMail(false));
+  const mailBrowse = { items: [], loaded: 0 };
+  function mailEntryFor(e) {
+    const fallbackDate = isoDate(new Date(e.date));
+    const strict = parseSms(e.text, { email: true, fallbackDate });
+    let x = strict || parseSms(e.text, { email: true, fallbackDate, lenient: true });
+    if (!x) {
+      const amount = Math.round(smsAmount(String(e.text)) * 100) / 100;
+      x = { type: 'debit', amount: amount > 0 ? amount : 0, date: fallbackDate, payment: 'Bank', desc: '',
+            category: classify(e.subject + ' ' + e.text, 'debit'), account: matchAccount(e.text).id };
+    }
+    if (!/ · /.test(x.desc || '') && (x.desc || '').match(/^(To|From) /)) {
+      const sender = String(e.from || '').replace(/<.*>/, '').replace(/["']/g, '').trim();
+      x.desc += ' · ' + (bankName(sender + ' ' + (e.subject || '')) || sender.slice(0, 30));
+    }
+    if (!x.desc || !/^(To|From) /.test(x.desc)) x.desc = String(e.subject || x.desc || 'Email').slice(0, 120);
+    return { e, x, skipped: !strict };
+  }
+  function renderMailList() {
+    const q = $('mailFilter').value.trim().toLowerCase();
+    const refs = new Set(state.expenses.map(t => t.ref).filter(Boolean));
+    const rows = mailBrowse.items
+      .map((it, i) => ({ it, i }))
+      .filter(({ it }) => !q || [it.e.subject, it.e.from, it.e.text, it.x.desc, String(it.x.amount)].join(' ').toLowerCase().includes(q));
+    $('mailInfo').textContent = mailBrowse.items.length
+      ? `${mailBrowse.items.length} alert email${mailBrowse.items.length > 1 ? 's' : ''} from the last 45 days`
+      : 'No bank alert emails found in the last 45 days.';
+    $('mailList').innerHTML = rows.map(({ it, i }) => {
+      const added = refs.has('mail|' + it.e.id);
+      const sender = String(it.e.from || '').replace(/<.*>/, '').replace(/["']/g, '').trim();
+      const when = new Date(it.e.date).toLocaleDateString(undefined, { day: 'numeric', month: 'short' });
+      const amt = it.x.amount ? `<b>${it.x.type === 'credit' ? '+' : '−'}${fmt(it.x.amount)}</b> · ${esc(it.x.desc.replace(/^(To|From) /, ''))}` : 'No amount found';
+      return `<div class="mrow ${added ? 'done' : ''}">
+        <div style="min-width:0">
+          <div class="subj">${esc(it.e.subject || '(no subject)')}</div>
+          <div class="meta">${esc(sender)} · ${when}</div>
+          <div class="snip">${esc(it.e.text)}</div>
+          <div class="parsed ${it.x.type === 'credit' ? 'credit' : ''}">${amt}${it.skipped ? '<span class="tag warn">skipped by auto-sync</span>' : ''}</div>
+        </div>
+        ${added ? '<span class="tag">Added ✓</span>' : `<button class="chip sel" data-madd="${i}">Add</button>`}
+      </div>`;
+    }).join('') || '<div class="empty">Nothing matches.</div>';
+  }
+  async function openMailSheet(refresh) {
+    const m = mailCfg();
+    if (!m.url) { toast('Connect Gmail in Settings first'); return; }
+    closeAll(); showBg();
+    requestAnimationFrame(() => $('mailSheet').classList.add('open'));
+    if (!refresh && mailBrowse.items.length && Date.now() - mailBrowse.loaded < 10 * 60e3) { renderMailList(); return; }
+    $('mailInfo').textContent = 'Loading emails…'; $('mailList').innerHTML = '';
+    try {
+      const after = Math.floor(Date.now() / 1000) - 45 * 86400;
+      const url = m.url + (m.url.includes('?') ? '&' : '?') + 'key=' + encodeURIComponent(m.key) + '&after=' + after;
+      const data = await (await fetch(url, { redirect: 'follow' })).json();
+      if (data.error) throw new Error(data.error === 'bad key' ? 'The script has a different key. Copy the setup script again and redeploy.' : data.error);
+      mailBrowse.items = (data.items || []).filter(e => e && e.id).map(mailEntryFor)
+        .sort((a, b) => String(b.e.date).localeCompare(String(a.e.date)));
+      mailBrowse.loaded = Date.now();
+      renderMailList();
+    } catch (err) {
+      $('mailInfo').textContent = err && err.message && err.message.length > 25 ? err.message : 'Could not reach the Gmail bridge.';
+    }
+  }
+  $('mailList').addEventListener('click', ev => {
+    const b = ev.target.closest('[data-madd]'); if (!b) return;
+    const it = mailBrowse.items[+b.dataset.madd];
+    returnToMail = true;
+    closeAll();
+    openSheet(null, { ...it.x, note: it.x.desc, ref: 'mail|' + it.e.id });
+  });
+  $('mailFilter').addEventListener('input', renderMailList);
+  $('mailClose').addEventListener('click', closeAll);
+  $('mailBrowse').addEventListener('click', () => openMailSheet(true));
+  $('smsMail').addEventListener('click', () => openMailSheet(false));
+
   $('mailResync').addEventListener('click', () => {
     const m = mailCfg();
     if (!m.url) { toast('Connect Gmail first'); return; }
