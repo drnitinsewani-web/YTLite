@@ -191,6 +191,7 @@
     <div class="card">
       <h2>Spending by category</h2>
       <div id="catBars"></div>
+      <div class="sub" id="notCounted"></div>
     </div>
     <div class="card" id="incCard">
       <h2>Income by category</h2>
@@ -210,6 +211,9 @@
       <select id="currency"></select>
       <label for="budget">Monthly budget (0 = none)</label>
       <input id="budget" type="number" inputmode="decimal" min="0" step="any">
+      <label for="selfName">Your name as on bank statements</label>
+      <input id="selfName" type="text" autocomplete="name" placeholder="Filled in from your first statement">
+      <div class="sub">Money sent between your own accounts is filed as Transfer, so it isn’t counted as spending or income.</div>
     </div>
     <div class="card">
       <h2>Bank statements</h2>
@@ -320,13 +324,17 @@
     ['🛍️','Shopping','debit'],['💊','Health','debit'],['🎬','Entertainment','debit'],['✈️','Travel','debit'],
     ['📚','Education','debit'],['🏧','Cash','debit'],['📦','Other','debit'],
     ['💼','Salary','credit'],['↩️','Refund','credit'],['🏦','Interest','credit'],['💰','Other Income','credit'],
-    ['🔁','Transfer','both', true]
-  ].map(([emoji, name, kind, exclude]) => ({ emoji, name, kind, ...(exclude ? { exclude: true } : {}) }));
+    ['🔁','Transfer','both', true],
+    ['🧾','Fees & Charges','debit', false, 3],['📈','Investment','both', true, 3]
+  ].map(([emoji, name, kind, exclude, since]) => ({ emoji, name, kind, since: since || 2, ...(exclude ? { exclude: true } : {}) }));
+  const STATE_VERSION = 3;
   const CURRENCIES = ['INR','USD','EUR','GBP','AED','AUD','CAD','SGD','JPY','CNY','CHF','SAR','ZAR','BRL','MXN','NZD','HKD','SEK','NOK','PKR','BDT','LKR','NPR'];
 
   // Keyword rules used to auto-categorise statement lines. First match wins.
   const AUTO_RULES = [
-    ['Transfer', /payment received.*thank|thank you for (your )?payment|autopay si|credit ?card|cc ?(payment|pymt|bill)|card ?(payment|pymt)|cred club|\bcred\b|\bself\b|own a\/?c|own account|sweep|fd booking|to fd|rd instal|mutual fund|zerodha|groww|upstox|sip\b/],
+    ['Investment', /eq trade|upstox|zerodha|groww|angel ?one|angel broking|icici ?sec|icicidirect|hdfc ?sec|kotak ?sec|5paisa|\bdhan\b|paytm money|indmoney|kuvera|smallcase|mutual fund|\bmf\b|\bsip\b|bse limited|bse star|nse clearing|indian clearing|\bfd\b|fixed deposit|fd booking|rd instal|recurring deposit|\bppf\b|\bnps\b|sukanya|vanguard|fidelity|schwab|robinhood|brokerage/],
+    ['Fees & Charges', /mtf inte|mtf pledge|pledge chg|\bchg\b|charges|annual fee|\bamc\b|gst on|sms alert|penalty|late fee|min(imum)? bal|non ?maint|processing fee|convenience fee|overdraft fee|service fee/],
+    ['Transfer', /payment received.*thank|thank you for (your )?payment|autopay si|auto ?debit cc|\batd\b.*\bcc|cc ?billpay|credit ?card|cc ?(payment|pymt|bill)|card ?(payment|pymt)|cred club|\bcred\b|\bself\b|own a\/?c|own account|sweep/],
     ['Salary', /salary|\bsal\b|payroll|stipend|wages/],
     ['Interest', /interest|\bint\.? ?(pd|paid|cr|credit)|\bint pd\b|savings int|\bsb int/],
     ['Refund', /refund|reversal|reversed|\brev\b|cashback|cash back|chargeback/],
@@ -344,7 +352,7 @@
   ];
   const STOP = new Set(('UPI NEFT IMPS RTGS POS ATM TXN TRF TRANSFER REF NO PAYMENT PAY PAID TO FROM BY DR CR VPS IPS ACH NACH ECS MB INB IB NET BIL BILL ONL ECOM PURCHASE PUR DEBIT CREDIT CARD THE AND FOR VIA ' +
     'OK OKAXIS OKICICI OKSBI OKHDFCBANK YBL IBL AXL PAYTM APL HDFCBANK ICICI HDFC AXIS SBI SBIN KOTAK KKBK UTIB ICIC BANK BNK LTD PVT LIMITED INDIA PRIVATE ' +
-    'COLLECT REQUEST SENT RECEIVED MOB MOBILE MMT NFS CHQ CHEQUE DEP WDL INFT TPT IFT SI IMPSP UPIOUT UPIIN UPIAR UPIRET').split(' '));
+    'COLLECT REQUEST SENT RECEIVED MOB MOBILE MMT NFS CHQ CHEQUE DEP WDL INFT TPT IFT SI IMPSP UPIOUT UPIIN UPIAR UPIRET UPIINTENT YOU ARE BEING ON YES UNION BARODA CANARA PNB IDFC INDUSIND FEDERAL').split(' '));
 
   const $ = id => document.getElementById(id);
   const esc = s => String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -357,9 +365,9 @@
   function defaultState() {
     const lang = navigator.language || 'en-US';
     return {
-      v: 2, expenses: [], rules: {},
-      categories: DEFAULT_CATS.map(c => ({ ...c })),
-      settings: { currency: /-IN$/i.test(lang) ? 'INR' : 'USD', budget: 0 }
+      v: STATE_VERSION, expenses: [], rules: {},
+      categories: DEFAULT_CATS.map(({ since, ...c }) => c),
+      settings: { currency: /-IN$/i.test(lang) ? 'INR' : 'USD', budget: 0, selfName: '' }
     };
   }
   function migrate(s) {
@@ -369,10 +377,11 @@
     s.rules = s.rules && typeof s.rules === 'object' ? s.rules : {};
     s.categories = (Array.isArray(s.categories) && s.categories.length ? s.categories : d.categories)
       .map(c => ({ ...c, kind: c.kind || 'debit' }));
-    if (oldVersion < 2) {
-      DEFAULT_CATS.forEach(c => { if (!s.categories.some(x => x.name === c.name)) s.categories.push({ ...c }); });
-      s.v = 2;
-    }
+    // add default categories introduced after the version this data was saved with
+    DEFAULT_CATS.forEach(({ since, ...c }) => {
+      if (since > oldVersion && !s.categories.some(x => x.name === c.name)) s.categories.push(c);
+    });
+    s.v = STATE_VERSION;
     s.expenses = s.expenses.map(e => ({ ...e, type: e.type === 'credit' ? 'credit' : 'debit' }));
     return s;
   }
@@ -414,15 +423,48 @@
   // ---------- classification ----------
   function merchantKey(desc) {
     const seen = [];
-    String(desc).toUpperCase().replace(/[^A-Z&]+/g, ' ').split(' ').forEach(t => {
+    String(desc).toUpperCase().replace(/[\w.\-]*@[\w.\-]*/g, ' ').split(/[^A-Z0-9&]+/).filter(t => !/\d/.test(t)).forEach(t => {
       if (t.length >= 3 && !/^X+$/.test(t) && !STOP.has(t) && !seen.includes(t)) seen.push(t);
     });
     return seen.slice(0, 2).join(' ');
+  }
+  // Patterns that match the account holder's own name as banks print it (UPI cuts names to ~10 chars).
+  function selfPatterns() {
+    const parts = String(state.settings.selfName || '').toUpperCase().replace(/[^A-Z ]+/g, ' ').split(/\s+/).filter(t => t.length >= 2);
+    if (parts.length < 2) return [];
+    const full = parts.join(' ');
+    const cands = new Set([full, parts[0] + ' ' + parts[parts.length - 1], parts[parts.length - 1] + ' ' + parts[0], parts[0] + ' ' + parts[1]]);
+    if (full.length > 10) cands.add(full.slice(0, 10).trim());
+    return [...cands].filter(c => c.length >= 7).map(c => new RegExp('(^|[^A-Z])' + c.replace(/ /g, '\\s+')));
+  }
+  let selfRe = [];
+  const isSelf = desc => { const d = String(desc).toUpperCase(); return selfRe.some(r => r.test(d)); };
+  function detectHolderName(rows, headerIdx) {
+    const top = rows.slice(0, Math.max(0, headerIdx));
+    const clean = v => String(v).replace(/\s+/g, ' ').trim();
+    const ok = v => /^[A-Za-z][A-Za-z .']{4,60}$/.test(v) && v.trim().split(/\s+/).length >= 2 && !/statement|account|bank|branch|address|period|date/i.test(v);
+    const LABEL = /^(account holder( name)?|a\/c holder|customer name|account name|name)\s*:?\s*/i;
+    for (const r of top) {
+      for (let j = 0; j < r.length; j++) {
+        const c = clean(r[j]);
+        let m;
+        if ((m = c.match(/\)\s*-\s*([A-Za-z][A-Za-z .']+)$/)) && ok(m[1])) return m[1].trim();
+        if ((m = c.match(/transactions? list\s*-\s*([A-Za-z][A-Za-z .']+?)\s*-/i)) && ok(m[1])) return m[1].trim();
+        if (LABEL.test(c)) {
+          const inline = c.replace(LABEL, '');
+          if (ok(inline)) return inline;
+          const next = r.slice(j + 1).map(clean).find(Boolean);
+          if (next && ok(next.replace(/^:\s*/, ''))) return next.replace(/^:\s*/, '');
+        }
+      }
+    }
+    return '';
   }
   function classify(desc, type) {
     const allowed = new Set(catsFor(type).map(c => c.name));
     const learned = state.rules[merchantKey(desc)];
     if (learned && allowed.has(learned)) return learned;
+    if (allowed.has('Transfer') && isSelf(desc)) return 'Transfer';
     const d = ' ' + String(desc).toLowerCase().replace(/[_/|*]+/g, ' ') + ' ';
     for (const [cat, re] of AUTO_RULES) if (allowed.has(cat) && re.test(d)) return cat;
     const fallback = type === 'credit' ? 'Other Income' : 'Other';
@@ -535,6 +577,13 @@
 
     const debits = items.filter(e => e.type === 'debit' && counted(e));
     const credits = items.filter(e => e.type === 'credit' && counted(e));
+    const ex = {};
+    items.filter(e => !counted(e)).forEach(e => {
+      ex[e.category] = ex[e.category] || { out: 0, in: 0 };
+      ex[e.category][e.type === 'credit' ? 'in' : 'out'] += e.amount;
+    });
+    $('notCounted').innerHTML = Object.keys(ex).length ? 'Not counted: ' + Object.entries(ex).map(([c, v]) =>
+      `${esc(catOf(c).emoji)} ${esc(c)} ${v.out ? fmt(v.out) + ' out' : ''}${v.out && v.in ? ', ' : ''}${v.in ? fmt(v.in) + ' in' : ''}`).join(' · ') : '';
     $('catBars').innerHTML = debits.length ? barsHtml(debits, '') : '<div class="sub">Nothing spent this month.</div>';
     $('incCard').classList.toggle('hidden', !credits.length);
     $('incBars').innerHTML = barsHtml(credits, 'inc');
@@ -563,6 +612,7 @@
     }
     sel.value = state.settings.currency;
     $('budget').value = state.settings.budget || '';
+    $('selfName').value = state.settings.selfName || '';
     const chip = (c, i) => `<span class="chip">${esc(c.emoji)} ${esc(c.name)}<span class="x" data-del="${i}" role="button" aria-label="Remove">✕</span></span>`;
     $('catChips').innerHTML = state.categories.map((c, i) => c.kind !== 'credit' ? chip(c, i) : '').join('');
     $('incChips').innerHTML = state.categories.map((c, i) => c.kind === 'credit' ? chip(c, i) : '').join('');
@@ -840,6 +890,7 @@
     $('impInfo').innerHTML = it.length
       ? `${esc(imp.name)}<br>${deb.length} debits <b>${fmt(sum(deb))}</b> · ${cre.length} credits <b style="color:var(--income)">${fmt(sum(cre))}</b>${dups ? `<br>${dups} already imported (unticked)` : ''}`
       : `${esc(imp.name)}<br>No transactions found. Check the columns below.`;
+    if (it.length && state.settings.selfName) $('impInfo').innerHTML += `<br><span style="font-size:12px">Payments to/from <b>${esc(state.settings.selfName)}</b> → Transfer</span>`;
     if (!it.length) $('impMap').open = true;
 
     const filters = [['all', `All ${it.length}`], ['debit', `Debits`], ['credit', `Credits`], ['other', `Uncategorised ${other}`]];
@@ -893,6 +944,9 @@
     } else imp.sign = 'neg-debit';
     $('impMap').open = !det;
     $('toast').classList.remove('show');
+    const holder = detectHolderName(rows, imp.header);
+    if (holder && !state.settings.selfName) { state.settings.selfName = holder; save(); }
+    selfRe = selfPatterns();
     fillMapSelects();
     buildItems();
     renderImport();
@@ -967,6 +1021,7 @@
   // ---------- settings ----------
   $('currency').addEventListener('change', e => { state.settings.currency = e.target.value; save(); toast('Currency set to ' + e.target.value); });
   $('budget').addEventListener('change', e => { state.settings.budget = Math.max(0, parseFloat(e.target.value) || 0); save(); toast('Budget saved'); });
+  $('selfName').addEventListener('change', e => { state.settings.selfName = e.target.value.trim(); selfRe = selfPatterns(); save(); toast('Saved'); });
   $('addCat').addEventListener('click', () => {
     const name = $('newCatName').value.trim();
     if (!name) { toast('Type a category name'); return; }
@@ -1024,6 +1079,7 @@
     state = defaultState(); save(); $('currency').innerHTML = ''; render(); toast('All data deleted');
   });
 
+  selfRe = selfPatterns();
   render();
   if ('serviceWorker' in navigator && location.protocol !== 'file:') {
     navigator.serviceWorker.register('sw.js').catch(() => {});
