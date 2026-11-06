@@ -369,6 +369,11 @@
       <div class="sub">Download your statement from net banking as <b>CSV</b> or <b>Excel (XLS/XLSX)</b> and import it here. Debits become expenses, credits become income, and each one is auto-categorised.</div>
       <button class="btn primary" id="importBtn">📥 Import bank statement</button>
       <button class="btn ghost" id="smsBtn">💬 Add from bank SMS</button>
+      <label class="native-only" style="display:flex;gap:10px;align-items:center;margin-top:14px;color:var(--text)">
+        <input type="checkbox" id="autoAdd" style="width:22px;height:22px;flex:none;accent-color:var(--accent)">
+        Add messages from Shortcuts and Share automatically (skip review)
+      </label>
+      <div class="sub native-only">Duplicates are still skipped. Set up the automation in the Shortcuts app with the <b>Add Bank Message</b> action.</div>
       <div class="sub">Copy one or more bank SMS (long-press → Copy), then tap 💬 and paste.</div>
       <input type="file" id="importFile" accept=".csv,.txt,.tsv,.xls,.xlsx,.ods,text/csv,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" class="hidden">
       <label style="margin-top:16px">Learned rules <span id="ruleCount"></span></label>
@@ -842,6 +847,7 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     $('budget').value = state.settings.budget || '';
     $('selfName').value = state.settings.selfName || '';
     renderMailStatus();
+    $('autoAdd').checked = !!state.settings.autoAddShared;
     const chip = (c, i) => `<span class="chip">${esc(c.emoji)} ${esc(c.name)}<span class="x" data-del="${i}" role="button" aria-label="Remove">✕</span></span>`;
     $('catChips').innerHTML = state.categories.map((c, i) => c.kind !== 'credit' ? chip(c, i) : '').join('');
     $('incChips').innerHTML = state.categories.map((c, i) => c.kind === 'credit' ? chip(c, i) : '').join('');
@@ -1338,9 +1344,9 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
       if (n) toast(`Also set ${n} other “${k}” transaction${n > 1 ? 's' : ''} to ${x.category}`);
     }
   });
-  $('impGo').addEventListener('click', () => {
+  function addItems(items, label) {
     const now = Date.now();
-    const add = imp.items.filter(x => x.include).map((x, i) => ({
+    const add = items.map((x, i) => ({
       id: uid(), createdAt: now + i, type: x.type, amount: x.amount, category: x.category,
       date: x.date, note: x.desc, payment: x.payment || 'Bank', ref: x.ref
     }));
@@ -1350,8 +1356,9 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     if (latest) { const d = new Date(latest + 'T00:00'); current = new Date(d.getFullYear(), d.getMonth(), 1); }
     closeAll();
     view = 'list'; syncNav(); render();
-    toast(`Imported ${add.length} transactions`);
-  });
+    toast(label || `Imported ${add.length} transactions`);
+  }
+  $('impGo').addEventListener('click', () => addItems(imp.items.filter(x => x.include)));
   $('impCancel').addEventListener('click', closeAll);
   const pickStatement = () => $('importFile').click();
   $('importBtn').addEventListener('click', pickStatement);
@@ -1522,7 +1529,24 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     catch (e) { download('expenses-gmail-bridge.gs.txt', script, 'text/plain'); }
   });
 
-  window.expensesReceiveShared = text => { if (!openSmsPreview(text, 'Shared message')) openSmsSheet(text); };
+  // Text from the Share Extension or the "Add Bank Message" Shortcuts action (iOS app).
+  window.expensesReceiveShared = text => {
+    const items = parseSmsBatch(text);
+    if (!items.length) { toast('No transaction found in the shared message'); return; }
+    if (state.settings.autoAddShared) {
+      markDups(items);
+      const fresh = items.filter(x => !x.dup);
+      const skipped = items.length - fresh.length;
+      if (!fresh.length) { toast(`Skipped ${skipped} message${skipped > 1 ? 's' : ''} already recorded`); return; }
+      const total = fresh.reduce((t, x) => t + (x.type === 'debit' ? x.amount : 0), 0);
+      addItems(fresh, `Added ${fresh.length} from messages${total ? ' · spent ' + fmt(total) : ''}${skipped ? ` · ${skipped} duplicate skipped` : ''}`);
+    } else {
+      openItemsPreview(items, `${items.length} shared message${items.length > 1 ? 's' : ''}`);
+    }
+  };
+  if (!NATIVE) document.querySelectorAll('.native-only').forEach(el => el.classList.add('hidden'));
+  $('autoAdd').checked = !!state.settings.autoAddShared;
+  $('autoAdd').addEventListener('change', e => { state.settings.autoAddShared = e.target.checked; save(); toast(e.target.checked ? 'Messages will be added automatically' : 'Messages will wait for your review'); });
   if (NATIVE) native({ type: 'ready' });
   const autoMail = () => {
     const m = state.settings.mail;

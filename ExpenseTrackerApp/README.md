@@ -57,6 +57,20 @@ In Messages, select the SMS text (or long-press → *Copy* and paste anywhere) �
 If you don't see it, scroll the app row to the end → **More** → turn on *Expenses*.
 Open Expenses afterwards: the shared messages appear in the review screen.
 
+## Bank SMS reach the app automatically (Shortcuts automation)
+The app adds a Shortcuts action, **Add Bank Message**, that saves a message in the background.
+1. Open **Shortcuts → Automation → + (New Automation) → Message**.
+2. **Message Contains:** `Rs`. Leave *Sender* empty to catch all banks, or choose your bank's sender.
+   Choose **Run Immediately**, turn off *Notify When Run*, then tap **Next**.
+3. **New Blank Automation → Add Action**, search **Add Bank Message** (Kharcha) and add it.
+4. Tap the **Message** field, choose **Shortcut Input**, then tap it again and pick **Content**
+   (so the message text, not the whole message object, is passed). Tap **Done**.
+5. Optional: repeat with **Message Contains** `INR` if your bank writes amounts that way.
+
+Every matching SMS is now saved silently. Open Kharcha and the transactions are waiting for review.
+To skip the review step, turn on **Settings → Add messages from Shortcuts and Share automatically**.
+OTPs and other non-transaction messages are ignored, and duplicates are skipped.
+
 ## Moving your data from the home-screen web app
 In the web app: **Settings → Back up (JSON)**. In the iOS app: **Settings → Restore from backup** and pick that file.
 
