@@ -404,6 +404,7 @@
       <button class="btn primary" id="askGo">Ask</button>
       <div id="askOut" class="sub" style="margin-top:10px;line-height:1.5;color:var(--text)"></div>
     </div>
+    <div class="filters hidden" id="sAcct" style="margin:0 0 8px"></div>
     <div class="stats">
       <div class="card stat" data-showkind="spent" role="button"><div class="total-label">Spent ›</div><div class="v" id="sTotal"></div></div>
       <div class="card stat" data-showkind="income" role="button"><div class="total-label">Income ›</div><div class="v" id="sIncome" style="color:var(--income)"></div></div>
@@ -890,6 +891,15 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
   }
 
   let current = new Date(); current.setDate(1);
+  // iOS can keep Kharcha in memory for days: when it comes back on a later day, a month (or year) that
+  // was "now" moves on to today's, and "Today"/"Yesterday" are worked out again
+  let shownToday = isoDate(new Date());
+  function catchUpToday() {
+    const t = isoDate(new Date()); if (t === shownToday) return false;
+    const r = periodRange(), was = shownToday; shownToday = t;
+    if (was >= r.from && was <= r.to) { current = new Date(); current.setDate(1); }
+    return true;
+  }
   let view = 'list';
   let editingId = null, editingOrigCat = null;
   let selectedCat = null, formType = 'debit';
@@ -1467,7 +1477,7 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
   let formSugs = [];
   document.addEventListener('click', e => {
     const r = e.target.closest('[data-rec]'); if (!r) return;
-    payerFilter = r.dataset.rec; view = 'list'; syncNav(); render(); window.scrollTo(0, 0);
+    openListWith(() => { payerFilter = r.dataset.rec; });
   });
   function fdsHtml(fds) {
     const today = isoDate(new Date());
@@ -1578,7 +1588,7 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
   }
   document.addEventListener('click', e => {
     const r = e.target.closest('[data-invtype]'); if (!r) return;
-    $('search').value = r.dataset.invtype; view = 'list'; syncNav(); render(); window.scrollTo(0, 0);
+    openListWith(() => { kindFilter = 'inv:' + r.dataset.invtype; });
   });
   function renderGroups(items) {
     const groups = allGroups();
@@ -1597,7 +1607,7 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
   }
   document.addEventListener('click', e => {
     const r = e.target.closest('[data-gotogroup]'); if (!r) return;
-    view = 'list'; syncNav(); setGroupFilter(r.dataset.gotogroup); window.scrollTo(0, 0);
+    openListWith(() => keepGroupFilter(r.dataset.gotogroup));
   });
   function renderFormSuggest(e) {
     formSugs = e && !e.comment ? suggestFor(e) : [];
@@ -1618,23 +1628,28 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     }
     return n;
   }
-  function renderAmtBar() {
+  function renderAmtBar(base) {
     const custom = minAmt && !AMT_PRESETS.includes(minAmt);
-    const toReview = inPeriod().filter(e => e.unread).length;
+    const toReview = base.filter(e => e.unread).length;
     $('amtBar').innerHTML = (toReview || reviewOnly ? `<button class="chip ${reviewOnly ? 'sel' : ''}" data-review="1">● To review ${toReview}</button>` : '') + AMT_PRESETS.map(v =>
       `<button class="chip ${minAmt === v ? 'sel' : ''}" data-min="${v}">${v ? 'Over ' + fmt(v).replace(/\.00$/, '') : 'All amounts'}</button>`).join('') +
       `<button class="chip ${custom ? 'sel' : ''}" data-min="custom">${custom ? 'Over ' + fmt(minAmt).replace(/\.00$/, '') : 'Custom…'}</button>`;
     const groups = allGroups();
-    if (groupFilter !== null && groupFilter !== '' && !groups.includes(groupFilter)) groupFilter = null;
     if (groups.length) $('amtBar').innerHTML = `<button class="chip ${groupFilter === null ? 'sel' : ''}" data-grp="*">All groups</button>` +
       groups.map(g => `<button class="chip ${groupFilter === g ? 'sel' : ''}" data-grp="${esc(g)}">🏷️ ${esc(g)}</button>`).join('') +
       `<button class="chip ${groupFilter === '' ? 'sel' : ''}" data-grp="">No group</button>` + $('amtBar').innerHTML;
-    if (kindFilter) $('amtBar').innerHTML = `<button class="chip sel" data-kindoff="1">${kindFilter === 'spent' ? '💸 Spending only' : '💰 Income only'} ✕</button>` + $('amtBar').innerHTML;
+    if (kindFilter) $('amtBar').innerHTML = `<button class="chip sel" data-kindoff="1">${esc(kindLabel())} ✕</button>` + $('amtBar').innerHTML;
   }
-  function setGroupFilter(g) {
+  function keepGroupFilter(g) {
     groupFilter = g;
     try { if (g === null) localStorage.removeItem('expense-tracker-v1:group'); else localStorage.setItem('expense-tracker-v1:group', g); } catch (e) {}
-    render();
+  }
+  function setGroupFilter(g) { keepGroupFilter(g); render(); }
+  // a group that was renamed or removed (here or on another device) stops filtering the list
+  function dropStaleGroup() {
+    if (groupFilter === null) return;
+    const groups = allGroups();
+    if (groupFilter === '' ? !groups.length : !groups.includes(groupFilter)) keepGroupFilter(null);
   }
   function setMinAmt(v) {
     minAmt = Math.max(0, v || 0);
@@ -1652,8 +1667,13 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     const mk = monthKey(d);
     return { from: mk + '-01', to: mk + '-31', label: d.toLocaleDateString(undefined, { month: 'long', year: 'numeric' }) };
   }
-  const inRange = r => state.expenses.filter(e => e.date >= r.from && e.date <= r.to && (!acctFilter || e.account === acctFilter));
+  const inRange = (r, all) => state.expenses.filter(e => e.date >= r.from && e.date <= r.to && (all || !acctFilter || e.account === acctFilter));
   const inPeriod = () => inRange(periodRange());
+  // after a save or an import: show the month (or year) with that date in it; one already shown stays
+  function showDate(iso) {
+    const r = periodRange();
+    if (iso < r.from || iso > r.to) { const d = new Date(iso + 'T00:00'); current = new Date(d.getFullYear(), d.getMonth(), 1); }
+  }
   const prevPeriodDate = () => period === 'fy' ? new Date(current.getFullYear() - 1, current.getMonth(), 1) : new Date(current.getFullYear(), current.getMonth() - 1, 1);
   const periodWord = () => period === 'fy' ? 'this financial year' : 'this month';
   function setPeriod(p) {
@@ -2101,7 +2121,8 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     });
     // 3. FDs booked in your bank statement without their FD advice
     const fdNos = new Set((state.fds || []).map(f => f.no));
-    state.expenses.filter(e => e.type === 'debit' && e.category === investCat() && investType(e)[1] === 'Fixed deposits' && !fdFor(e)).forEach(e => {
+    const RD_RE = /\brd\b|recurring deposit/i;   // RD instalments: the bank issues no FD advice for each
+    state.expenses.filter(e => e.type === 'debit' && e.category === investCat() && investType(e)[1] === 'Fixed deposits' && !fdFor(e) && !RD_RE.test(`${noteText(e)} ${e.comment || ''}`)).forEach(e => {
       const no = ((e.note || '').match(/\bFD\b\s*(?:no\.?|number)?\s*:?\s*(\d{6,})/i) || [])[1] || '';
       if (no && fdNos.has(no)) return;
       add({ id: `fd:${no || e.id}`, prio: 3, icon: '🏦', title: `FD advice${no ? ' for FD ••' + no.slice(-4) : ''}`,
@@ -2316,6 +2337,7 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
 
   // ---------- render ----------
   function render() {
+    catchUpToday();
     const r = periodRange();
     $('monthTitle').textContent = r.label;
     $('nextM').style.visibility = r.to >= isoDate(new Date()) ? 'hidden' : 'visible';
@@ -2331,7 +2353,7 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     if (view === 'settings') renderSettings();
   }
 
-  function renderBudget(total) {
+  function renderBudget(total, allAccts) {
     const b = state.settings.budget * (period === 'fy' ? 12 : 1);
     const bar = $('budgetBar');
     if (!b) { bar.classList.add('hidden'); $('budgetText').textContent = 'Set a monthly budget in Settings'; return; }
@@ -2340,9 +2362,9 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     bar.firstElementChild.style.width = Math.min(100, pct) + '%';
     bar.classList.toggle('over', pct > 100);
     bar.classList.toggle('near', pct >= 80 && pct <= 100);
-    $('budgetText').textContent = pct > 100
+    $('budgetText').textContent = (pct > 100
       ? `${fmt(total - b)} over budget of ${fmt(b)}`
-      : `${fmt(b - total)} left of ${fmt(b)} (${Math.round(pct)}% used)`;
+      : `${fmt(b - total)} left of ${fmt(b)} (${Math.round(pct)}% used)`) + (allAccts ? ' · all accounts' : '');
   }
 
   function amtHtml(e) {
@@ -2351,28 +2373,39 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     return e.unread ? `<div class="amtwrap">${amt}<span class="rv">REVIEW</span></div>` : amt;
   }
 
-  document.addEventListener('click', e => {
-    if (!e.target.closest('[data-showinvest]')) return;
-    $('search').value = investCat();
-    if (view !== 'list') { view = 'list'; syncNav(); }
-    render(); window.scrollTo(0, 0);
-  });
-  // "Spent" / "Income" tapped: the list shows only the entries that make up that total
+  // "Spent" / "Income" tapped: the list shows only the entries that make up that total. "Invested"
+  // ('invest') or one kind of investment ('inv:Gold'): the Investment entries behind it.
   let kindFilter = '';
-  const kindOk = e => !kindFilter || (counted(e) && e.type === (kindFilter === 'spent' ? 'debit' : 'credit'));
-  document.addEventListener('click', e => {
-    const k = e.target.closest('[data-showkind]'); if (!k) return;
-    kindFilter = kindFilter === k.dataset.showkind && view === 'list' ? '' : k.dataset.showkind;
-    $('search').value = ''; reviewOnly = false; payerFilter = '';
+  const kindOk = e => !kindFilter || (kindFilter === 'spent' || kindFilter === 'income'
+    ? counted(e) && e.type === (kindFilter === 'spent' ? 'debit' : 'credit')
+    : e.category === investCat() && (kindFilter === 'invest' || investType(e)[1] === kindFilter.slice(4)));
+  const kindLabel = () => kindFilter === 'spent' ? '💸 Spending only' : kindFilter === 'income' ? '💰 Income only' : kindFilter === 'invest' ? '📈 Investments only'
+    : `${(INVEST_TYPES.find(t => t[1] === kindFilter.slice(4)) || ['💼'])[0]} ${kindFilter.slice(4)} only`;
+  // A shortcut to the list (Spent, Income, Invested, a kind of investment, a repeating payment, a group)
+  // turns the other filters off, so the list shows what was tapped
+  function openListWith(set) {
+    $('search').value = ''; reviewOnly = false; payerFilter = ''; kindFilter = '';
+    if (minAmt) { minAmt = 0; try { localStorage.setItem('expense-tracker-v1:minAmt', '0'); } catch (e) {} }
+    keepGroupFilter(null);
+    set();
     if (view !== 'list') { view = 'list'; syncNav(); }
     render(); window.scrollTo(0, 0);
+  }
+  function showKind(k) {
+    if (kindFilter === k && view === 'list') { kindFilter = ''; $('search').value = ''; reviewOnly = false; payerFilter = ''; render(); window.scrollTo(0, 0); return; }   // tapped again: off
+    openListWith(() => { kindFilter = k; });
+  }
+  document.addEventListener('click', e => {
+    const k = e.target.closest('[data-showkind]'); if (k) showKind(k.dataset.showkind);
+    else if (e.target.closest('[data-showinvest]')) showKind('invest');
   });
   function renderList() {
     renderNeeds();
+    dropStaleGroup();
     const items = inPeriod();
     const spent = spentOf(items), income = incomeOf(items);
     $('monthTotal').textContent = fmt(spent);
-    renderBudget(spent);
+    renderBudget(acctFilter ? spentOf(inRange(periodRange(), true)) : spent, !!acctFilter);
     const fa = acctById(acctFilter);
     const inv = investedOf(items);
     $('incomeText').innerHTML = [income ? `<span data-showkind="income" role="button" style="cursor:pointer">Income <b style="color:var(--income)">${fmt(income)}</b> ›</span> · Net ${fmt(income - spent)}` : '',
@@ -2390,7 +2423,7 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
       $('payerBanner').innerHTML = `<div style="display:flex;justify-content:space-between;align-items:center;gap:10px">
           <div><div class="total-label">All transactions with</div><div style="font-weight:700;font-size:17px">${esc(payerName(payerFilter))}</div></div>
           <button class="iconbtn" id="payerClose" aria-label="Close history">✕</button></div>
-        <div class="sub">${base.length} transaction${base.length === 1 ? '' : 's'} · ${esc(span)}<br>
+        <div class="sub">${base.length} transaction${base.length === 1 ? '' : 's'} · ${esc(span)}${acctFilter ? ' · all accounts' : ''}<br>
           Paid <b style="color:var(--danger)">${fmt(paid)}</b> · Received <b style="color:var(--income)">${fmt(got)}</b> · Net <b>${fmt(got - paid)}</b></div>`;
     }
     const shown = base
@@ -2412,14 +2445,17 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
       })
       .sort((a, b) => b.date.localeCompare(a.date) || b.createdAt - a.createdAt);
 
-    renderAmtBar();
-    const filtering = minAmt || q || reviewOnly || kindFilter;
+    renderAmtBar(base);
+    const filtering = minAmt || q || reviewOnly || kindFilter || groupFilter !== null;
     const fd = shown.filter(e => e.type === 'debit' && counted(e)), fc = shown.filter(e => e.type === 'credit' && counted(e));
+    const invOnly = kindFilter && kindFilter !== 'spent' && kindFilter !== 'income', si = invOnly ? investedOf(shown) : null;
     $('filterSummary').innerHTML = filtering && shown.length
-      ? `${shown.length} transaction${shown.length > 1 ? 's' : ''}${minAmt ? ` over ${fmt(minAmt).replace(/\.00$/, '')}` : ''}${fd.length || !fc.length ? ` · spent <b>${fmt(sum(fd))}</b>` : ''}${fc.length ? ` · received <b style="color:var(--income)">${fmt(sum(fc))}</b>` : ''}`
+      ? `${shown.length} transaction${shown.length > 1 ? 's' : ''}${minAmt ? ` over ${fmt(minAmt).replace(/\.00$/, '')}` : ''}${si
+        ? ` · put in <b>${fmt(si.out)}</b>${si.back ? ` · came back <b style="color:var(--income)">${fmt(si.back)}</b>` : ''}`
+        : `${fd.length || !fc.length ? ` · spent <b>${fmt(sum(fd))}</b>` : ''}${fc.length ? ` · received <b style="color:var(--income)">${fmt(sum(fc))}</b>` : ''}`}`
       : '';
     if (!shown.length) {
-      $('list').innerHTML = `<div class="empty"><div>🪙</div>${filtering ? 'No transactions match this filter' : 'Nothing this month.<br>Tap <b>+</b> to add, or <b>📥</b> to import a bank statement.'}</div>`;
+      $('list').innerHTML = `<div class="empty"><div>🪙</div>${filtering ? 'No transactions match this filter' : fa && !payerFilter ? `Nothing in ${esc(acctName(fa))} ${periodWord()}.` : `Nothing ${periodWord()}.<br>Tap <b>+</b> to add, or <b>📥</b> to import a bank statement.`}</div>`;
       return;
     }
     const groups = {};
@@ -2434,10 +2470,10 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
       return `<div class="day"><span>${label}</span><span>${right}</span></div>
         <div class="list">${groups[d].map(e => {
           const c = catOf(e.category);
-          return `<div class="item ${e.unread ? 'unread' : ''}" data-id="${e.id}">
+          return `<div class="item ${e.unread ? 'unread' : ''}" data-id="${esc(e.id)}">
             <div class="emoji">${esc(c.emoji)}</div>
             <div class="info"><div class="cat">${esc(c.name)}${badgeFor(appCached(e))}</div>
-              <div class="note">${esc([noteText(e), !acctFilter && acctById(e.account) ? acctLabel(acctById(e.account)) : e.payment].filter(Boolean).join(' · '))}</div>
+              <div class="note">${esc([noteText(e), (!acctFilter || payerFilter) && acctById(e.account) ? acctLabel(acctById(e.account)) : e.payment].filter(Boolean).join(' · '))}</div>
               ${(f => f ? `<div class="comment">${esc(fdLine(f))}</div>` : '')(fdFor(e))}
               ${refundLine(e) ? `<div class="comment" style="color:var(--income)">${esc(refundLine(e))}</div>` : ''}
               ${(m => m ? `<div class="comment" style="color:var(--income)">✓ ${esc(m.f.dir === 'in' ? 'Received by' : 'Paid by')} ${esc(brokerByKey(m.broker).name)} (its ledger, ${esc(new Date(m.f.date + 'T00:00').toLocaleDateString(undefined, { day: 'numeric', month: 'short' }))})</div>` : '')(brokerMatches().byEntry.get(e.id))}
@@ -2506,6 +2542,9 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     const r = periodRange();
     const items = inPeriod();
     const spent = spentOf(items), income = incomeOf(items);
+    const fa = acctById(acctFilter);   // the account chosen on Expenses: everything below covers only it
+    $('sAcct').classList.toggle('hidden', !fa);
+    $('sAcct').innerHTML = fa ? `<button class="chip sel" data-acct="">${esc(acctLabel(fa))} only ✕</button>` : '';
     const today = isoDate(new Date());
     const end = r.to < today ? r.to : today;
     const lastDay = period === 'fy' ? end : (r.to < today ? isoDate(new Date(current.getFullYear(), current.getMonth() + 1, 0)) : today);
@@ -2746,8 +2785,10 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     if (exp && exp.bankAmt) $('fAppAmt').textContent = `One payment of ${fmt(exp.amount)}: ${fmt(exp.bankAmt)} from the bank account (its statement) and ${fmt(Math.max(0, exp.amount - exp.bankAmt))} ${exp.app === 'phonepe' ? 'from your PhonePe wallet' : `from ${appLabel(exp.app)} (balance, offer or reward)`} — ${appLabel(exp.app)}'s statement lists the whole amount.`;
     let pay = 'Cash'; try { pay = localStorage.getItem(KEY + ':pay') || pay; } catch (e) {}
     $('fPay').value = src ? (src.payment || 'Other') : pay;
-    const today = new Date();
-    $('fDate').value = src && src.date ? src.date : (monthKey(current) === monthKey(today) ? isoDate(today) : isoDate(current));
+    if (catchUpToday()) render();
+    // a new entry is dated today when the month (or year) shown has today in it, else the 1st of what's shown
+    const pr = periodRange(), today = isoDate(new Date());
+    $('fDate').value = src && src.date ? src.date : today >= pr.from && today <= pr.to ? today : period === 'fy' ? pr.from : isoDate(current);
     selectedCat = src && src.category ? src.category : (catsFor(formType)[0] || {}).name;
     formGroup = exp && exp.group !== undefined ? exp.group : null;
     catEditMode = false; catAllFor = '';
@@ -2849,7 +2890,7 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     if (!editingId && pendingLearn && data.account === pendingLearn.id) learnDigits(pendingLearn.id, pendingLearn.d);
     pendingLearn = null;
     save();
-    const d = new Date(data.date + 'T00:00'); current = new Date(d.getFullYear(), d.getMonth(), 1);
+    showDate(data.date);
     closeAll(); render();
     if (returnToMail) { returnToMail = false; openMailSheet(); }
   });
@@ -4032,7 +4073,7 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     save();
     const latest = add.reduce((m, x) => x.date > m ? x.date : m, '');
     if (quiet) return;
-    if (latest) { const d = new Date(latest + 'T00:00'); current = new Date(d.getFullYear(), d.getMonth(), 1); }
+    if (latest) showDate(latest);
     closeAll();
     view = 'list'; syncNav(); render();
     toast(label || `Imported ${add.length} transactions`);
@@ -4093,6 +4134,7 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     const b = e.target.closest('[data-acct]'); if (!b) return;
     acctFilter = b.dataset.acct; render();
   });
+  $('sAcct').addEventListener('click', e => { if (e.target.closest('[data-acct]')) { acctFilter = ''; render(); } });
   $('impAcct').addEventListener('change', e => { imp.acctOverride = e.target.value; renderImport(); });
   $('addAcct').addEventListener('click', () => {
     const name = $('newAcctName').value.trim();
@@ -4862,6 +4904,7 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
       : cloudInfo.at ? `✓ Synced · ${when}` : 'Waiting for iCloud…';
   }
   window.expensesCloudData = (json, available, at) => {
+    if (catchUpToday()) render();   // the iOS app sends this whenever it comes back to the screen
     cloudInfo.available = !!available; cloudInfo.at = at || cloudInfo.at;
     if (state.settings.cloudOn === false || !available || loadProblem) { renderCloudStatus(); return; }
     let remote = null; try { remote = json ? JSON.parse(json) : null; } catch (e) {}
@@ -5331,7 +5374,8 @@ Rules: include only completed transactions — skip OTPs, offers, ads, due/bill 
     if (m && m.url && Date.now() - (m.checked || 0) > 36e5 && !$('impSheet').classList.contains('open')) checkMail(true);
   };
   setTimeout(autoMail, 800);
-  document.addEventListener('visibilitychange', () => { if (!document.hidden) autoMail(); });
+  document.addEventListener('visibilitychange', () => { if (document.hidden) return; if (catchUpToday()) render(); autoMail(); });
+  window.addEventListener('pageshow', () => { if (catchUpToday()) render(); });
   if ('serviceWorker' in navigator && /^https?:$/.test(location.protocol)) {
     navigator.serviceWorker.register('sw.js').catch(() => {});
   }
