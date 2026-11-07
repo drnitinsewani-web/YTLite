@@ -421,7 +421,7 @@
       </label>
       <div class="sub native-only">Duplicates are still skipped. Set up the automation in the Shortcuts app with the <b>Add Bank Message</b> action.</div>
       <div class="sub">Copy one or more bank SMS (long-press → Copy), then tap 💬 and paste.</div>
-      <input type="file" id="importFile" accept=".csv,.txt,.tsv,.xls,.xlsx,.ods,text/csv,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" class="hidden">
+      <input type="file" id="importFile" accept=".csv,.txt,.tsv,.xls,.xlsx,.ods,.pdf,application/pdf,text/csv,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" class="hidden">
       <label style="margin-top:16px">Learned rules <span id="ruleCount"></span></label>
       <div class="sub" style="margin:0 0 8px">When you change a category for an imported transaction, the merchant is remembered for future imports.</div>
       <div class="chips" id="ruleChips"></div>
@@ -951,6 +951,11 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
   function ensureAccounts(items) {
     const created = [];
     items.forEach(x => {
+      if (!x.account && x.walletName) {   // e.g. "Paid by PhonePe Wallet" — an account without a number
+        let w = (state.accounts || []).find(a => a.kind === 'wallet' && a.name.toLowerCase() === x.walletName.toLowerCase());
+        if (!w) { w = { id: uid(), name: x.walletName, emoji: '👛', kind: 'wallet', digits: [] }; state.accounts = (state.accounts || []).concat(w); created.push(w); }
+        x.account = w.id; return;
+      }
       if (x.account || !x.acctDigits) return;
       const d = x.acctDigits;
       let a = (state.accounts || []).find(y => y.digits.some(z => z.endsWith(d) || d.endsWith(z)));
@@ -1458,6 +1463,91 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     if (field || row.length) { row.push(field); rows.push(row); }
     return rows;
   }
+  // ---------- PDF statements (PhonePe) ----------
+  const PDFJS = ['vendor/pdf.min.js', 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js'];
+  function loadPdfJs() {
+    if (window.pdfjsLib) return Promise.resolve();
+    let from = '';
+    const one = src => new Promise((res, rej) => { const s = document.createElement('script'); s.src = src; s.onload = () => { from = src; res(); }; s.onerror = () => { s.remove(); rej(); }; document.head.appendChild(s); });
+    return PDFJS.reduce((pr, src) => pr.then(() => { if (!window.pdfjsLib) return one(src).catch(() => {}); }), Promise.resolve())
+      .then(() => {
+        if (!window.pdfjsLib) throw new Error('Could not load the PDF reader.');
+        pdfjsLib.GlobalWorkerOptions.workerSrc = from.replace(/pdf\.min\.js$/, 'pdf.worker.min.js');   // worker sits next to the library
+      });
+  }
+  // Text lines of a PDF, top to bottom, with words on the same line joined.
+  async function readPdfLines(file) {
+    await loadPdfJs();
+    const data = new Uint8Array(await file.arrayBuffer());
+    let doc, password;
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try { doc = await pdfjsLib.getDocument({ data: data.slice(), password, isEvalSupported: false }).promise; break; }
+      catch (e) {
+        if (e && e.name === 'PasswordException') {
+          password = prompt(attempt ? 'Wrong password. Try again:' : 'This PDF is password-protected. Enter its password:');
+          if (password === null) throw new Error('Cancelled');
+        } else throw e;
+      }
+    }
+    if (!doc) throw new Error('Wrong PDF password');
+    const lines = [];
+    for (let n = 1; n <= doc.numPages; n++) {
+      const page = await doc.getPage(n);
+      const tc = await page.getTextContent();
+      const rows = [];
+      tc.items.forEach(it => {
+        if (!it.str || !it.str.trim()) return;
+        const y = Math.round(it.transform[5]), x = it.transform[4];
+        let row = rows.find(r => Math.abs(r.y - y) <= 2);
+        if (!row) rows.push(row = { y, parts: [] });
+        row.parts.push({ x, s: it.str });
+      });
+      rows.sort((a, b) => b.y - a.y).forEach(r => lines.push(r.parts.sort((a, b) => a.x - b.x).map(p => p.s).join(' ').replace(/\s+/g, ' ').trim()));
+    }
+    return lines;
+  }
+  const isPhonePe = lines => { const t = lines.join(' '); return /phonepe/i.test(t) || (/transaction id/i.test(t) && /utr no/i.test(t) && /(paid by|debited from|credited to)/i.test(t)); };
+  // PhonePe statement: each transaction starts with a date ("Nov 05, 2026" or "05 Nov 2026"),
+  // then "Paid to X" / "Received from X" / "Mobile recharged …", DEBIT or CREDIT, ₹amount,
+  // "Transaction ID …", "UTR No. …", and "Paid by XXXX8810" / "Credited to XXXX7238".
+  function parsePhonePe(lines) {
+    const DATE = /^(?:([A-Z][a-z]{2}) (\d{1,2}), (\d{4})|(\d{1,2}) ([A-Z][a-z]{2}),? (\d{4}))\b/;
+    const recs = []; let cur = null;
+    lines.forEach(l => {
+      if (DATE.test(l)) { cur = { lines: [l] }; recs.push(cur); }
+      else if (cur) cur.lines.push(l);
+    });
+    const items = [];
+    recs.forEach(r => {
+      const t = r.lines.join(' ').replace(/\s+/g, ' ');
+      const dm = t.match(DATE);
+      const date = dm[1] ? parseDate(`${dm[2]} ${dm[1]} ${dm[3]}`, 'dmy') : parseDate(`${dm[4]} ${dm[5]} ${dm[6]}`, 'dmy');
+      const tm = t.match(/\b(DEBIT|CREDIT)\b/i);
+      const am = t.match(/(?:₹|rs\.?|inr)\s*([\d,]+(?:\.\d{1,2})?)/i);
+      if (!date || !tm || !am) return;
+      const type = tm[1].toUpperCase() === 'CREDIT' ? 'credit' : 'debit';
+      const amount = Math.round(parseFloat(am[1].replace(/,/g, '')) * 100) / 100;
+      if (!(amount > 0)) return;
+      // description = text between the time and DEBIT/CREDIT, minus the reference lines
+      let desc = t.replace(DATE, '').replace(/^\s*\d{1,2}:\d{2}\s*(am|pm)?/i, '')
+        .replace(/\b(DEBIT|CREDIT)\b.*$/i, '').replace(/Transaction ID.*$/i, '').trim();
+      if (!desc) desc = (t.match(/(Paid to|Received from|Sent to|Transfer(?:red)? to|Transfer(?:red)? from)\s+([^₹]+?)(?=\s+(?:Transaction ID|UTR|Paid by|Debited from|Credited to|DEBIT|CREDIT|₹|$))/i) || [, '', ''])[2];
+      const party = (desc.match(/^(?:Paid to|Received from|Sent to|Payment to|Transfer(?:red)? (?:to|from))\s+(.+)$/i) || [])[1] || '';
+      const utr = (t.match(/UTR\s*No\.?\s*:?\s*([0-9]{8,})/i) || [])[1] || '';
+      const txn = (t.match(/Transaction ID\s*:?\s*([A-Z0-9]{8,})/i) || [])[1] || '';
+      const am2 = t.match(/(?:Paid by|Debited from|Credited to|Received in)\s+(?:a\/c\s*)?(?:x+|\*+)?\s*(\d{3,6})\b/i);
+      const wallet = /(?:Paid by|Debited from|Credited to)\s+(?:PhonePe\s+)?Wallet/i.test(t);
+      const acct = am2 ? matchAccount('A/c XX' + am2[1]) : { id: '', digits: '' };
+      const note = (party ? `${type === 'credit' ? 'From' : 'To'} ${party}` : desc || 'PhonePe') + (utr ? ` · UTR ${utr}` : '') + ' · PhonePe';
+      const w = wallet && (state.accounts || []).find(a => a.kind === 'wallet' && /phonepe/i.test(a.name));
+      items.push({ date, desc: note, type, amount, payment: wallet ? 'Wallet' : 'UPI', walletName: wallet ? 'PhonePe Wallet' : '',
+        category: classify(party || desc, type), touched: false, utr,
+        account: w ? w.id : acct.id, acctDigits: am2 ? am2[1].slice(-4) : '', acctBank: '', acctKind: 'bank',
+        ref: utr ? `upi|${utr}|${type}|${amount.toFixed(2)}` : `phonepe|${txn || date + '|' + amount + '|' + note}` });
+    });
+    return items;
+  }
+
   async function readStatement(file) {
     if (/\.(xlsx?|ods)$/i.test(file.name)) {
       try { await loadScript(SHEETJS); }
@@ -1471,7 +1561,7 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
       });
       return best;
     }
-    if (/\.pdf$/i.test(file.name)) throw new Error('PDF statements can’t be read reliably. Download the CSV or Excel version from net banking.');
+    if (/\.pdf$/i.test(file.name)) throw new Error('This PDF isn’t a PhonePe statement. For bank statements, download the CSV or Excel version from net banking.');
     return parseDelimited(await file.text());
   }
 
@@ -1577,12 +1667,19 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
   // Two entries whose balances differ are never duplicates (e.g. two ₹344.99 charges on one day).
   const dayDiff = (a, b) => Math.abs(new Date(a + 'T00:00') - new Date(b + 'T00:00')) / 864e5;
   const refsOf = e => [e.ref, ...(e.refs || [])].filter(Boolean);
+  // 12-digit UPI reference (UTR/RRN) numbers mentioned in a transaction
+  const utrsOf = e => [...new Set([e.utr, ...(String(e.note || e.desc || '') + ' ' + [e.ref, ...(e.refs || [])].join(' ')).match(/\b\d{12}\b/g) || []].filter(Boolean))];
   function markDups(items) {
     const refs = new Set(state.expenses.flatMap(refsOf));
+    const byUtr = new Map();
+    state.expenses.forEach(e => utrsOf(e).forEach(u => byUtr.set(u + '|' + e.type, e)));
     const used = new Set();
     items.forEach(x => {
       x.match = null;
       if (refs.has(x.ref)) { x.dup = 'exact'; x.include = false; return; }
+      // same UPI reference number, same direction and amount: the same payment seen from another source
+      const viaUtr = utrsOf(x).map(u => byUtr.get(u + '|' + x.type)).find(e => e && !used.has(e.id) && Math.abs(e.amount - x.amount) < 0.005);
+      if (viaUtr) { x.dup = 'utr'; x.match = viaUtr.id; used.add(viaUtr.id); x.include = false; return; }
       const sameAmt = state.expenses.filter(e => !used.has(e.id) && e.type === x.type && Math.abs(e.amount - x.amount) < 0.005 &&
         (!x.account || !e.account || e.account === x.account));
       const hasBal = v => v != null && !isNaN(v);
@@ -1606,6 +1703,7 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
       if (x.ref && !refsOf(e).includes(x.ref)) e.refs = (e.refs || []).concat(x.ref);
       if (x.balance != null && e.balance == null) e.balance = x.balance;
       if (!e.account && x.account) e.account = x.account;
+      if (x.utr && !e.utr) e.utr = x.utr;
       n++;
     });
     return n;
@@ -1710,20 +1808,32 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
 
     const filters = [['all', `All ${it.length}`], ['debit', `Debits`], ['credit', `Credits`], ['other', `Uncategorised ${other}`]];
     if (dups) filters.push(['dup', `Duplicates ${dups}`]);
-    $('impFilters').innerHTML = filters.map(([k, l]) => `<button class="chip ${imp.filter === k ? 'sel' : ''}" data-f="${k}">${l}</button>`).join('');
+    // one chip per account in the file (useful for PhonePe statements that mix several banks)
+    const acctKeyOf = x => x.account ? 'a:' + x.account : x.acctDigits ? 'd:' + x.acctDigits : x.payment === 'Wallet' ? 'w:' : '';
+    const acctKeys = [...new Set(it.map(acctKeyOf).filter(Boolean))];
+    if (acctKeys.length > 1) acctKeys.forEach(k => {
+      const sample = it.find(x => acctKeyOf(x) === k);
+      const label = k.startsWith('a:') ? acctLabel(acctById(sample.account)) : k.startsWith('d:') ? `🏦 ••${sample.acctDigits}` : `👛 ${sample.walletName || 'Wallet'}`;
+      filters.push([k, `${label} ${it.filter(x => acctKeyOf(x) === k).length}`]);
+    });
+    $('impFilters').innerHTML = filters.map(([k, l]) => `<button class="chip ${imp.filter === k ? 'sel' : ''}" data-f="${esc(k)}">${esc(l)}</button>`).join('') +
+      `<button class="chip" data-tick="1">✓ Tick shown</button><button class="chip" data-tick="0">✕ Untick shown</button>`;
 
     const pass = x => imp.filter === 'all' || (imp.filter === 'dup' ? x.dup : imp.filter === 'other'
-      ? (x.category === 'Other' || x.category === 'Other Income') : x.type === imp.filter);
+      ? (x.category === 'Other' || x.category === 'Other Income')
+      : /^[adw]:/.test(imp.filter) ? acctKeyOf(x) === imp.filter : x.type === imp.filter);
+    imp.pass = pass;
     const opts = {};
     ['debit', 'credit'].forEach(t => opts[t] = catsFor(t));
     const rows = it.map((x, i) => !pass(x) ? '' : `
       <div class="irow ${x.include ? '' : 'off'}" data-i="${i}">
         <input type="checkbox" ${x.include ? 'checked' : ''} aria-label="Include">
         <div class="d"><div class="desc">${esc(x.desc || '(no description)')}</div>
-          <div class="meta">${new Date(x.date + 'T00:00').toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' })}${x.dup === 'exact' ? '<span class="tag warn">already imported</span>' : x.dup === 'balance' ? '<span class="tag warn">same as existing entry · balance matches</span>' : x.dup ? '<span class="tag warn">possible duplicate</span>' : ''}${
+          <div class="meta">${new Date(x.date + 'T00:00').toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' })}${x.dup === 'exact' ? '<span class="tag warn">already imported</span>' : x.dup === 'balance' ? '<span class="tag warn">same as existing entry · balance matches</span>' : x.dup === 'utr' ? '<span class="tag warn">same payment already in Kharcha · UTR matches</span>' : x.dup ? '<span class="tag warn">possible duplicate</span>' : ''}${
             x.balanceGap ? '<span class="tag warn">balance doesn’t add up here</span>' : ''}${
             acctById(finalAcct(x)) ? `<span class="tag">${esc(acctLabel(acctById(finalAcct(x))))}</span>`
-            : x.acctDigits && !imp.acctOverride ? `<span class="tag">New account: ${esc(newAcctLabel(x))}</span>` : ''}</div></div>
+            : x.acctDigits && !imp.acctOverride ? `<span class="tag">New account: ${esc(newAcctLabel(x))}</span>`
+            : x.walletName && !imp.acctOverride ? `<span class="tag">New account: 👛 ${esc(x.walletName)}</span>` : ''}</div></div>
         <div class="amt ${x.type === 'credit' ? 'credit' : 'debit'}">${x.type === 'credit' ? '+' : '−'}${fmt(x.amount)}</div>
         <select aria-label="Category">${opts[x.type].map(c => `<option ${c.name === x.category ? 'selected' : ''} value="${esc(c.name)}">${esc(c.emoji)} ${esc(c.name)}</option>`).join('')}</select>
       </div>`).join('');
@@ -1747,6 +1857,16 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
 
   async function startImport(file) {
     toast('Reading ' + file.name + '…');
+    if (/\.pdf$/i.test(file.name) || file.type === 'application/pdf') {
+      let lines;
+      try { lines = await readPdfLines(file); }
+      catch (e) { if (!(e && e.message === 'Cancelled')) toast(e && e.message && e.message.length > 15 ? e.message : 'Could not read that PDF'); return; }
+      if (!isPhonePe(lines)) { toast('This PDF isn’t a PhonePe statement. For bank statements, download the CSV or Excel version from net banking.'); return; }
+      const items = parsePhonePe(lines);
+      $('toast').classList.remove('show');
+      if (!openItemsPreview(items, `PhonePe · ${file.name}`, true)) toast(items.length ? 'Everything in this statement is already in Kharcha' : 'No transactions found in this PDF');
+      return;
+    }
     let rows;
     try { rows = await readStatement(file); }
     catch (e) { toast(e.message && e.message.length > 20 ? e.message : 'Could not read that file'); return; }
@@ -1862,7 +1982,9 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     const balM = acctKind === 'card' ? null :
       t.match(/\b(?:avl\.?|avail(?:able)?|a\/c|clear|closing|total)?\s*bal(?:ance)?\.?(?:\s+(?:is|of))?\s*[:\-]?\s*(?:rs\.?|inr|₹)\s*([\d,]+(?:\.\d{1,2})?)/i);
     const smsBalance = balM ? parseFloat(balM[1].replace(/,/g, '')) : null;
-    const rrn = (t.match(/\b(?:rrn|ref(?:erence)?(?:\s*no)?|utr|upi ref(?: no)?|txn id)[\s.:#-]*([A-Za-z0-9]{6,})/i) || [])[1] || '';
+    const rrn = (t.match(/\b(?:rrn|ref(?:erence)?(?:\s*no)?|utr|upi ref(?: no)?|txn id|upi)[\s.:#-]*([A-Za-z0-9]{6,})/i) || [])[1] || '';
+    // UPI reference (UTR/RRN) is 12 digits; it is what PhonePe/GPay statements show too
+    const utr = /^\d{12}$/.test(rrn) ? rrn : ((t.match(/\b\d{12}\b/) || [])[0] || '');
     const payment = /\bupi\b|vpa|@/i.test(t) ? 'UPI' : /\batm\b|cash withdrawal|withdrawn/i.test(t) ? 'Cash' : /\bcard\b/i.test(t) ? 'Card' : 'Bank';
     const desc = party ? `${type === 'credit' ? 'From' : 'To'} ${party}${bank ? ' · ' + bank : ''}` : t.slice(0, 120);
     let cat = classify(party || t, type);
@@ -1871,7 +1993,7 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
         /payment|received|thank/i.test(t) && catsFor('credit').some(c => c.name === 'Transfer')) cat = 'Transfer';
     const acct = matchAccount(t);
     return { date, desc, type, amount, payment, category: cat, touched: false, account: acct.id, acctDigits: acct.digits,
-      acctBank: bankFromText(t) || bank, acctKind, balance: smsBalance, seq: 0,
+      acctBank: bankFromText(t) || bank, acctKind, balance: smsBalance, seq: 0, utr,
       ref: rrn ? `sms|${rrn}|${type}|${amount.toFixed(2)}` : `sms|${date}|${type}|${amount.toFixed(2)}|${(party || t).toLowerCase()}` };
   }
   // "Avl bal in A/c XX8810 as on 06-NOV-26: INR 1,23,456.78" — a balance reply without a transaction
@@ -1969,6 +2091,8 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     buildItems(); renderImport();
   });
   $('impFilters').addEventListener('click', e => {
+    const t = e.target.closest('[data-tick]');
+    if (t) { imp.items.forEach(x => { if (imp.pass && imp.pass(x)) x.include = t.dataset.tick === '1'; }); renderImport(); return; }
     const b = e.target.closest('[data-f]'); if (!b) return;
     imp.filter = b.dataset.f; renderImport(); $('impList').scrollTop = 0;
   });
@@ -1995,6 +2119,7 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
       id: uid(), createdAt: now + i, type: x.type, amount: x.amount, category: x.category,
       date: x.date, note: x.desc, payment: x.payment || 'Bank', ref: x.ref, account: x.account || '',
       ...(x.balance != null ? { balance: x.balance } : {}),
+      ...(x.utr ? { utr: x.utr } : {}),
       ...(needsReview(x) ? { unread: true } : {})
     }));
     const autoCommented = add.filter(applyCommentRule).length;
