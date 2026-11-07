@@ -1343,6 +1343,21 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
           (p.interest ? ` · interest <b style="color:var(--danger)">−${fmt(p.interest)}</b>` : '') + (p.dividends ? ` · dividends <b style="color:var(--income)">+${fmt(p.dividends)}</b>` : '') +
           (p.to ? ` <span class="sub">(to ${esc(short(p.to))})</span>` : ''));
       }
+      // Without a funds ledger, the year's totals can still be compared: what you put in (bank → broker
+      // minus broker → bank) against the result its own reports show. An estimate: the opening balance
+      // on 1 April and charges outside the P&L aren't in these files.
+      if (p && !(br.ledger && br.ledger.hasFunds)) {
+        const fyFrom = `${fy.slice(0, 4)}-04-01`, fyTo = p.to || isoDate(new Date());
+        const fyIts = state.expenses.filter(e => bankForBroker(e, b) && e.date >= fyFrom && e.date <= fyTo);
+        if (fyIts.length) {
+          const putIn = sum(fyIts.filter(e => e.type === 'debit')) - sum(fyIts.filter(e => e.type === 'credit'));
+          const result = Object.values(p.sections || {}).reduce((t, x) => t + (x.net ?? x.gross ?? 0), 0) + (p.dividends || 0) - (p.interest || 0);
+          const left = putIn + result;   // money in minus what was lost (or plus what was gained)
+          lines.push(Math.abs(left) <= Math.max(500, Math.abs(putIn) * 0.01)
+            ? `<span style="color:var(--income)">✓ Totals agree: you put in ${sign(putIn).replace('+', '')} net and its reports show ${sign(result)}</span>`
+            : `<span class="sub">Totals check FY ${esc(fy)} (to ${esc(short(fyTo))}): you put in <b>${fmt(putIn)}</b> net · its reports show <b>${sign(result)}</b> → <b>${fmt(Math.abs(left))}</b> ${left > 0 ? 'should still be with ' + esc(b.name) + ' (or went to charges outside the P&amp;L)' : 'more came back than the results explain (money that was already with ' + esc(b.name) + ' on 1 April?)'}. Its funds ledger settles it.</span>`);
+        }
+      }
       if (br.holdings) lines.push(br.holdings.count ? `Holdings: <b>${br.holdings.count}</b>${br.holdings.unrealised ? ` · unrealised ${sign(br.holdings.unrealised)}` : ''}${br.holdings.asOf ? ` <span class="sub">(${esc(short(br.holdings.asOf))})</span>` : ''}` : `Holdings: none${br.holdings.asOf ? ` <span class="sub">(as of ${esc(short(br.holdings.asOf))})</span>` : ''}`);
       return `<div class="rec" style="display:block"><div><b>${esc(b.name)}</b>${br.client ? ` <small style="display:inline">· ${esc(br.client)}</small>` : ''}${br.unnamed ? ` <button type="button" class="chip" data-namebroker="${esc(k)}" style="margin-left:6px">✏️ Which broker?</button>` : ''}</div>${lines.map(l => `<div style="font-size:13px;margin-top:3px">${l}</div>`).join('')}</div>`;
     }).join('') + `<div class="sub" style="margin-top:6px">Import a broker's ledger and P&amp;L or tax report (📥 Import, or your statement folder) to verify transfers and see results.</div>`;
