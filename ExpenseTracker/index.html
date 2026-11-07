@@ -757,9 +757,10 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     ['📚','Education','debit'],['🏧','Cash','debit'],['📦','Other','debit'],
     ['💼','Salary','credit'],['↩️','Refund','credit'],['🏦','Interest','credit'],['🪙','Other Income','credit'],
     ['🔁','Transfer','both', true],
-    ['🧾','Fees & Charges','debit', false, 3],['📈','Investment','both', true, 3]
+    ['🧾','Fees & Charges','debit', false, 3],['📈','Investment','both', true, 3],
+    ['🤝','Loan','both', true, 4]   // loans taken or given, repayments: money moving, not income or spending
   ].map(([emoji, name, kind, exclude, since]) => ({ emoji, name, kind, since: since || 2, ...(exclude ? { exclude: true } : {}) }));
-  const STATE_VERSION = 3;
+  const STATE_VERSION = 4;
   const CURRENCIES = ['INR','USD','EUR','GBP','AED','AUD','CAD','SGD','JPY','CNY','CHF','SAR','ZAR','BRL','MXN','NZD','HKD','SEK','NOK','PKR','BDT','LKR','NPR'];
 
   // Keyword rules used to auto-categorise statement lines. First match wins.
@@ -767,6 +768,7 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     ['Investment', /indian cle\b|paytm ?money|\bmf\d*@|\.mf\d*\b|mutual ?fund|safe ?gold|digital gold|augmont|mmtc|jar app|eq trade|upstox|zerodha|groww|angel ?one|angel broking|icici ?sec|icicidirect|hdfc ?sec|kotak ?sec|5paisa|\bdhan\b|paytm money|indmoney|kuvera|smallcase|mutual fund|\bmf\b|\bsip\b|bse limited|bse star|nse clearing|indian clearing|\bfd\b|fixed deposit|fd booking|rd instal|recurring deposit|\bppf\b|\bnps\b|sukanya|vanguard|fidelity|schwab|robinhood|brokerage/],
     ['Fees & Charges', /mtf inte|mtf pledge|pledge chg|\bchg\b|charges|annual fee|\bamc\b|gst on|sms alert|penalty|late fee|min(imum)? bal|non ?maint|processing fee|convenience fee|overdraft fee|service fee/],
     ['Transfer', /payment received.*thank|thank you for (your )?payment|autopay si|auto ?debit cc|\batd\b.*\bcc|cc ?billpay|credit ?card|cc ?(payment|pymt|bill)|card ?(payment|pymt)|cred club|\bcred\b|\bself\b|own a\/?c|own account|sweep/],
+    ['Loan', /\bloan\b|\bln ?a\/?c\b/],
     ['Salary', /salary|\bsal\b|payroll|stipend|wages/],
     ['Interest', /interest|\bint\.? ?(pd|paid|cr|credit)|\bint pd\b|savings int|\bsb int/],
     ['Refund', /refund|reversal|reversed|\brev\b|cashback|cash back|chargeback/],
@@ -915,7 +917,10 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
   const refundsOf = e => e.type === 'debit' ? (refundIndex().of.get(e.id) || []) : [];
   const fullyRefunded = e => e.type === 'debit' && refundedOf(e) >= e.amount - 0.005;
   const amtOf = e => e.type === 'debit' ? Math.max(0, Math.round((e.amount - refundedOf(e)) * 100) / 100) : e.amount;
-  const counted = e => !catOf(e.category).exclude && !refundTarget(e) && !fullyRefunded(e);
+  // money between your own accounts ("Cross entry", "self transfer" in its comment, or marked by
+  // Kharcha) is never income or spending, whatever category it carries
+  const isCross = e => !!e.autoXfer || CROSS_RE.test(e.comment || '');
+  const counted = e => !catOf(e.category).exclude && !isCross(e) && !refundTarget(e) && !fullyRefunded(e);
   let acctFilter = '';
   // Amount filter (remembered per device) and amount terms in search: ">1000", ">=5000", "<500", "swiggy >300"
   let minAmt = 0;
@@ -2327,7 +2332,7 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     const credits = items.filter(e => e.type === 'credit' && counted(e));
     const ex = {};
     items.filter(e => !counted(e)).forEach(e => {
-      const k = refundTarget(e) || fullyRefunded(e) ? '\u0000refund' : e.category;
+      const k = refundTarget(e) || fullyRefunded(e) ? '\u0000refund' : !catOf(e.category).exclude && isCross(e) ? catAlias('Transfer') : e.category;
       ex[k] = ex[k] || { out: 0, in: 0 };
       ex[k][e.type === 'credit' ? 'in' : 'out'] += e.amount;
     });
@@ -4110,7 +4115,7 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
   // When Kharcha's rules improve, entries it categorised itself are re-checked once (never ones you set,
   // commented, or that are transfers): today "Other" that a rule now recognises, and UPI payments that a
   // branch name ("ATM SERVICE BRANCH") had wrongly filed as Cash.
-  const RULES_VERSION = 4;
+  const RULES_VERSION = 5;   // 5: loans
   if ((state.settings.rulesV || 1) < 3) {
     // 3: payouts from PhonePe / BharatPe got one payee key each (see SETTLERS). A name, category or
     // comment rule saved under an old key moves to the new one, when every entry with the old key moved.
@@ -4169,6 +4174,13 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
   // Rows that trading reports (F&O P&L, broker ledgers) added as bank transactions before Kharcha read
   // broker reports: "NIFTY", "BANKNIFTY", "BILL POSTING", "Stock Value: … P/L Amt …" — never your
   // spending. Removed once, with the rest of the same import (rows next to them, also without an account).
+  if (!state.settings.notCountedFixed) {   // these never count as income or spending
+    ['Transfer', 'Investment', 'Loan'].forEach(n => {
+      const c = state.categories.find(x => x.name === catAlias(n)) || state.categories.find(x => x.name.toLowerCase() === n.toLowerCase());
+      if (c) c.exclude = true;
+    });
+    state.settings.notCountedFixed = 1; save();
+  }
   if (!state.settings.tradeRowsFixed) {
     const TRADE_ROW = /^(NIFTY|BANKNIFTY|FINNIFTY|MIDCPNIFTY|NIFTYNXT50|SENSEX|BANKEX|BSX|BKX)$|^BILL POSTING$|^Stock Value: .*P\/L Amt|^(Transferred amount to|Received amount from) (Normal|Trading|MTF) account$/i;
     const cand = e => !e.account && e.payment === 'Bank' && isBankRef(e.ref) && !(e.refs || []).length;
