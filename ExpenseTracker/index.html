@@ -412,6 +412,10 @@
       <div class="sub" id="recNote" style="margin-bottom:6px"></div>
       <div id="recList"></div>
     </div>
+    <div class="card hidden" id="invCard">
+      <h2>📈 Investments by type</h2>
+      <div id="invList"></div>
+    </div>
     <div class="card hidden" id="grpCard">
       <h2>By group</h2>
       <div id="grpList"></div>
@@ -1259,6 +1263,24 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     const r = e.target.closest('[data-rec]'); if (!r) return;
     payerFilter = r.dataset.rec; view = 'list'; syncNav(); render(); window.scrollTo(0, 0);
   });
+  function renderInvest(items) {
+    const c = investCat(), its = items.filter(e => e.category === c);
+    $('invCard').classList.toggle('hidden', !its.length);
+    if (!its.length) return;
+    const by = new Map();
+    its.forEach(e => { const [emo, name] = investType(e); const r = by.get(name) || { emo, name, out: 0, back: 0, n: 0 }; r[e.type === 'debit' ? 'out' : 'back'] += e.amount; r.n++; by.set(name, r); });
+    const rows = [...by.values()].sort((a, b) => b.out - a.out);
+    const max = Math.max(...rows.map(r => Math.max(r.out, r.back)), 1);
+    $('invList').innerHTML = rows.map(r => `<div class="bar-row" data-invtype="${esc(r.name)}" role="button" style="cursor:pointer">
+        <div class="top"><span>${esc(r.emo)} ${esc(r.name)} <span class="sub">${r.n}</span></span>
+          <span>${r.out ? `<b>${fmt(r.out)}</b> in` : ''}${r.out && r.back ? ' · ' : ''}${r.back ? `<b style="color:var(--income)">${fmt(r.back)}</b> back` : ''}</span></div>
+        <div class="progress"><div style="width:${r.out / max * 100}%"></div></div></div>`).join('') +
+      `<div class="sub" style="margin-top:6px">“In” is money you put in (an FD made, shares bought, SIP); “back” is money returned (FD matured, shares sold). Neither counts as spending or income. Tap a type to see its entries.</div>`;
+  }
+  document.addEventListener('click', e => {
+    const r = e.target.closest('[data-invtype]'); if (!r) return;
+    $('search').value = r.dataset.invtype; view = 'list'; syncNav(); render(); window.scrollTo(0, 0);
+  });
   function renderGroups(items) {
     const groups = allGroups();
     $('grpCard').classList.toggle('hidden', !groups.length);
@@ -1449,6 +1471,17 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
   const spentOf = arr => sum(arr.filter(e => e.type === 'debit' && counted(e)));
   // Investments (SIPs, stocks, gold…) are not spending; shown on their own, net of withdrawals
   const investCat = () => catAlias('Investment');
+  // Kind of investment, from the description, payee name and comment
+  const INVEST_TYPES = [
+    ['🏦', 'Fixed deposits', /\bfd\b|fixed deposit|term deposit|\btdr?\b|\brd\b|recurring deposit|deposit a\/?c/i],
+    ['📈', 'Mutual funds & SIP', /mutual fund|\bmf\b|\bsip\b|kuvera|bse star|\bcams\b|kfin|\bamc\b|nippon|axis mf|sbi mf/i],
+    ['🪙', 'Gold', /gold|augmont|mmtc|jar app/i],
+    ['🏛️', 'PPF / NPS', /\bppf\b|\bnps\b|sukanya|provident/i],
+    ['📊', 'Stocks & brokers', /upstox|zerodha|groww|angel|hdfc ?sec|icici ?sec|kotak ?sec|5paisa|\bdhan\b|\bnse\b|\bbse\b|clearing|brok|eq trade|smallcase|indmoney|\bmtf\b|securities/i]];
+  function investType(e) {
+    const t = [noteText(e), e.comment || ''].join(' ');
+    return INVEST_TYPES.find(([, , re]) => re.test(t)) || ['💼', 'Other investments'];
+  }
   const investedOf = arr => { const c = investCat(); const its = arr.filter(e => e.category === c);
     return { out: sum(its.filter(e => e.type === 'debit')), back: sum(its.filter(e => e.type === 'credit')), n: its.length }; };
   const incomeOf = arr => sum(arr.filter(e => e.type === 'credit' && counted(e)));
@@ -1578,7 +1611,7 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     const fa = acctById(acctFilter);
     const inv = investedOf(items);
     $('incomeText').innerHTML = [income ? `Income <b style="color:var(--income)">${fmt(income)}</b> · Net ${fmt(income - spent)}` : '',
-      inv.n ? `<span data-showinvest="1" role="button" style="cursor:pointer">📈 Invested <b>${fmt(inv.out - inv.back)}</b>${inv.back ? ` <span style="font-size:12px">(${fmt(inv.out)} in · ${fmt(inv.back)} withdrawn)</span>` : ''} ›</span>` : '',
+      inv.n ? `<span data-showinvest="1" role="button" style="cursor:pointer">📈 Invested <b>${fmt(inv.out)}</b>${inv.back ? ` · came back <b style="color:var(--income)">${fmt(inv.back)}</b>` : ''} ›</span>` : '',
       fa && fa.bal ? `Balance <b>${fmt(fa.bal.amount)}</b> on ${new Date(fa.bal.date + 'T00:00').toLocaleDateString(undefined, { day: 'numeric', month: 'short' })}` : ''
     ].filter(Boolean).join('<br>');
 
@@ -1608,6 +1641,7 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
              || appWordMatch(app ?? (app = appCached(e)), t.word)
              || groupOf(e).toLowerCase().includes(t.word)
              || payeeAlias(payerKey(e)).toLowerCase().includes(t.word)
+             || (e.category === investCat() && investType(e)[1].toLowerCase().includes(t.word))
              || (acctById(e.account) && `${acctById(e.account).nick || ''} ${acctById(e.account).name}`.toLowerCase().includes(t.word))));
       })
       .sort((a, b) => b.date.localeCompare(a.date) || b.createdAt - a.createdAt);
@@ -1713,8 +1747,9 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     $('sIncome').textContent = fmt(income);
     $('sNet').textContent = fmt(income - spent);
     const inv = investedOf(items);
-    $('sInvest').textContent = fmt(inv.out - inv.back);
-    $('sInvestSub').textContent = inv.back ? `${fmt(inv.out)} in · ${fmt(inv.back)} out` : '';
+    $('sInvest').textContent = fmt(inv.out);
+    $('sInvestSub').textContent = inv.back ? `${fmt(inv.back)} came back · net ${inv.out >= inv.back ? '+' : '−'}${fmt(Math.abs(inv.out - inv.back))}` : '';
+    renderInvest(items);
     $('sNet').style.color = income - spent < 0 ? 'var(--danger)' : '';
     $('sAvg').textContent = fmt(spent / days);
     $('sCount').textContent = items.length;
