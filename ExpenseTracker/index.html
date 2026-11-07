@@ -3863,6 +3863,20 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
       const cr = state.settings.commentRules || {};
       Object.keys(cr).forEach(r => { if (r.startsWith(o + '|')) { const r2 = nk + r.slice(o.length); if (cr[r2] === undefined) cr[r2] = cr[r]; delete cr[r]; } });
     });
+    // A business account set up with a made-up "Clinic income" / "Business income" while you had
+    // already chosen your own money-in category for it: its collections move to yours, and the
+    // made-up category goes once nothing uses it.
+    (state.accounts || []).forEach(a => {
+      const old = a.business && a.business.incomeCat;
+      if (!old || !/^(clinic|business) income$/i.test(old)) return;
+      const own = businessPlan(a).incomeCat;
+      if (/^(clinic|business) income$/i.test(own)) return;
+      state.expenses.forEach(e => { if (e.account !== a.id || e.type !== 'credit') return; if (e.category === old && !e.userCat) e.category = own; if (e.category === own) delete e.unread; });
+      a.business.incomeCat = own;
+      const c = state.categories.find(x => x.name === own); if (c && !c.group) c.group = a.business.group;
+      if (!state.expenses.some(e => e.category === old) && !Object.values(state.rules).includes(old) &&
+          !(state.accounts || []).some(b => b.business && b.business.incomeCat === old)) state.categories = state.categories.filter(x => x.name !== old);
+    });
   }
   if ((state.settings.rulesV || 1) < RULES_VERSION) {
     let n = 0;
