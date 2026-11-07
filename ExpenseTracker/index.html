@@ -617,6 +617,7 @@
   <input id="fNote" type="text" placeholder="e.g. Lunch with team" maxlength="200">
   <button type="button" class="btn ghost hidden" id="fPayee"></button>
   <button type="button" class="btn ghost hidden" id="fHistory"></button>
+  <button type="button" class="btn ghost hidden" id="fBatch" style="color:var(--danger)"></button>
   <button type="submit" class="btn primary">Save</button>
   <button type="button" class="btn danger hidden" id="fDelete">Delete</button>
   <button type="button" class="btn ghost" id="fCancel">Cancel</button>
@@ -2522,6 +2523,7 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     $('fComment').value = exp ? exp.comment || '' : '';
     renderMatchOptions(exp || null);
     renderRefund(exp || null);
+    renderBatchBtn(exp || null);
     renderFormSuggest(exp || (pre ? { ...pre, note: pre.note || pre.desc } : null));
     renderPayeeBtn(exp);
     const hk = exp && payerKey(exp), hn = hk ? state.expenses.filter(e => samePayer(payerKey(e), hk)).length : 0;
@@ -2676,6 +2678,26 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     save(); render(); renderPayeeBtn(state.expenses.find(x => x.id === editingId));
     $('fHistory').textContent = `🕘 All transactions with ${payerName(k)} (${n})`;
     toast(name ? `${n} transaction${n === 1 ? '' : 's'} now show “${name}”` : 'Name removed');
+  });
+  // The entries one import added (a file from the folder or 📥 Import): to take a wrong file back out
+  function importOf(e) {
+    const b = e && (state.settings.imports || []).find(x => e.createdAt >= x.at && e.createdAt < x.at + x.n);
+    if (!b) return null;
+    return { b, list: state.expenses.filter(x => x.createdAt >= b.at && x.createdAt < b.at + b.n) };
+  }
+  function renderBatchBtn(e) {
+    const im = importOf(e), show = !!(im && im.list.length >= 2);
+    $('fBatch').classList.toggle('hidden', !show);
+    if (show) $('fBatch').textContent = `🗑 Delete the ${im.list.length} entries ${im.b.name ? `“${im.b.name}”` : 'this import'} added (${dShort(isoDate(new Date(im.b.at)))})`;
+  }
+  $('fBatch').addEventListener('click', () => {
+    const e = state.expenses.find(x => x.id === editingId), im = importOf(e); if (!im) return;
+    if (!confirm(`Delete all ${im.list.length} entries ${im.b.name ? `“${im.b.name}”` : 'this import'} added on ${shortD(isoDate(new Date(im.b.at)))}?\n\nEntries that were already in Kharcha before it stay. Removing a file from the folder doesn't do this by itself.`)) return;
+    const ids = new Set(im.list.map(x => x.id));
+    state.expenses = state.expenses.filter(x => !ids.has(x.id));
+    state.settings.imports = (state.settings.imports || []).filter(x => x !== im.b);
+    tidyTransfers(); save(); closeAll(); render();
+    toast(`Deleted ${ids.size} entries${im.b.name ? ' from ' + im.b.name : ''}`, 4000);
   });
   $('fHistory').addEventListener('click', () => {
     payerFilter = $('fHistory').dataset.key || '';
@@ -3353,6 +3375,13 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     const label = `${bank || 'Credit'} card${main ? ' ••' + main.last : ''}${to ? ' · to ' + shortD(to) : ''}`;
     return { items, label };
   }
+  // A trading report (contract note, tradebook, P&L, broker ledger) that isn't one Kharcha reads in
+  // Summary › Brokers: its rows are trades, not money in or out of a bank account.
+  const TRADE_HEAD = /\b(symbol|scrip|isin|instrument|strike|expiry|option ?type|buy ?(?:value|price|qty|date|avg)|sell ?(?:value|price|qty|date|avg)|trade ?(?:id|no|date|type)|order ?(?:id|no)|contract ?note|segment|realized|realised|unrealized|unrealised|brokerage|stt|client ?(?:code|id)|ucc|demat|dp ?id)\b|p\s*&\s*l|\bpnl\b/gi;
+  function looksLikeTrades(rows, det) {
+    const top = rows.slice(0, Math.min(rows.length, (det ? det.header : 10) + 1)).map(r => (r || []).join(' ')).join(' ');
+    return new Set((top.match(TRADE_HEAD) || []).map(t => t.toLowerCase().replace(/\s+/g, ''))).size >= 2;
+  }
   async function startImport(file) {
     toast('Reading ' + file.name + '…');
     if (/\.pdf$/i.test(file.name) || file.type === 'application/pdf') {
@@ -3385,6 +3414,7 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
       return;
     }
     const det = detectColumns(rows);
+    if (looksLikeTrades(rows, det)) { toast('This is a trading report (trades or P&L), not a bank statement — nothing added. Angel One and Upstox reports show in Summary › Brokers.', 6000); return; }
     if (!det && aiOn() && rows.length) { aiReadLines(rowsToLines(rows), file.name, rowsContext(rows)); return; }
     setupStatement(rows, file, det);
     $('impMap').open = !det;
@@ -3675,8 +3705,9 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
       if (n) toast(`Also set ${n} other “${k}” transaction${n > 1 ? 's' : ''} to ${x.category}`);
     }
   });
-  function addItems(items, label, quiet = false) {
-    const now = Date.now();
+  function addItems(items, label, quiet = false, src = '') {
+    // createdAt runs from `now`: kept above every existing entry so one import's range is its own
+    const now = Math.max(Date.now(), state.expenses.reduce((m, e) => Math.max(m, e.createdAt || 0), 0) + 1);
     items.forEach(x => { if (x.learn && x.account) learnDigits(x.account, x.learn); });
     const created = ensureAccounts(items);
     items.forEach(x => {
@@ -3711,6 +3742,7 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
       delete e.unread;
     });
     state.expenses.push(...add);
+    if (add.length) state.settings.imports = (state.settings.imports || []).concat({ at: now, n: add.length, name: String(src || '').slice(0, 80) }).slice(-80);
     const utrMerged = mergeUtrPairs();
     if (utrMerged) label = (label || `Imported ${add.length} transactions`) + ` · ${utrMerged} matched by UPI reference`;
     const t = tidyTransfers();
@@ -3738,8 +3770,8 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     const linked = linkDuplicates(skipped);
     updateBalances(skipped.filter(x => x.match));
     if (linked && !items.length) { save(); closeAll(); render(); toast(`Merged ${linked} duplicate${linked > 1 ? 's' : ''} into existing entries`); return; }
-    if (linked) { addItems(items, `Imported ${items.length} transactions · merged ${linked} duplicate${linked > 1 ? 's' : ''}`); return; }
-    addItems(items);
+    if (linked) { addItems(items, `Imported ${items.length} transactions · merged ${linked} duplicate${linked > 1 ? 's' : ''}`, false, imp.name); return; }
+    addItems(items, undefined, false, imp.name);
   });
   $('impCancel').addEventListener('click', closeAll);
   const pickStatement = () => $('importFile').click();
@@ -4133,6 +4165,24 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     state.settings.rulesV = RULES_VERSION;
     if (n) setTimeout(() => toast(`Re-checked categories with improved rules: ${n} entr${n === 1 ? 'y' : 'ies'} updated`, 4000), 800);
     save();
+  }
+  // Rows that trading reports (F&O P&L, broker ledgers) added as bank transactions before Kharcha read
+  // broker reports: "NIFTY", "BANKNIFTY", "BILL POSTING", "Stock Value: … P/L Amt …" — never your
+  // spending. Removed once, with the rest of the same import (rows next to them, also without an account).
+  if (!state.settings.tradeRowsFixed) {
+    const TRADE_ROW = /^(NIFTY|BANKNIFTY|FINNIFTY|MIDCPNIFTY|NIFTYNXT50|SENSEX|BANKEX|BSX|BKX)$|^BILL POSTING$|^Stock Value: .*P\/L Amt|^(Transferred amount to|Received amount from) (Normal|Trading|MTF) account$/i;
+    const cand = e => !e.account && e.payment === 'Bank' && isBankRef(e.ref) && !(e.refs || []).length;
+    const bad = new Set(state.expenses.filter(e => cand(e) && TRADE_ROW.test(String(e.note || '').trim())).map(e => e.id));
+    if (bad.size) {
+      let run = [];
+      const flush = () => { if (run.length && run.filter(e => bad.has(e.id)).length * 2 >= run.length) run.forEach(e => bad.add(e.id)); run = []; };
+      state.expenses.filter(cand).sort((a, b) => a.createdAt - b.createdAt).forEach(e => { if (run.length && e.createdAt !== run[run.length - 1].createdAt + 1) flush(); run.push(e); });
+      flush();
+      const gone = state.expenses.filter(e => bad.has(e.id)), spent = gone.filter(e => e.type === 'debit').reduce((t, e) => t + e.amount, 0);
+      state.expenses = state.expenses.filter(e => !bad.has(e.id));
+      setTimeout(() => toast(`Removed ${gone.length} entries that trading reports had added as bank transactions (${fmt(spent)} that wasn't spending)`, 7000), 1500);
+    }
+    state.settings.tradeRowsFixed = 1; save();
   }
   {
     const n = mergeUtrPairs();
@@ -4594,7 +4644,7 @@ Rules: include only completed transactions — skip OTPs, offers, ads, due/bill 
     r.same = items.filter(x => x.dup === 'exact').length;
     r.merged = linkDuplicates(skipped);
     updateBalances(skipped.filter(x => x.match));
-    if (add.length) addItems(add, '', true);
+    if (add.length) addItems(add, '', true, r.name);
     r.added = add.length;
     r.spent = add.filter(x => x.type === 'debit').reduce((t, x) => t + x.amount, 0);
     return r;
@@ -4624,6 +4674,7 @@ Rules: include only completed transactions — skip OTPs, offers, ads, due/bill 
       const ph = phonePeHeader(rows);
       if (ph >= 0) { r.kind = 'PhonePe'; return commitAuto(parsePhonePeRows(rows, ph), r); }
       const det = detectColumns(rows);
+      if (looksLikeTrades(rows, det)) { r.note = 'a trading report, not a bank statement — nothing added'; return r; }
       if (det) {
         setupStatement(rows, file, det); imp.mode = 'file'; imp.acctOverride = ''; imp.filter = 'all';
         buildItems();   // also marks duplicates and checks the running balance
