@@ -441,6 +441,7 @@
         Add messages from Shortcuts and Share automatically (skip review)
       </label>
       <div class="sub native-only">Duplicates are still skipped. Set up the automation in the Shortcuts app with the <b>Add Bank Message</b> action.</div>
+      <div class="sub native-only" style="margin-top:8px">🎙️ <b>Siri:</b> copy a bank message and say <i>“Hey Siri, send copied message to Kharcha”</i>. Also: <i>“Add expense in Kharcha”</i> (Siri asks how much and what for) and <i>“How much have I spent in Kharcha”</i>.</div>
       <div class="sub">Copy one or more bank SMS (long-press → Copy), then tap 💬 and paste.</div>
       <input type="file" id="importFile" accept=".csv,.txt,.tsv,.xls,.xlsx,.ods,.pdf,application/pdf,text/csv,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" class="hidden">
       <label style="margin-top:16px">Learned rules <span id="ruleCount"></span></label>
@@ -2998,6 +2999,22 @@ Rules: include only completed transactions — skip OTPs, offers, ads, due/bill 
   };
   // Text from the Share Extension or the "Add Bank Message" Shortcuts action (iOS app).
   window.expensesReceiveShared = text => {
+    // expenses spoken to Siri ("Add expense in Kharcha") arrive as kharcha:entry:{json}
+    const spoken = [];
+    text = String(text).replace(/^kharcha:entry:(\{.*\})\s*$/gm, (_m, j) => { try { spoken.push(JSON.parse(j)); } catch (e) {} return ''; }).trim();
+    if (spoken.length) {
+      const now = Date.now();
+      spoken.forEach((x, i) => {
+        const amount = Math.round(Math.abs(+x.amount) * 100) / 100; if (!(amount > 0)) return;
+        const type = x.type === 'credit' ? 'credit' : 'debit', note = String(x.note || '').trim().slice(0, 200);
+        const e = { id: uid(), createdAt: now + i, type, amount, category: classify(note, type), date: parseDate(x.date, 'dmy') || isoDate(new Date()), note, payment: 'Cash' };
+        if (/^Other/.test(e.category)) { const sg = suggestFor(e)[0]; if (strongSug(sg)) e.category = sg.category; }
+        state.expenses.push(e);
+      });
+      save(); render();
+      toast(`🎙️ Added ${spoken.length} expense${spoken.length > 1 ? 's' : ''} from Siri`);
+      if (!text) return;
+    }
     const items = parseSmsBatch(text);
     const balMsg = applyBalanceReplies();
     if (!items.length) { if (!balMsg && aiOn()) aiReadLines([text], 'the shared message'); else toast(balMsg || 'No transaction found in the shared message'); return; }
