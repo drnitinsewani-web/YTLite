@@ -10,6 +10,8 @@ final class AppDelegate: UIResponder, UIApplicationDelegate {
         window.rootViewController = WebViewController()
         window.makeKeyAndVisible()
         self.window = window
+        // Make sure Siri knows the Kharcha phrases right after install / update
+        if #available(iOS 16.0, *) { KharchaShortcuts.updateAppShortcutParameters() }
         return true
     }
 }
