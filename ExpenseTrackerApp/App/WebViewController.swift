@@ -51,11 +51,12 @@ final class WebViewController: UIViewController, WKScriptMessageHandler, WKUIDel
         webView.load(URLRequest(url: URL(string: "\(Self.scheme)://localhost/index.html")!))
     }
 
-    /// Injects the saved data before the page's own scripts run.
+    /// Injects the saved data before the page's own scripts run: null when nothing is saved yet (a new
+    /// install), text the page can't read when the file is there but couldn't be read.
     private func installStateScript(on controller: WKUserContentController) {
         controller.removeAllUserScripts()
-        let saved = StateStore.load() ?? "null"
-        let source = "window.__EXPENSES_NATIVE__ = true; window.__EXPENSES_NATIVE_STATE__ = \(jsString(saved));"
+        let saved = StateStore.load().map { jsString($0) } ?? (StateStore.hasFile ? jsString("unreadable") : "null")
+        let source = "window.__EXPENSES_NATIVE__ = true; window.__EXPENSES_NATIVE_STATE__ = \(saved);"
         controller.addUserScript(WKUserScript(source: source, injectionTime: .atDocumentStart, forMainFrameOnly: true))
     }
 

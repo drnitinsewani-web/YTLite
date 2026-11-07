@@ -14,6 +14,12 @@ enum StateStore {
         return String(data: data, encoding: .utf8)
     }
 
+    /// True when the data file exists, even if it couldn't be read.
+    static var hasFile: Bool {
+        guard let url = fileURL else { return false }
+        return FileManager.default.fileExists(atPath: url.path)
+    }
+
     static func save(_ json: String) {
         guard let url = fileURL, let data = json.data(using: .utf8) else { return }
         snapshotBeforeSaving(newSize: data.count, current: url)

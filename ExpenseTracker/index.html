@@ -560,7 +560,7 @@
     </div>
     <div class="card">
       <h2>Data</h2>
-      <div class="sub">Your data is stored only on this device. Back it up now and then.</div>
+      <div class="sub" id="dataWhere">Your data is stored only on this device. Back it up now and then.</div>
       <div class="native-only">
         <button class="btn ghost" id="autoBackups">🛟 Automatic backups</button>
         <div class="sub hidden" id="backupList" style="margin-top:8px"></div>
@@ -804,7 +804,8 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     return {
       v: STATE_VERSION, expenses: [], rules: {}, accounts: [], fds: [], brokers: {},
       categories: DEFAULT_CATS.map(({ since, ...c }) => c),
-      settings: { currency: /-IN$/i.test(lang) ? 'INR' : 'USD', budget: 0, selfName: '' }
+      // reviewBackfill: new data never needs the one-time "to review" marking of older versions (see migrate)
+      settings: { currency: /-IN$/i.test(lang) ? 'INR' : 'USD', budget: 0, selfName: '', reviewBackfill: true }
     };
   }
   // Rules learned under payee keys that were only labels ("ACCOUNT UTR", "UTR PHONEPE") matched
@@ -821,8 +822,8 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
   }
   function migrate(s) {
     const d = defaultState();
-    const oldVersion = +s.v || 1;
-    s = { ...d, ...s, settings: { ...d.settings, ...(s.settings || {}) } };
+    const oldVersion = +s.v || 1, oldSettings = s.settings || {};
+    s = { ...d, ...s, settings: { ...d.settings, ...oldSettings } };
     s.rules = s.rules && typeof s.rules === 'object' ? s.rules : {};
     s.categories = (Array.isArray(s.categories) && s.categories.length ? s.categories : d.categories)
       .map(c => ({ ...c, kind: c.kind || 'debit' }))
@@ -834,7 +835,7 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     });
     s.v = STATE_VERSION;
     s.expenses = s.expenses.map(e => ({ ...e, type: e.type === 'credit' ? 'credit' : 'debit' }));
-    if (!s.settings.reviewBackfill) {
+    if (!oldSettings.reviewBackfill) {
       const min = s.settings.reviewMin == null ? 1000 : s.settings.reviewMin;
       if (min > 0) s.expenses.forEach(e => { if (e.ref && !e.comment && e.amount > min) e.unread = true; });
       s.settings.reviewBackfill = true;
@@ -848,9 +849,11 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
   // it (or sync it to iCloud): `loadProblem` stops all saving until the data is restored.
   let loadProblem = '';
   function load() {
-    if (NATIVE && window.__EXPENSES_NATIVE_STATE__) {
+    const saved = NATIVE ? window.__EXPENSES_NATIVE_STATE__ : null;
+    // nothing saved yet (a new install): the app passes null (older versions the text "null")
+    if (saved && saved !== 'null') {
       try {
-        const s = JSON.parse(window.__EXPENSES_NATIVE_STATE__);
+        const s = JSON.parse(saved);
         if (s && Array.isArray(s.expenses)) return migrate(s);
         loadProblem = 'unexpected format';
       } catch (e) { loadProblem = String((e && e.message) || e); }
@@ -862,6 +865,8 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     return defaultState();
   }
   let state = load();
+  // entries when Kharcha opened: the iCloud safety net looks at this, not at entries deleted on purpose since
+  let loadN = state.expenses.length;
   let dataStamp = 0;
   function saveLocal() {
     dataStamp++;
@@ -869,7 +874,10 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     const json = JSON.stringify(state);
     if (NATIVE) native({ type: 'save', data: json });
     try { localStorage.setItem(KEY, json); }
-    catch (e) { if (!NATIVE) toast('Could not save — storage full or unavailable'); }
+    catch (e) {
+      if (!NATIVE) toast('Could not save — storage full or unavailable');
+      else try { localStorage.removeItem(KEY); } catch (e2) {}   // the app's file has it; never keep an old copy to fall back on
+    }
   }
   let cloudTimer = null;
   function save() {
@@ -4119,8 +4127,24 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
         .map(e => [e.date, e.type === 'credit' ? 'Credit' : 'Debit', e.category, groupOf(e), e.amount, state.settings.currency, e.payment || '', (acctById(e.account) || {}).name || '', payeeAlias(payerKey(e)), e.note, e.comment || '']));
     download(`transactions-${isoDate(new Date())}.csv`, rows.map(r => r.map(q).join(',')).join('\n'), 'text/csv');
   });
-  $('backup').addEventListener('click', () =>
-    download(`expenses-backup-${isoDate(new Date())}.json`, JSON.stringify({ ...state, settings: { ...state.settings, ai: undefined } }, null, 2), 'application/json'));
+  // Keys stay out of the file: the DeepSeek key, and the Gmail bridge address and key (together they let
+  // anyone read your bank alert emails). Restoring keeps this device's own (see keepDeviceSettings).
+  $('backup').addEventListener('click', () => {
+    const m = state.settings.mail;
+    const settings = { ...state.settings, ai: undefined, mail: m ? { ...m, url: undefined, key: undefined } : undefined };
+    download(`expenses-backup-${isoDate(new Date())}.json`, JSON.stringify({ ...state, settings }, null, 2), 'application/json');
+  });
+  // Restoring a backup: this device's DeepSeek key and Gmail bridge stay (a backup file has neither), and
+  // so does whether it syncs with iCloud, unless its own data couldn't be read (the backup then has it).
+  function keepDeviceSettings(next, prev, unreadable) {
+    const s = next.settings, p = prev.settings || {};
+    if (p.ai) s.ai = p.ai;
+    if (p.mail && p.mail.url) s.mail = { ...(s.mail || {}), url: p.mail.url, key: p.mail.key };
+    if (!unreadable) { if (p.cloudOn === false) s.cloudOn = false; else delete s.cloudOn; }
+    return next;
+  }
+  // with iCloud sync on, a restore replaces the iCloud copy too (see restoreSync)
+  const restoreReplacesCloud = () => NATIVE && state.settings.cloudOn !== false && !loadProblem;
   // Automatic backups kept by the iPhone app (daily, and before any save that halves the data)
   $('autoBackups').addEventListener('click', () => { $('backupList').classList.remove('hidden'); $('backupList').textContent = 'Loading…'; native({ type: 'backups' }); });
   window.expensesBackups = list => {
@@ -4133,20 +4157,22 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
   };
   $('backupList').addEventListener('click', e => {
     const b = e.target.closest('[data-backup]'); if (!b) return;
-    if (!confirm('Restore this backup? Entries added since then will be replaced.')) return;
+    if (!confirm(`Restore this backup? Entries added since then will be replaced${restoreReplacesCloud() ? ', here and in iCloud' : ''}.`)) return;
     native({ type: 'backupRead', name: b.dataset.backup });
   });
   window.expensesBackupData = (name, json) => {
     let s = null; try { s = JSON.parse(json); } catch (e) {}
     if (!s || !Array.isArray(s.expenses)) { toast('That backup couldn’t be read'); return; }
-    state = migrate(s); loadProblem = '';
-    try { localStorage.removeItem(CLOUD_BASE); } catch (e) {}   // next iCloud sync merges instead of deleting
+    const unreadable = !!loadProblem;
+    state = keepDeviceSettings(migrate(s), state, unreadable); loadProblem = '';
+    restoreSync(unreadable);
     save(); render(); renderSettings();
     toast(`Restored ${state.expenses.length} entries from the backup`, 5000);
   };
   $('restoreBtn').addEventListener('click', () => $('restoreFile').click());
   $('restoreFile').addEventListener('change', async e => {
-    const f = e.target.files[0]; if (!f) return;
+    const f = e.target.files[0]; e.target.value = '';   // so the same file can be picked again
+    if (!f) return;
     try {
       const data = JSON.parse(await f.text());
       if (!Array.isArray(data.expenses)) throw new Error('bad file');
@@ -4157,17 +4183,20 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
           ...(typeof x.balance === 'number' ? { balance: x.balance } : {}),
           ...(Array.isArray(x.refs) ? { refs: x.refs.map(String) } : {}),
           ...(x.comment ? { comment: String(x.comment) } : {}), ...(x.unread ? { unread: true } : {}) }));
-      if (!confirm(`Replace current data with ${valid.length} transactions from backup?`)) return;
-      state = migrate({ ...data, expenses: valid }); loadProblem = '';
-      try { localStorage.removeItem(CLOUD_BASE); } catch (e) {}   // next iCloud sync merges instead of deleting
+      if (!confirm(`Replace current data${restoreReplacesCloud() ? ' here and in iCloud' : ''} with ${valid.length} transactions from backup?`)) return;
+      const unreadable = !!loadProblem;
+      state = keepDeviceSettings(migrate({ ...data, expenses: valid }), state, unreadable); loadProblem = '';
+      restoreSync(unreadable);
       save(); $('currency').innerHTML = ''; render(); toast('Restored');
     } catch (err) { toast('Not a valid backup file'); }
-    e.target.value = '';
   });
   $('wipe').addEventListener('click', () => {
-    if (!confirm('Delete ALL transactions, rules and settings? This cannot be undone.')) return;
+    const cloud = NATIVE && state.settings.cloudOn !== false, off = state.settings.cloudOn === false;
+    if (!confirm(cloud ? 'Delete ALL transactions, rules and settings, on this iPhone and in iCloud? Your other devices that sync with iCloud lose them too. This cannot be undone.'
+      : 'Delete ALL transactions, rules and settings? This cannot be undone.')) return;
     // marked so the iCloud safety net knows this emptiness is on purpose and syncs it
     state = defaultState(); state.settings.wipedAt = Date.now(); loadProblem = '';
+    if (off) state.settings.cloudOn = false;   // iCloud sync stays off
     save(); $('currency').innerHTML = ''; render();
     try { localStorage.removeItem(FOLDER_LOG); } catch (e) {}
     if (NATIVE && folderInfo.name) { native({ type: 'folderRescan' }); toast('All data deleted · importing the statements in your folder again…', 4000); }
@@ -4435,48 +4464,145 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
   });
 
   // ---------- iCloud sync (iOS app) ----------
-  // Three-way merge: what this device last synced (base), this device now (local), iCloud now (remote).
-  // Local additions/edits win; remote additions/edits are kept; deletions on either side are applied
-  // unless the other side changed that item meanwhile.
-  const CLOUD_BASE = KEY + ':cloudBase';
-  const sameJ = (a, b) => JSON.stringify(a) === JSON.stringify(b);
-  function mergeList(b = [], l = [], r = [], k) {
-    const B = new Map(b.map(x => [x[k], x])), L = new Map(l.map(x => [x[k], x])), R = new Map(r.map(x => [x[k], x]));
+  // Three-way merge: the last copy this device and iCloud had in common (base), this device now (local),
+  // iCloud now (remote). Local additions/edits win; remote additions/edits are kept; deletions on either
+  // side are applied unless the other side changed that item meanwhile.
+  // The base is kept as one fingerprint per entry and setting, not as a second copy of all the data (web
+  // storage on iPhone has no room for two). iCloud keeps only the latest upload, so each upload carries
+  // the ids of the uploads it was made from (settings.syncTag): a copy another device made without this
+  // device's last upload is merged against the copy both had, or this device's newest entries would look
+  // deleted. An upload iCloud refused never counts as shared.
+  const CLOUD_BASE = KEY + ':cloudBase';   // older versions: all the data as last synced
+  const SYNC_KEY = KEY + ':sync';          // { n, seen, pushed } fingerprints, or { replace } after a restore
+  const SYNC_LISTS = [['expenses', 'id'], ['accounts', 'id'], ['categories', 'name'], ['fds', 'no']];
+  const SYNC_OBJS = ['brokers', 'rules'];
+  const hasKey = (o, k) => Object.prototype.hasOwnProperty.call(o, k);
+  const plainObj = v => !!v && typeof v === 'object' && !Array.isArray(v);
+  function fpr(v) {   // fingerprint: a 53-bit hash of the JSON
+    const s = JSON.stringify(v) || '';
+    let h1 = 0xdeadbeef, h2 = 0x41c6ce57;
+    for (let i = 0; i < s.length; i++) { const c = s.charCodeAt(i); h1 = Math.imul(h1 ^ c, 2654435761); h2 = Math.imul(h2 ^ c, 1597334677); }
+    h1 = Math.imul(h1 ^ (h1 >>> 16), 2246822507) ^ Math.imul(h2 ^ (h2 >>> 13), 3266489909);
+    h2 = Math.imul(h2 ^ (h2 >>> 16), 2246822507) ^ Math.imul(h1 ^ (h1 >>> 13), 3266489909);
+    return (4294967296 * (2097151 & h2) + (h1 >>> 0)).toString(36);
+  }
+  // (a value left undefined is no value: it isn't in the uploaded JSON either)
+  const fprMap = (o, skip) => { const m = new Map(); Object.keys(o || {}).forEach(k => { if (o[k] !== undefined && !(skip && skip(k))) m.set(k, fpr(o[k])); }); return m; };
+  function digestOf(s) {
+    const d = { l: {}, o: {}, s: fprMap(s.settings, k => k === 'syncTag'), x: {}, t: fprMap(s, k => k === 'settings' || SYNC_OBJS.includes(k) || SYNC_LISTS.some(([n]) => n === k)) };
+    SYNC_LISTS.forEach(([name, k]) => { const m = new Map(); (s[name] || []).forEach(v => { if (v) m.set(v[k], fpr(v)); }); d.l[name] = m; });
+    SYNC_OBJS.forEach(name => { d.o[name] = fprMap(s[name]); });
+    const st = s.settings || {};
+    Object.keys(st).forEach(k => { if (k !== 'syncTag' && plainObj(st[k])) d.x[k] = fprMap(st[k]); });
+    return d;
+  }
+  // same data, in whatever order (two devices list entries added at the same time in different orders)
+  const sameMap = (a, b) => !!a && !!b && a.size === b.size && [...a].every(([k, v]) => b.get(k) === v);
+  const sameDigest = (a, b) => SYNC_LISTS.every(([n]) => sameMap(a.l[n], b.l[n])) && SYNC_OBJS.every(n => sameMap(a.o[n], b.o[n])) && sameMap(a.s, b.s) && sameMap(a.t, b.t);
+  // b: the base's fingerprints (a Map), or none
+  function mergeList(b, l = [], r = [], k) {
+    b = b || new Map();
+    const L = new Map(l.map(x => [x[k], x])), R = new Map(r.map(x => [x[k], x]));
     const out = new Map(R);
-    L.forEach((v, id) => { if (!B.has(id) || !sameJ(v, B.get(id))) out.set(id, v); });
-    B.forEach((v, id) => { if (!L.has(id) && (!R.has(id) || sameJ(R.get(id), v))) out.delete(id); });
+    L.forEach((v, id) => { if (!b.has(id) || fpr(v) !== b.get(id)) out.set(id, v); });
+    b.forEach((h, id) => { if (!L.has(id) && (!R.has(id) || fpr(R.get(id)) === h)) out.delete(id); });
     // keep this device's order, then anything new from iCloud
     const ordered = l.filter(x => out.has(x[k])).map(x => out.get(x[k]));
     out.forEach((v, id) => { if (!L.has(id)) ordered.push(v); });
     return ordered;
   }
-  function mergeObj(b = {}, l = {}, r = {}) {
+  function mergeObj(b, l = {}, r = {}) {
+    b = b || new Map();
     const out = { ...r };
-    Object.keys(l).forEach(k => { if (!(k in b) || !sameJ(l[k], b[k])) out[k] = l[k]; });
-    Object.keys(b).forEach(k => { if (!(k in l) && (!(k in r) || sameJ(r[k], b[k]))) delete out[k]; });
+    Object.keys(l).forEach(k => { if (!b.has(k) || fpr(l[k]) !== b.get(k)) out[k] = l[k]; });
+    b.forEach((h, k) => { if (!hasKey(l, k) && (!hasKey(r, k) || fpr(r[k]) === h)) delete out[k]; });
     return out;
   }
-  function merge3(base, local, remote) {
-    base = base || {};
-    const bs = base.settings || {}, ls = local.settings || {}, rs = remote.settings || {};
-    const settings = mergeObj(bs, ls, rs);
-    settings.commentRules = mergeObj(bs.commentRules, ls.commentRules, rs.commentRules);
-    return {
-      ...remote, ...local,
-      v: Math.max(local.v || 0, remote.v || 0),
-      expenses: mergeList(base.expenses, local.expenses, remote.expenses, 'id'),
-      accounts: mergeList(base.accounts, local.accounts, remote.accounts, 'id'),
-      categories: mergeList(base.categories, local.categories, remote.categories, 'name'),
-      fds: mergeList(base.fds || [], local.fds || [], remote.fds || [], 'no'),
-      brokers: mergeObj(base.brokers || {}, local.brokers || {}, remote.brokers || {}),
-      rules: mergeObj(base.rules, local.rules, remote.rules),
-      settings
-    };
+  // The same statement row, SMS or email imported on two devices before either had the other's upload:
+  // one entry is kept (the earlier import, so both devices keep the same one) with the other's comment
+  // and category.
+  function sameAcross(list, b, l, r) {
+    b = b || new Map();
+    const L = new Set(l.map(x => x.id)), R = new Set(r.map(x => x.id)), theirs = new Map();
+    list.forEach(y => { if (!b.has(y.id) && !L.has(y.id)) refsOf(y).forEach(ref => { const k = y.type + '|' + ref; if (!theirs.has(k)) theirs.set(k, y); }); });
+    if (!theirs.size) return list;
+    const drop = new Set(), keep = new Map();
+    list.forEach(x => {
+      if (b.has(x.id) || R.has(x.id) || !L.has(x.id)) return;
+      const y = refsOf(x).map(ref => theirs.get(x.type + '|' + ref)).find(y => y && !drop.has(y.id) && !keep.has(y.id));
+      if (!y) return;
+      const xFirst = (x.createdAt || 0) !== (y.createdAt || 0) ? (x.createdAt || 0) < (y.createdAt || 0) : x.id < y.id;
+      const w = xFirst ? x : y, o = xFirst ? y : x, m = { ...w };
+      if (!m.comment && o.comment) { m.comment = o.comment; delete m.unread; }
+      if (o.userCat && !m.userCat) { m.category = o.category; m.userCat = true; }
+      if (m.group === undefined && o.group !== undefined) m.group = o.group;
+      const refs = [...new Set(refsOf(w).concat(refsOf(o)))].filter(ref => ref !== m.ref);
+      if (refs.length) m.refs = refs;
+      drop.add(o.id); keep.set(w.id, m);
+    });
+    return drop.size ? list.filter(x => !drop.has(x.id)).map(x => keep.get(x.id) || x) : list;
   }
+  function merge3(base, local, remote) {
+    // never synced: settings and categories still as Kharcha starts them give way to iCloud's
+    const B = base || digestOf(defaultState());
+    const ls = local.settings || {}, rs = remote.settings || {};
+    const settings = mergeObj(B.s, ls, rs);
+    // settings holding one value per payee, category or rule (payee names, renamed categories, comment
+    // rules, Gmail…) are merged value by value: what two devices changed at the same time is all kept
+    Object.keys(settings).forEach(k => { if (plainObj(ls[k]) && plainObj(rs[k])) settings[k] = mergeObj((B.x || {})[k], ls[k], rs[k]); });
+    delete settings.syncTag;
+    const out = { ...remote, ...local, v: Math.max(local.v || 0, remote.v || 0), settings };
+    SYNC_LISTS.forEach(([name, k]) => { out[name] = mergeList(B.l[name], local[name] || [], remote[name] || [], k); });
+    SYNC_OBJS.forEach(name => { out[name] = mergeObj(B.o[name], local[name] || {}, remote[name] || {}); });
+    out.expenses = sameAcross(out.expenses, B.l.expenses, local.expenses || [], remote.expenses || []);
+    return out;
+  }
+  // Puts merged data into `state` keeping its objects: code still waiting for an answer (DeepSeek
+  // categorising entries, a Gmail check) holds them, and what it writes must land in the data.
+  function adopt(next) {
+    const into = (cur, nxt) => { if (cur === nxt) return cur; Object.keys(cur).forEach(k => { delete cur[k]; }); return Object.assign(cur, nxt); };
+    SYNC_LISTS.forEach(([name, k]) => {
+      const cur = state[name];
+      if (!Array.isArray(cur) || !Array.isArray(next[name])) return;
+      const old = new Map(cur.map(x => [x && x[k], x]));
+      const items = next[name].map(x => { const o = old.get(x && x[k]); return plainObj(o) && plainObj(x) ? into(o, x) : x; });
+      cur.length = 0; items.forEach(x => cur.push(x));
+      next[name] = cur;
+    });
+    const s = state.settings;
+    if (plainObj(s) && plainObj(next.settings)) {
+      Object.keys(next.settings).forEach(k => { if (plainObj(s[k]) && plainObj(next.settings[k])) next.settings[k] = into(s[k], next.settings[k]); });
+      next.settings = into(s, next.settings);
+    }
+    into(state, next);
+  }
+  function readSync() {
+    try {
+      const j = localStorage.getItem(SYNC_KEY);
+      if (j) { const r = JSON.parse(j, (k, v) => v && Array.isArray(v.$m) ? new Map(v.$m) : v); if (plainObj(r)) return r; }
+    } catch (e) {}
+    // older versions kept all the data as last synced
+    try { const old = JSON.parse(localStorage.getItem(CLOUD_BASE) || 'null'); if (old && Array.isArray(old.expenses)) return { legacy: digestOf(old) }; } catch (e) {}
+    return {};
+  }
+  function writeSync(rec) {
+    try { localStorage.removeItem(CLOUD_BASE); } catch (e) {}
+    try { localStorage.setItem(SYNC_KEY, JSON.stringify(rec, (k, v) => v instanceof Map ? { $m: [...v] } : v)); }
+    catch (e) { try { localStorage.removeItem(SYNC_KEY); } catch (e2) {} }   // no base rather than an old one: the next sync only adds
+  }
+  // the next sync adds both sides together (nothing missing on either side counts as deleted)
+  function forgetSync() { syncQueue = []; try { localStorage.removeItem(SYNC_KEY); localStorage.removeItem(CLOUD_BASE); } catch (e) {} }
+  // After a restore, iCloud gets the restored data as it is (not merged with iCloud's copy, which would
+  // bring back the entries the backup replaced). When this device's own data couldn't be read, the
+  // backup is merged with iCloud's copy instead: iCloud may have newer entries.
+  function restoreSync(unreadable) { if (unreadable) forgetSync(); else writeSync({ n: readSync().n || 0, replace: true }); }
+  let syncQueue = [];   // uploads waiting for the app to say whether iCloud took them
   let cloudInfo = { available: null, at: 0, error: '' };
   function renderCloudStatus() {
     if (!NATIVE) return;
     $('cloudOn').checked = state.settings.cloudOn !== false;
+    $('dataWhere').textContent = state.settings.cloudOn === false ? 'Your data is stored only on this iPhone. Back it up now and then.'
+      : 'Your data is on this iPhone and in your iCloud. Back it up now and then.';
     const when = cloudInfo.at ? new Date(cloudInfo.at * 1000).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' }) : '';
     $('cloudStatus').textContent = state.settings.cloudOn === false ? 'Off — data stays on this iPhone only.'
       : cloudInfo.available === false ? 'Not signed in to iCloud. Open iPhone Settings › your name › iCloud, then come back.'
@@ -4485,35 +4611,59 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
   }
   window.expensesCloudData = (json, available, at) => {
     cloudInfo.available = !!available; cloudInfo.at = at || cloudInfo.at;
-    if (state.settings.cloudOn === false || !available) { renderCloudStatus(); return; }
-    let base = null; try { base = JSON.parse(localStorage.getItem(CLOUD_BASE) || 'null'); } catch (e) {}
+    if (state.settings.cloudOn === false || !available || loadProblem) { renderCloudStatus(); return; }
     let remote = null; try { remote = json ? JSON.parse(json) : null; } catch (e) {}
-    if (loadProblem) { renderCloudStatus(); return; }
-    const before = JSON.stringify(state);
-    let restored = 0;
-    if (remote && Array.isArray(remote.expenses)) {
-      // This device suddenly holds far fewer entries than were last synced (data lost or reset here):
-      // treat iCloud as the safe copy — bring everything back instead of deleting it from iCloud too.
-      const baseN = base && Array.isArray(base.expenses) ? base.expenses.length : 0, localN = state.expenses.length;
-      const wiped = (state.settings.wipedAt || 0) > ((base && base.settings && base.settings.wipedAt) || 0);
-      if (!wiped && baseN > 20 && localN < baseN / 2) { base = null; restored = Math.max(0, remote.expenses.length - localN); }
-      state = migrate(merge3(base, state, migrate(remote)));
-      if (JSON.stringify(state) !== before) { saveLocal(); render(); }
+    remote = remote && Array.isArray(remote.expenses) ? migrate(remote) : null;
+    const rec = readSync(), n = (rec.n || 0) + 1, next = { n };
+    let tag = null;
+    if (remote) {
+      tag = remote.settings.syncTag;
+      tag = Array.isArray(tag) && tag.length && tag.every(x => typeof x === 'string') ? tag : null;
+      let base = null;
+      if (rec.replace) base = digestOf(remote);   // a restored backup replaces iCloud's copy
+      else if (rec.legacy) base = rec.legacy;
+      else {
+        // the newest copy shared with iCloud that iCloud's copy was made from (no tag: an older Kharcha's)
+        const known = [rec.pushed, rec.seen].filter(d => d && d.l && d.s).sort((a, b) => b.n - a.n);
+        base = (tag ? known.find(d => tag.indexOf(d.id) >= 0) : known[0]) || null;
+      }
+      // This device holds far fewer entries than were last synced, and already did when Kharcha opened
+      // (data lost or reset here, not deleted on purpose): treat iCloud as the safe copy — bring
+      // everything back instead of deleting it from iCloud too.
+      const baseN = base && !rec.replace ? base.l.expenses.size : 0;
+      const wiped = !!state.settings.wipedAt && !!base && base.s.get('wipedAt') !== fpr(state.settings.wipedAt);
+      let restored = 0;
+      if (!wiped && baseN > 20 && loadN < baseN / 2) { base = null; restored = Math.max(0, remote.expenses.length - state.expenses.length); }
+      const merged = migrate(merge3(base, state, remote));
+      if (JSON.stringify(merged) !== JSON.stringify(state)) { adopt(merged); saveLocal(); render(); }
       if (restored) toast(`☁️ This iPhone had lost entries — restored ${restored} from iCloud`, 6000);
+      next.seen = digestOf(remote); next.seen.id = tag ? tag[0] : ''; next.seen.n = n;
+      if (rec.pushed && !rec.replace && !rec.legacy) next.pushed = rec.pushed;
     }
-    const merged = JSON.stringify(state);
-    if (!remote || JSON.stringify(migrate(remote)) !== merged) native({ type: 'cloudPush', data: merged });
-    else cloudInfo.error = '';
-    try { localStorage.setItem(CLOUD_BASE, merged); } catch (e) {}
+    loadN = Infinity;
+    const d = digestOf(state);
+    if (!next.seen || !sameDigest(d, next.seen)) {
+      d.id = uid(); d.n = n + 0.5;
+      syncQueue = syncQueue.slice(-9).concat(d);
+      native({ type: 'cloudPush', data: JSON.stringify({ ...state, settings: { ...state.settings, syncTag: [d.id].concat(tag || []).slice(0, 12) } }) });
+    } else cloudInfo.error = '';
+    writeSync(next);
     renderCloudStatus();
   };
   window.expensesCloudPushed = (error, at) => {
+    const d = syncQueue.shift();
     cloudInfo.error = error || ''; if (!error) cloudInfo.at = at || Date.now() / 1000;
+    if (d && !error) {
+      const rec = readSync();
+      if (!rec.replace && !rec.legacy && !(rec.pushed && rec.pushed.n >= d.n)) { rec.pushed = d; writeSync(rec); }
+    }
     renderCloudStatus();
   };
   if (NATIVE) {
     $('cloudOn').addEventListener('change', e => {
       state.settings.cloudOn = e.target.checked; saveLocal();
+      // what changed on either side while sync was off is added together, never taken as deleted
+      forgetSync();
       if (e.target.checked) native({ type: 'cloudPull' });
       renderCloudStatus();
     });
@@ -4796,7 +4946,8 @@ Rules: include only completed transactions — skip OTPs, offers, ads, due/bill 
   window.expensesFolderInfo = (name, msg) => { folderInfo.name = name; folderInfo.msg = msg || ''; renderFolder(); };
   window.expensesFolderFiles = (files, pending, error) => {
     folderInfo.pending = pending || 0; folderInfo.error = error || ''; folderInfo.checked = Date.now(); folderInfo.msg = '';
-    (files || []).forEach(f => { if (!folderQ.some(q => q.key === f.key)) folderQ.push(f); });
+    // nothing can be saved until the data is restored: leave the files to be imported then
+    if (!loadProblem) (files || []).forEach(f => { if (!folderQ.some(q => q.key === f.key)) folderQ.push(f); });
     renderFolder();
     runFolderQueue();
   };
