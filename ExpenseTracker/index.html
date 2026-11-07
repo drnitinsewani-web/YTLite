@@ -386,7 +386,7 @@
   <!-- Summary view -->
   <section id="view-summary" class="hidden">
     <div class="card hidden" id="needsCard">
-      <h2>📋 Statements to add</h2>
+      <h2>📋 To complete your records</h2>
       <div class="sub" style="margin-bottom:6px">Kharcha checks your records and asks for the statements that would complete them. Import one with 📥, or save it in your statement folder.</div>
       <div id="needsList"></div>
     </div>
@@ -884,9 +884,11 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
   const catsFor = type => state.categories.filter(c => c.kind === type || c.kind === 'both');
   // Groups ("Hospital", "Personal"…): set on a category, optionally overridden on one transaction
   // (e.group: a name, or '' for "no group").
-  const groupOf = e => e.group !== undefined ? e.group : (catOf(e.category).group || '');
+  // a transaction's own group, else its account's (a business account), else its category's
+  const acctGroup = e => { const a = e.account && acctById(e.account); return (a && a.business && a.business.group) || ''; };
+  const groupOf = e => e.group !== undefined ? e.group : (acctGroup(e) || catOf(e.category).group || '');
   const GROUP_SUGGEST = ['Personal', 'Hospital'];
-  const allGroups = () => [...new Set(state.categories.map(c => c.group).concat(state.expenses.map(e => e.group)).filter(Boolean))]
+  const allGroups = () => [...new Set(state.categories.map(c => c.group).concat(state.expenses.map(e => e.group), (state.accounts || []).map(a => a.business && a.business.group)).filter(Boolean))]
     .sort((a, b) => a.localeCompare(b));
   const counted = e => !catOf(e.category).exclude;
   let acctFilter = '';
@@ -1765,6 +1767,31 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
   }
   const brokerCheck = key => { brokerMemo.stamp = -1; return brokerMatches().byBroker[key] || { matched: 0, total: 0, missingInBank: [], missingInLedger: [] }; };
 
+  // ---------- business accounts: e.g. a clinic's current account ----------
+  // A statement in another name that looks like a business ("NIDAAN DIAGNOSTIC", a current account)
+  // is offered as a business account: its entries go to a group (Hospital) and its money coming in
+  // to an income category (Clinic income) — now and in future imports. Never changes entries you set.
+  const BUSINESS_RE = /diagnostic|clinic|hospital|medical|nursing|pharma|\blabs?\b|laboratory|enterprises?|traders?|industries|\bpvt\b|private|limited|\bltd\b|\bllp\b|stores?|agenc(y|ies)|services|solutions|associates|\bco\b|centre|center/i;
+  const MEDICAL_RE = /diagnostic|clinic|hospital|medical|nursing|pharma|\blabs?\b|laboratory|dental|health/i;
+  function businessPlan(a) {
+    const med = MEDICAL_RE.test(a.holder || '');
+    const groups = allGroups(), want = med ? 'Hospital' : 'Business';
+    return { group: groups.find(g => g.toLowerCase() === want.toLowerCase()) || want,
+      incomeCat: med ? 'Clinic income' : 'Business income', emoji: med ? '🏥' : '💼' };
+  }
+  const isBusinessIncome = (e, a) => e.type === 'credit' && !e.userCat && !e.autoXfer && e.category === 'Other Income' && !!(a && a.business);
+  function setupBusiness(id, plan) {
+    const a = acctById(id); if (!a) return;
+    let c = state.categories.find(x => x.name.toLowerCase() === plan.incomeCat.toLowerCase());
+    if (!c) { c = { emoji: plan.emoji, name: plan.incomeCat, kind: 'credit', group: plan.group }; state.categories.push(c); }
+    else if (!c.group) c.group = plan.group;
+    a.business = { group: plan.group, incomeCat: c.name };
+    let n = 0, amt = 0;
+    state.expenses.forEach(e => { if (e.account === a.id && isBusinessIncome(e, a)) { e.category = c.name; n++; amt += e.amount; } });
+    save(); render();
+    toast(`💼 ${acctLabel(a)} is now a business account (${plan.group})${n ? ` · ${n} collections (${fmt(amt)}) → ${c.name}` : ''}`, 6000);
+  }
+
   // ---------- statements to add: what would complete your records ----------
   // A bank-statement row's reference starts with its date ("2026-04-01|debit|…"); SMS, PhonePe/GPay,
   // Gmail and DeepSeek entries carry their own prefixes. So per account we know which period a real
@@ -1840,7 +1867,16 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
         why: `${fmt(e.amount)} went into a fixed deposit on ${shortD(e.date)}. Its advice adds the rate, maturity date and amount.`,
         how: 'The FD advice / receipt PDF from the bank (net banking → Deposits, or the bank’s email).', from: e.date, to: e.date });
     });
-    // 4. UPI app statements that are getting old
+    // 4. a statement in another name that looks like a business account
+    (state.accounts || []).forEach(a => {
+      if (!a.holder || a.business || isSelf(a.holder)) return;
+      if (!BUSINESS_RE.test(a.holder)) return;
+      const plan = businessPlan(a), ins = state.expenses.filter(e => e.account === a.id && e.type === 'credit' && e.category === 'Other Income' && !e.userCat);
+      add({ id: `biz:${a.id}`, prio: 8, icon: '💼', title: `${acctName(a)} ••${(a.digits || [])[0] || ''}: business account?`, action: 'business', acct: a.id, plan,
+        why: `Its statements are in the name of ${a.holder}. Put everything in it in the “${plan.group}” group, and file the money coming in${ins.length ? ` (${ins.length} credits, ${fmt(sum(ins))})` : ''} as “${plan.emoji} ${plan.incomeCat}” — now and in future statements.`,
+        how: 'You can change this later: Settings › Accounts.' });
+    });
+    // 5. UPI app statements that are getting old
     [['phonepe', 'PhonePe', 'PhonePe → History → Download statement'], ['gpay', 'Google Pay', 'Google Pay → your profile → Statement (or Google Pay on the web)']].forEach(([k, name, how]) => {
       const its = state.expenses.filter(e => fromApp(e, k)); if (!its.length) return;
       const last = its.reduce((x, e) => e.date > x ? e.date : x, '');
@@ -1856,17 +1892,21 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     const needs = needsMemo.needs;
     $('needsCard').classList.toggle('hidden', !needs.length);
     $('needsBanner').classList.toggle('hidden', !needs.length);
-    $('needsBanner').innerHTML = needs.length ? `📋 <b>${needs.length} statement${needs.length > 1 ? 's' : ''}</b> would complete your records: ${esc(needs[0].title)}${needs.length > 1 ? ' and more' : ''} ›` : '';
+    $('needsBanner').innerHTML = needs.length ? `📋 <b>${needs.length} thing${needs.length > 1 ? 's' : ''}</b> would complete your records: ${esc(needs[0].title)}${needs.length > 1 ? ' and more' : ''} ›` : '';
     $('needsList').innerHTML = needs.map(n => `<div class="rec" style="display:block">
         <div>${esc(n.icon)} <b>${esc(n.title)}</b>${n.from ? ` <small style="display:inline">· ${esc(shortD(n.from))}${n.to && n.to !== n.from ? ' – ' + esc(shortD(n.to)) : ''}</small>` : ''}</div>
         <div style="font-size:13px;margin-top:3px">${esc(n.why)}</div>
-        <div class="sub" style="margin:3px 0 0">Where: ${esc(n.how)}</div>
-        <div style="margin-top:6px"><button type="button" class="chip" data-needimport="1">📥 Import it</button> <button type="button" class="chip" data-needdismiss="${esc(n.id)}">Not needed</button></div>
+        <div class="sub" style="margin:3px 0 0">${n.action ? '' : 'Where: '}${esc(n.how)}</div>
+        <div style="margin-top:6px">${n.action === 'business'
+          ? `<button type="button" class="chip sel" data-bizsetup="${esc(n.acct)}">💼 Set up</button> <button type="button" class="chip" data-needdismiss="${esc(n.id)}">Not a business</button>`
+          : `<button type="button" class="chip" data-needimport="1">📥 Import it</button> <button type="button" class="chip" data-needdismiss="${esc(n.id)}">Not needed</button>`}</div>
       </div>`).join('');
   }
   $('needsBanner').addEventListener('click', () => { view = 'summary'; syncNav(); render(); setTimeout(() => $('needsCard').scrollIntoView({ behavior: 'smooth', block: 'start' }), 50); });
   $('needsList').addEventListener('click', e => {
     if (e.target.closest('[data-needimport]')) { $('importFile').click(); return; }
+    const bz = e.target.closest('[data-bizsetup]');
+    if (bz) { const a = acctById(bz.dataset.bizsetup); if (a) setupBusiness(a.id, businessPlan(a)); return; }
     const d = e.target.closest('[data-needdismiss]'); if (!d) return;
     state.settings.dismissedNeeds = { ...(state.settings.dismissedNeeds || {}), [d.dataset.needdismiss]: Date.now() };
     save(); render(); toast('Hidden. It comes back if something new needs it.');
@@ -1962,6 +2002,16 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
   }
   let selfRe = [];
   const isSelf = desc => { const d = String(desc).toUpperCase(); return selfRe.some(r => r.test(d)); };
+  // The account holder printed on a statement, including an unlabelled first line such as
+  // "NIDAAN DIAGNOSTIC | Union Bank of India". Kept per account; never used as "your own name".
+  function statementHolder(rows, headerIdx) {
+    const h = detectHolderName(rows, headerIdx); if (h) return h;
+    for (const r of rows.slice(0, Math.min(5, Math.max(0, headerIdx)))) {
+      const t = (r || []).map(c => String(c ?? '').replace(/\s+/g, ' ').trim()).filter(Boolean);
+      if (t.length >= 2 && /^[A-Za-z][A-Za-z .&'()-]{3,60}$/.test(t[0]) && !/statement|account|branch|address|customer|bank/i.test(t[0]) && bankFromText(t.slice(1).join(' '))) return t[0];
+    }
+    return '';
+  }
   function detectHolderName(rows, headerIdx) {
     const top = rows.slice(0, Math.max(0, headerIdx));
     const clean = v => String(v).replace(/\s+/g, ' ').trim();
@@ -2261,7 +2311,7 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     $('autoAdd').checked = !!state.settings.autoAddShared;
     const accts = state.accounts || [];
     $('acctChips').innerHTML = accts.length ? accts.map(a =>
-      `<span class="chip" data-editacct="${esc(a.id)}" role="button">${esc(a.emoji || '🏦')} ${esc(acctName(a))}${a.nick && a.nick !== a.name ? ` <small>${esc(a.name)}</small>` : ''} <small>••${esc(a.digits.join(', ••'))}${a.bal ? ' · ' + esc(fmt(a.bal.amount)) + ' (' + esc(new Date(a.bal.date + 'T00:00').toLocaleDateString(undefined, { day: 'numeric', month: 'short' })) + ')' : ''}</small><span class="x" data-delacct="${esc(a.id)}" role="button" aria-label="Remove">✕</span></span>`).join('')
+      `<span class="chip" data-editacct="${esc(a.id)}" role="button">${esc(a.emoji || '🏦')} ${esc(acctName(a))}${a.business ? ` <small>💼 ${esc(a.business.group)}</small>` : ''}${a.nick && a.nick !== a.name ? ` <small>${esc(a.name)}</small>` : ''} <small>••${esc(a.digits.join(', ••'))}${a.bal ? ' · ' + esc(fmt(a.bal.amount)) + ' (' + esc(new Date(a.bal.date + 'T00:00').toLocaleDateString(undefined, { day: 'numeric', month: 'short' })) + ')' : ''}</small><span class="x" data-delacct="${esc(a.id)}" role="button" aria-label="Remove">✕</span></span>`).join('')
       : '<span class="sub" style="margin:0">No accounts yet.</span>';
     const used = {}; state.expenses.forEach(e => { used[e.category] = (used[e.category] || 0) + 1; });
     const chip = (c, i) => `<button type="button" class="chip" data-editcat="${i}">${esc(c.emoji)} ${esc(c.name)}${c.kind === 'both' ? ' <small>±</small>' : ''}${c.group ? ` <small>· ${esc(c.group)}</small>` : ''}${c.exclude ? ' <small>not counted</small>' : ''} <small>${used[c.name] || 0}</small></button>`;
@@ -2876,7 +2926,11 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
   }
   // How far each account's bank statements reach (a.stmtTo), recorded when a statement is imported
   function coverItems(list) {
-    list.forEach(x => { const a = x.stmtTo && x.account && acctById(x.account); if (a && (!a.stmtTo || x.stmtTo > a.stmtTo)) a.stmtTo = x.stmtTo; });
+    list.forEach(x => {
+      const a = x.stmtTo && x.account && acctById(x.account); if (!a) return;
+      if (!a.stmtTo || x.stmtTo > a.stmtTo) a.stmtTo = x.stmtTo;
+      if (x.holder && !a.holder) a.holder = x.holder.slice(0, 60);   // whose account it is (a business, family…)
+    });
   }
   function buildItems() {
     const { map } = imp;
@@ -2896,7 +2950,7 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
         const ref = refOf(date, type, amount, desc);
         items.push({ date, desc, type, amount, ref, payment: 'Bank', category: classify(desc, type), touched: false, balance, seq: seq++,
           account: imp.stmtAcct.id, acctDigits: imp.stmtAcct.digits, acctBank: imp.stmtAcct.bank, acctKind: imp.stmtAcct.kind,
-          bankSure: !!imp.stmtAcct.bank });   // the statement names its own bank
+          bankSure: !!imp.stmtAcct.bank, holder: imp.holder || '' });   // the statement names its own bank
       };
       if (map.debit >= 0 || map.credit >= 0) {
         const d = Math.abs(parseAmount(cell(r, map.debit))) || 0;
@@ -3108,6 +3162,7 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
       imp.sign = anyNeg ? 'neg-debit' : 'pos-debit';
     } else imp.sign = 'neg-debit';
     const holder = detectHolderName(rows, imp.header);
+    imp.holder = statementHolder(rows, imp.header);
     if (holder && !state.settings.selfName) { state.settings.selfName = holder; save(); }
     selfRe = selfPatterns();
   }
@@ -3362,6 +3417,7 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
       ...(x.app ? { app: x.app } : {}),
       ...(x.comment ? { comment: x.comment } : needsReview(x) ? { unread: true } : {})
     }));
+    add.forEach(e => { const a = acctById(e.account); if (isBusinessIncome(e, a)) e.category = a.business.incomeCat; });
     const autoCommented = add.filter(applyCommentRule).length;
     if (autoCommented) label = (label || `Imported ${add.length} transactions`) + ` · ${autoCommented} commented automatically`;
     updateBalances(items);
@@ -3473,6 +3529,13 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
       const nick = prompt(`Short name for ${a.name} ••${a.digits.join('/')}\n(e.g. Salary, Joint, Savings, Dad) — shown everywhere instead of the bank name. Leave empty to show the bank name.`, a.nick || '');
       if (nick === null) return;
       a.nick = nick.trim().slice(0, 24);
+      if (a.business || (a.holder && !isSelf(a.holder))) {
+        const g = prompt(`Group for everything in this account (e.g. Hospital) — leave empty if it's not a business account${a.holder ? ' (statement name: ' + a.holder + ')' : ''}`, a.business ? a.business.group : '');
+        if (g === null) { done(); return; }
+        if (!g.trim()) delete a.business;
+        else if (!a.business) { done(); setupBusiness(a.id, { ...businessPlan(a), group: g.trim().slice(0, 24) }); return; }
+        else a.business.group = g.trim().slice(0, 24);
+      }
       if (!confirm('Also edit the bank name, account digits or balance-enquiry number?')) { done(); return; }
       const name = prompt('Bank / full account name (used to recognise the bank)', a.name);
       if (name === null) { done(); return; }
