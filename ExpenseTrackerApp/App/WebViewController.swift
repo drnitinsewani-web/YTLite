@@ -138,12 +138,21 @@ final class WebViewController: UIViewController, WKScriptMessageHandler, WKUIDel
         case "save":
             if let data = body["data"] as? String { StateStore.save(data) }
         case "ready":
+            if let v = body["parser"] as? Int { FolderSync.shared.setParserVersion(v) }
             jsReady = true
             deliverSharedTexts()
             sendCloudData()
             sendFolderInfo()
             folderRetries = 0
             checkFolder()
+        case "backups":
+            let list = (try? JSONSerialization.data(withJSONObject: StateStore.backups())).flatMap { String(data: $0, encoding: .utf8) } ?? "[]"
+            webView.evaluateJavaScript("window.expensesBackups && window.expensesBackups(\(list))")
+        case "backupRead":
+            let name = (body["name"] as? String) ?? ""
+            StateStore.snapshotBeforeRestore()
+            let text = StateStore.readBackup(name).map { jsString($0) } ?? "null"
+            webView.evaluateJavaScript("window.expensesBackupData && window.expensesBackupData(\(jsString(name)), \(text))")
         case "folderPick":
             pickFolder()
         case "folderCheck":

@@ -545,6 +545,10 @@
     <div class="card">
       <h2>Data</h2>
       <div class="sub">Your data is stored only on this device. Back it up now and then.</div>
+      <div class="native-only">
+        <button class="btn ghost" id="autoBackups">🛟 Automatic backups</button>
+        <div class="sub hidden" id="backupList" style="margin-top:8px"></div>
+      </div>
       <button class="btn ghost" id="exportCsv">Export CSV</button>
       <button class="btn ghost" id="backup">Back up (JSON)</button>
       <button class="btn ghost" id="restoreBtn">Restore from backup</button>
@@ -815,16 +819,20 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     dropLabelRules(s);
     return s;
   }
+  // If saved data exists but can't be read, Kharcha must not start empty and save that emptiness over
+  // it (or sync it to iCloud): `loadProblem` stops all saving until the data is restored.
+  let loadProblem = '';
   function load() {
     if (NATIVE && window.__EXPENSES_NATIVE_STATE__) {
       try {
         const s = JSON.parse(window.__EXPENSES_NATIVE_STATE__);
         if (s && Array.isArray(s.expenses)) return migrate(s);
-      } catch (e) {}
+        loadProblem = 'unexpected format';
+      } catch (e) { loadProblem = String((e && e.message) || e); }
     }
     try {
       const s = JSON.parse(localStorage.getItem(KEY));
-      if (s && Array.isArray(s.expenses)) return migrate(s);
+      if (s && Array.isArray(s.expenses)) { if (loadProblem) loadProblem = ''; return migrate(s); }   // this device's own copy
     } catch (e) {}
     return defaultState();
   }
@@ -832,6 +840,7 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
   let dataStamp = 0;
   function saveLocal() {
     dataStamp++;
+    if (loadProblem) return;   // never overwrite data that couldn't be read
     const json = JSON.stringify(state);
     if (NATIVE) native({ type: 'save', data: json });
     try { localStorage.setItem(KEY, json); }
@@ -3234,6 +3243,29 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
   });
   $('backup').addEventListener('click', () =>
     download(`expenses-backup-${isoDate(new Date())}.json`, JSON.stringify({ ...state, settings: { ...state.settings, ai: undefined } }, null, 2), 'application/json'));
+  // Automatic backups kept by the iPhone app (daily, and before any save that halves the data)
+  $('autoBackups').addEventListener('click', () => { $('backupList').classList.remove('hidden'); $('backupList').textContent = 'Loading…'; native({ type: 'backups' }); });
+  window.expensesBackups = list => {
+    const el = $('backupList');
+    if (!list || !list.length) { el.textContent = 'No automatic backups yet: the first one is made the next time something changes.'; return; }
+    el.innerHTML = 'Tap one to restore it (your current data is backed up first):<br>' + list.map(b => {
+      const when = new Date(b.at * 1000).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' });
+      return `<button class="chip" data-backup="${esc(b.name)}" style="margin:4px 4px 0 0">${/^before-shrink/.test(b.name) ? '⚠︎ before data shrank' : /^before-restore/.test(b.name) ? '↩︎ before a restore' : '📅 daily'} · ${esc(when)} · ${b.entries >= 0 ? b.entries + ' entries' : 'unreadable'}</button>`;
+    }).join('');
+  };
+  $('backupList').addEventListener('click', e => {
+    const b = e.target.closest('[data-backup]'); if (!b) return;
+    if (!confirm('Restore this backup? Entries added since then will be replaced.')) return;
+    native({ type: 'backupRead', name: b.dataset.backup });
+  });
+  window.expensesBackupData = (name, json) => {
+    let s = null; try { s = JSON.parse(json); } catch (e) {}
+    if (!s || !Array.isArray(s.expenses)) { toast('That backup couldn’t be read'); return; }
+    state = migrate(s); loadProblem = '';
+    try { localStorage.removeItem(CLOUD_BASE); } catch (e) {}   // next iCloud sync merges instead of deleting
+    save(); render(); renderSettings();
+    toast(`Restored ${state.expenses.length} entries from the backup`, 5000);
+  };
   $('restoreBtn').addEventListener('click', () => $('restoreFile').click());
   $('restoreFile').addEventListener('change', async e => {
     const f = e.target.files[0]; if (!f) return;
@@ -3241,21 +3273,24 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
       const data = JSON.parse(await f.text());
       if (!Array.isArray(data.expenses)) throw new Error('bad file');
       const valid = data.expenses.filter(x => x && typeof x.amount === 'number' && /^\d{4}-\d{2}-\d{2}$/.test(x.date))
-        .map(x => ({ id: String(x.id || uid()), createdAt: +x.createdAt || Date.now(), type: x.type === 'credit' ? 'credit' : 'debit',
+        .map(x => ({ ...x, id: String(x.id || uid()), createdAt: +x.createdAt || Date.now(), type: x.type === 'credit' ? 'credit' : 'debit',
           amount: x.amount, category: String(x.category || 'Other'), date: x.date, note: String(x.note || ''),
           payment: String(x.payment || ''), ...(x.ref ? { ref: String(x.ref) } : {}), ...(x.account ? { account: String(x.account) } : {}),
           ...(typeof x.balance === 'number' ? { balance: x.balance } : {}),
           ...(Array.isArray(x.refs) ? { refs: x.refs.map(String) } : {}),
           ...(x.comment ? { comment: String(x.comment) } : {}), ...(x.unread ? { unread: true } : {}) }));
       if (!confirm(`Replace current data with ${valid.length} transactions from backup?`)) return;
-      state = migrate({ ...data, expenses: valid });
+      state = migrate({ ...data, expenses: valid }); loadProblem = '';
+      try { localStorage.removeItem(CLOUD_BASE); } catch (e) {}   // next iCloud sync merges instead of deleting
       save(); $('currency').innerHTML = ''; render(); toast('Restored');
     } catch (err) { toast('Not a valid backup file'); }
     e.target.value = '';
   });
   $('wipe').addEventListener('click', () => {
     if (!confirm('Delete ALL transactions, rules and settings? This cannot be undone.')) return;
-    state = defaultState(); save(); $('currency').innerHTML = ''; render(); toast('All data deleted');
+    // marked so the iCloud safety net knows this emptiness is on purpose and syncs it
+    state = defaultState(); state.settings.wipedAt = Date.now(); loadProblem = '';
+    save(); $('currency').innerHTML = ''; render(); toast('All data deleted');
   });
 
   selfRe = selfPatterns();
@@ -3482,10 +3517,18 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     if (state.settings.cloudOn === false || !available) { renderCloudStatus(); return; }
     let base = null; try { base = JSON.parse(localStorage.getItem(CLOUD_BASE) || 'null'); } catch (e) {}
     let remote = null; try { remote = json ? JSON.parse(json) : null; } catch (e) {}
+    if (loadProblem) { renderCloudStatus(); return; }
     const before = JSON.stringify(state);
+    let restored = 0;
     if (remote && Array.isArray(remote.expenses)) {
+      // This device suddenly holds far fewer entries than were last synced (data lost or reset here):
+      // treat iCloud as the safe copy — bring everything back instead of deleting it from iCloud too.
+      const baseN = base && Array.isArray(base.expenses) ? base.expenses.length : 0, localN = state.expenses.length;
+      const wiped = (state.settings.wipedAt || 0) > ((base && base.settings && base.settings.wipedAt) || 0);
+      if (!wiped && baseN > 20 && localN < baseN / 2) { base = null; restored = Math.max(0, remote.expenses.length - localN); }
       state = migrate(merge3(base, state, migrate(remote)));
       if (JSON.stringify(state) !== before) { saveLocal(); render(); }
+      if (restored) toast(`☁️ This iPhone had lost entries — restored ${restored} from iCloud`, 6000);
     }
     const merged = JSON.stringify(state);
     if (!remote || JSON.stringify(migrate(remote)) !== merged) native({ type: 'cloudPush', data: merged });
@@ -3893,7 +3936,10 @@ Rules: include only completed transactions — skip OTPs, offers, ads, due/bill 
   if (!NATIVE) document.querySelectorAll('.native-only').forEach(el => el.classList.add('hidden'));
   $('autoAdd').checked = !!state.settings.autoAddShared;
   $('autoAdd').addEventListener('change', e => { state.settings.autoAddShared = e.target.checked; save(); toast(e.target.checked ? 'Messages will be added automatically' : 'Messages will wait for your review'); });
-  if (NATIVE) native({ type: 'ready' });
+  // bump when Kharcha learns a new kind of file, so the statement folder is looked at again
+  const PARSER_VERSION = 4;   // 4: FD advices
+  if (NATIVE) native({ type: 'ready', parser: PARSER_VERSION });
+  if (loadProblem) toast('⚠︎ Kharcha couldn’t read its saved data, so nothing will be saved until it is restored. Settings › Data › Automatic backups.', 10000);
   const autoMail = () => {
     const m = state.settings.mail;
     if (m && m.url && Date.now() - (m.checked || 0) > 36e5 && !$('impSheet').classList.contains('open')) checkMail(true);

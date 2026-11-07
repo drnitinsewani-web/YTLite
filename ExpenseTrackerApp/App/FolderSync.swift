@@ -27,6 +27,16 @@ final class FolderSync {
         return true
     }
 
+    /// When Kharcha learns to read a new kind of file, every file in the folder is looked at again
+    /// once (statements already imported are recognised as duplicates and skipped).
+    func setParserVersion(_ v: Int) {
+        let key = "statementFolderParser"
+        if defaults.integer(forKey: key) != v {
+            defaults.removeObject(forKey: seenKey)
+            defaults.set(v, forKey: key)
+        }
+    }
+
     func clear() {
         defaults.removeObject(forKey: bookmarkKey)
         defaults.removeObject(forKey: seenKey)
