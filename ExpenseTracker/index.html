@@ -476,6 +476,13 @@
       </div>
       <button class="btn ghost" id="addCat">Add category</button>
     </div>
+    <div class="card native-only">
+      <h2>☁️ iCloud sync</h2>
+      <div class="sub" id="cloudStatus">Checking iCloud…</div>
+      <label class="mchk" style="margin-top:12px"><input type="checkbox" id="cloudOn"><span>Sync with iCloud (private to your Apple ID)</span></label>
+      <button class="btn ghost" id="cloudNow">↻ Sync now</button>
+      <div class="sub">Uses the Apple ID this iPhone is signed in to — no extra sign-in. Your data is kept in your private iCloud and appears on your other iPhone/iPad with Kharcha. Changes made on different devices are merged.</div>
+    </div>
     <div class="card">
       <h2>Data</h2>
       <div class="sub">Your data is stored only on this device. Back it up now and then.</div>
@@ -722,11 +729,20 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     return defaultState();
   }
   let state = load();
-  function save() {
+  function saveLocal() {
     const json = JSON.stringify(state);
     if (NATIVE) native({ type: 'save', data: json });
     try { localStorage.setItem(KEY, json); }
     catch (e) { if (!NATIVE) toast('Could not save — storage full or unavailable'); }
+  }
+  let cloudTimer = null;
+  function save() {
+    saveLocal();
+    // iOS app: after a change, fetch the iCloud copy, merge, then upload (see expensesCloudData)
+    if (NATIVE && state.settings.cloudOn !== false) {
+      clearTimeout(cloudTimer);
+      cloudTimer = setTimeout(() => native({ type: 'cloudPull' }), 1200);
+    }
   }
 
   let current = new Date(); current.setDate(1);
@@ -1261,6 +1277,7 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     $('reviewMin').value = reviewMin();
     $('selfName').value = state.settings.selfName || '';
     renderMailStatus();
+    renderCloudStatus();
     $('autoAdd').checked = !!state.settings.autoAddShared;
     const accts = state.accounts || [];
     $('acctChips').innerHTML = accts.length ? accts.map(a =>
@@ -2347,6 +2364,82 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     try { await navigator.clipboard.writeText(script); toast('Script copied. Paste it in script.google.com'); }
     catch (e) { download('expenses-gmail-bridge.gs.txt', script, 'text/plain'); }
   });
+
+  // ---------- iCloud sync (iOS app) ----------
+  // Three-way merge: what this device last synced (base), this device now (local), iCloud now (remote).
+  // Local additions/edits win; remote additions/edits are kept; deletions on either side are applied
+  // unless the other side changed that item meanwhile.
+  const CLOUD_BASE = KEY + ':cloudBase';
+  const sameJ = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+  function mergeList(b = [], l = [], r = [], k) {
+    const B = new Map(b.map(x => [x[k], x])), L = new Map(l.map(x => [x[k], x])), R = new Map(r.map(x => [x[k], x]));
+    const out = new Map(R);
+    L.forEach((v, id) => { if (!B.has(id) || !sameJ(v, B.get(id))) out.set(id, v); });
+    B.forEach((v, id) => { if (!L.has(id) && (!R.has(id) || sameJ(R.get(id), v))) out.delete(id); });
+    // keep this device's order, then anything new from iCloud
+    const ordered = l.filter(x => out.has(x[k])).map(x => out.get(x[k]));
+    out.forEach((v, id) => { if (!L.has(id)) ordered.push(v); });
+    return ordered;
+  }
+  function mergeObj(b = {}, l = {}, r = {}) {
+    const out = { ...r };
+    Object.keys(l).forEach(k => { if (!(k in b) || !sameJ(l[k], b[k])) out[k] = l[k]; });
+    Object.keys(b).forEach(k => { if (!(k in l) && (!(k in r) || sameJ(r[k], b[k]))) delete out[k]; });
+    return out;
+  }
+  function merge3(base, local, remote) {
+    base = base || {};
+    const bs = base.settings || {}, ls = local.settings || {}, rs = remote.settings || {};
+    const settings = mergeObj(bs, ls, rs);
+    settings.commentRules = mergeObj(bs.commentRules, ls.commentRules, rs.commentRules);
+    return {
+      ...remote, ...local,
+      v: Math.max(local.v || 0, remote.v || 0),
+      expenses: mergeList(base.expenses, local.expenses, remote.expenses, 'id'),
+      accounts: mergeList(base.accounts, local.accounts, remote.accounts, 'id'),
+      categories: mergeList(base.categories, local.categories, remote.categories, 'name'),
+      rules: mergeObj(base.rules, local.rules, remote.rules),
+      settings
+    };
+  }
+  let cloudInfo = { available: null, at: 0, error: '' };
+  function renderCloudStatus() {
+    if (!NATIVE) return;
+    $('cloudOn').checked = state.settings.cloudOn !== false;
+    const when = cloudInfo.at ? new Date(cloudInfo.at * 1000).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' }) : '';
+    $('cloudStatus').textContent = state.settings.cloudOn === false ? 'Off — data stays on this iPhone only.'
+      : cloudInfo.available === false ? 'Not signed in to iCloud. Open iPhone Settings › your name › iCloud, then come back.'
+      : cloudInfo.error ? '⚠︎ ' + cloudInfo.error
+      : cloudInfo.at ? `✓ Synced · ${when}` : 'Waiting for iCloud…';
+  }
+  window.expensesCloudData = (json, available, at) => {
+    cloudInfo.available = !!available; cloudInfo.at = at || cloudInfo.at;
+    if (state.settings.cloudOn === false || !available) { renderCloudStatus(); return; }
+    let base = null; try { base = JSON.parse(localStorage.getItem(CLOUD_BASE) || 'null'); } catch (e) {}
+    let remote = null; try { remote = json ? JSON.parse(json) : null; } catch (e) {}
+    const before = JSON.stringify(state);
+    if (remote && Array.isArray(remote.expenses)) {
+      state = migrate(merge3(base, state, migrate(remote)));
+      if (JSON.stringify(state) !== before) { saveLocal(); render(); }
+    }
+    const merged = JSON.stringify(state);
+    if (!remote || JSON.stringify(migrate(remote)) !== merged) native({ type: 'cloudPush', data: merged });
+    else cloudInfo.error = '';
+    try { localStorage.setItem(CLOUD_BASE, merged); } catch (e) {}
+    renderCloudStatus();
+  };
+  window.expensesCloudPushed = (error, at) => {
+    cloudInfo.error = error || ''; if (!error) cloudInfo.at = at || Date.now() / 1000;
+    renderCloudStatus();
+  };
+  if (NATIVE) {
+    $('cloudOn').addEventListener('change', e => {
+      state.settings.cloudOn = e.target.checked; saveLocal();
+      if (e.target.checked) native({ type: 'cloudPull' });
+      renderCloudStatus();
+    });
+    $('cloudNow').addEventListener('click', () => { cloudInfo.error = ''; $('cloudStatus').textContent = 'Syncing…'; native({ type: 'cloudPull' }); });
+  }
 
   // Statement file shared into the iOS app (Mail / Files / WhatsApp → Share → Kharcha).
   window.expensesReceiveFile = (name, b64) => {

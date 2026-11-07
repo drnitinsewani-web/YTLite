@@ -31,6 +31,16 @@ final class WebViewController: UIViewController, WKScriptMessageHandler, WKUIDel
         load()
         NotificationCenter.default.addObserver(self, selector: #selector(appDidBecomeActive),
                                                name: UIApplication.didBecomeActiveNotification, object: nil)
+        CloudSync.shared.onRemoteChange = { [weak self] in self?.sendCloudData() }
+        CloudSync.shared.start()
+    }
+
+    /// Hands the iCloud copy to the web app, which merges it with the data on this device.
+    private func sendCloudData() {
+        guard jsReady else { return }
+        let cloud = CloudSync.shared
+        let json = cloud.read().map { jsString($0) } ?? "null"
+        webView.evaluateJavaScript("window.expensesCloudData && window.expensesCloudData(\(json), \(cloud.isAvailable), \(cloud.lastWrite))")
     }
 
     private func load() {
@@ -46,7 +56,10 @@ final class WebViewController: UIViewController, WKScriptMessageHandler, WKUIDel
         controller.addUserScript(WKUserScript(source: source, injectionTime: .atDocumentStart, forMainFrameOnly: true))
     }
 
-    @objc private func appDidBecomeActive() { deliverSharedTexts() }
+    @objc private func appDidBecomeActive() {
+        deliverSharedTexts()
+        sendCloudData()
+    }
 
     private func deliverSharedTexts() {
         guard jsReady else { return }
@@ -71,6 +84,13 @@ final class WebViewController: UIViewController, WKScriptMessageHandler, WKUIDel
         case "ready":
             jsReady = true
             deliverSharedTexts()
+            sendCloudData()
+        case "cloudPull":
+            sendCloudData()
+        case "cloudPush":
+            let error = (body["data"] as? String).flatMap { CloudSync.shared.write($0) }
+            let arg = error.map { jsString($0) } ?? "null"
+            webView.evaluateJavaScript("window.expensesCloudPushed && window.expensesCloudPushed(\(arg), \(CloudSync.shared.lastWrite))")
         case "export":
             let name = (body["name"] as? String) ?? "export.txt"
             let text = (body["text"] as? String) ?? ""

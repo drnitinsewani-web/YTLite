@@ -47,6 +47,7 @@ targets:
       path: Config/Expenses.entitlements
       properties:
         com.apple.security.application-groups: [$(APP_GROUP_ID)]
+        com.apple.developer.ubiquity-kvstore-identifier: $(TeamIdentifierPrefix)$(CFBundleIdentifier)
     dependencies:
       - target: ExpensesShare
     scheme: {}
