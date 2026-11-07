@@ -788,8 +788,12 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     // itself (made, matured, closed) is an investment
     ['Fees & Charges', /\btds\b/],
     ['Interest', /^(?!.*\b(matur|mat\b|clos|clsd|proceed|proc\b|princ|prin\b|redee?m|repay|premat|renew))(?=.*\b(fd|fixed deposit|term deposit|s?tdr?|rd|recurring deposit)\b).*\b(interest|int)\b/],
-    ['Investment', /indian cle\b|paytm ?money|\bmf\d*@|\.mf\d*\b|mutual ?fund|safe ?gold|digital gold|augmont|mmtc|jar app|eq trade|upstox|zerodha|groww|angel ?one|angel broking|icici ?sec|icicidirect|hdfc ?sec|kotak ?sec|5paisa|\bdhan\b|paytm money|indmoney|kuvera|smallcase|mutual fund|\bmf\b|\bsip\b|bse limited|bse star|nse clearing|indian clearing|\bfd\b|fixed deposit|fd booking|rd instal|recurring deposit|\bppf\b|\bnps\b|sukanya|vanguard|fidelity|schwab|robinhood|brokerage|term deposit|\bs?tdr\b|\bamc (ltd|limited)\b|asset manag|\bcams\b|kfin|karvy|ppfas|parag parikh/],
-    ['Fees & Charges', /mtf inte|mtf pledge|pledge chg|^(?!.*\b(society|apartments?|rwa|electricity|water|parking|toll)\b).*(\bchg\b|charges)|(card|issuance|renewal|joining|replacement|reissue|chq ?book|cheque ?book|demat|folio|atm|decline|return|bounce|nach|ecs|mandate|imps|neft|rtgs|locker|statement|closure|stop payment|transaction|txn) ?fees?\b|annual fee|\bamc\b|gst on|sms alert|penalty|late fee|min(imum)? bal|non ?maint|processing fee|convenience fee|overdraft fee|service fee/],   // a society's, electricity or parking charges: under what they are for
+    ['Investment', /indian cle\b|paytm ?money|\bmf\d*@|\.mf\d*\b|mutual ?fund|safe ?gold|digital gold|augmont|mmtc|jar app|eq trade|upstox|zerodha|groww|angel ?one|angel broking|icici ?sec|icicidirect|hdfc ?sec|kotak ?sec|5paisa|\bdhan\b|paytm money|indmoney|kuvera|smallcase|mutual fund|\bmf\b|\bsip\b|bse limited|bse star|nse clearing|indian clearing|\bfd\b|fixed deposit|fd booking|rd instal|recurring deposit|\bppf\b|\bnps\b|sukanya|vanguard|fidelity|schwab|robinhood|brokerage|term deposit|\bs?tdr\b|ppfas|parag parikh/],
+    // fund houses and their registrars ("ACH D- KOTAK MAHINDRA AMC-123456", "UTI AMC PVT LTD", "HDFC ASSET MANAGEMENT",
+    // CAMS, KFin): an SIP or a redemption, never the salary or dividend they pay, a card's or locker's AMC (annual
+    // maintenance charge), nor a "facility & asset management" firm's maintenance bill
+    ['Investment', /^(?!.*\b(salary|sal|payroll|stipend|wages|div|dividends?|facility|facilities|property|properties|estate|realty|card|dc|atm|locker|charges?|chg|fees?|gst)\b).*(\bamc (ltd|limited|pvt|private)\b|\b(ach|nach|ecs)\b.*\bamc\b|asset manag|\bcams\b|kfin|karvy)/],
+    ['Fees & Charges', /mtf inte|mtf pledge|pledge chg|^(?!.*\b(society|apartments?|rwa|electricity|water|parking|toll)\b).*(\bchg\b|charges)|(card|issuance|renewal|joining|replacement|reissue|chq ?book|cheque ?book|demat|folio|atm|decline|return|bounce|nach|ecs|mandate|imps|neft|rtgs|locker|statement|closure|stop payment|transaction|txn) ?fees?\b(?! ?(payment|pymt|paid)\b)|annual fee|\bamc\b|gst on|sms alert|penalty|late fee|min(imum)? bal|non ?maint|processing fee|convenience fee|overdraft fee|service fee/],   // a society's, electricity or parking charges: under what they are for
     ['Cash', /cash ?(wdl|wd|withdrawal)\b|\b(chq|cheque)\b.*\bself\b|\bself\b.*\b(chq|cheque)\b/],   // cash taken by a cheque to SELF
     ['Transfer', /payment received.*thank|thank you for (your )?payment|autopay si|auto ?debit cc|\batd\b.*\bcc|cc ?billpay|credit ?card|cc ?(payment|pymt|bill)|card ?(payment|pymt)|cred club|\bcred\b|\bself\b|own a ?c\b|own account|sweep/],
     ['Loan', /\bloan\b|\bln ?a ?c\b/],
@@ -800,7 +804,7 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     ['Groceries', /bigbasket|big basket|blinkit|grofers|zepto|instamart|dmart|d ?mart|avenue supermarts|reliance (fresh|smart|retail)|jiomart|more retail|spencer|nature.?s basket|grocery|groceries|supermarket|kirana|milk|dairy|walmart|kroger|aldi|tesco|costco|whole foods|safeway|sainsbury|lidl/],
     ['Transport', /\buber\b|\bola\b|olacabs|rapido|irctc|metro|petrol|diesel|fuel|hpcl|bpcl|indian ?oil|iocl|filling station|fastag|parking|\btoll\b|redbus|lyft|taxi|\bcab\b|railway|namma yatri|blusmart/],
     ['Travel', /makemytrip|goibibo|cleartrip|yatra|ixigo|airbnb|\boyo\b|booking\.com|indigo|interglobe|air ?india|vistara|spicejet|akasa|airline|airways|hotel|resort|expedia|agoda|thomas cook/],
-    ['Shopping', /amazon|amzn|flipkart|myntra|ajio|meesho|nykaa|tata ?cliq|croma|reliance digital|decathlon|ikea|lifestyle|shoppers stop|westside|trends|\bzara (india|store|retail|fashion|home)\b|zara\.com|inditex|h ?& ?m|uniqlo|ebay|etsy|target|apple store|lenskart|firstcry|pepperfry|urban ?company/],
+    ['Shopping', /amazon|amzn|flipkart|myntra|ajio|meesho|nykaa|tata ?cliq|croma|reliance digital|decathlon|ikea|lifestyle|shoppers stop|westside|trends|\bzara (india|store|retail|fashion|home)\b|zara\.com|inditex|\b(pos|ecom|pcd|vps|mps|ips)\b.*\bzara\b|h ?& ?m|uniqlo|ebay|etsy|target|apple store|lenskart|firstcry|pepperfry|urban ?company/],
     ['Entertainment', /netflix|spotify|hotstar|disney|prime ?video|primevideo|sonyliv|zee5|jiocinema|youtube|google ?play|book ?my ?show|paytm ?movies|\bpvr\b|inox|cinepolis|gaming|steam|playstation|xbox|apple\.com|itunes|audible|kindle/],
     ['Bills', /electricity|bescom|msedcl|mseb|tneb|tangedco|tata power|adani (elec|power)|torrent power|bses|cesc|water (bill|board|charges?)|gas bill|indane|hp ?gas|bharat ?gas|mahanagar gas|igl\b|airtel|\bjio\b|vodafone|\bvi\b|bsnl|act fibernet|hathway|broadband|recharge|\bdth\b|tata ?play|postpaid|prepaid|insurance|\blic\b|premium|policy|\bemi\b|loan|bill ?pay|billdesk|bbps|utility|municipal|property tax/],
     ['Health', /pharma|pharmacy|chemist|apollo|medplus|netmeds|1mg|tata 1mg|pharmeasy|hospital|clinic|diagnostic|pathlab|lal path|thyrocare|doctor|dental|medical|medicine|health|practo|cult\.?fit|gym/],
@@ -993,7 +997,9 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     if (!k) return '';
     const names = state.settings.payeeNames || {};
     if (names[k]) return k;
-    return Object.keys(names).find(x => samePayer(x, k)) || '';   // banks shorten names differently
+    const nk = Object.keys(names).find(x => samePayer(x, k)) || '';   // banks shorten names differently
+    // …but your own name never takes a name saved under a shorter spelling of it ("RAHUL" → "Rahul plumber")
+    return nk && selfLike(k) ? '' : nk;
   }
   function givenName(k) { const nk = payeeNameKey(k); return nk ? state.settings.payeeNames[nk] : ''; }
   function payeeAlias(k) {
@@ -1253,7 +1259,8 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
   }
   // paired by amount: never a card payment or cash withdrawal, nor money in that Kharcha's rules filed
   // as salary, interest or a refund
-  const pairKind = (e, cat) => !cardUse(e) && !(e.type === 'credit' && cat !== undefined && !/^Other/.test(cat) && isStdIncome(cat));
+  const CASH_IN = /\bcash\s*dep(?:osit)?\b|\bby\s+cash\b|\bCDM\b/i;   // cash paid in: from no account of yours
+  const pairKind = (e, cat) => !cardUse(e) && !CASH_IN.test(stripBranch(e.note || e.desc || '')) && !(e.type === 'credit' && cat !== undefined && !/^Other/.test(cat) && isStdIncome(cat));
   // a transfer already known (Transfer, a "cross entry" comment, or marked by your name or account
   // number) that nothing is paired with yet can be the other side of a counted entry; never a refund,
   // nor a failed payment and the bank's reversal of it (no money reached another account)
@@ -1261,16 +1268,23 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     (!p.autoXfer || p.autoXfer.why === 'self' || p.autoXfer.why === 'acct');
   // e can be its other side: on the account it names ("Cross entry ↔ …" by number, GPay's "To ICICI
   // Bank 7238"), or on a wallet for a wallet top-up
-  function sideOk(x, e) {
-    if (/wallet top-?up/i.test(x.note || '')) { const w = acctById(e.account); return !!w && w.kind === 'wallet'; }
+  function sideTo(x) {   // the account of yours x names, if any
     let to = selfTransferTo(x);
     if (!to || to === true) {
       const nums = String(x.note || '').match(/\b\d{4}\b/g) || [];
       const hit = (state.accounts || []).filter(a => a.id !== x.account && (a.digits || []).some(z => z.length >= 4 && nums.includes(z.slice(-4))));
       to = hit.length === 1 ? hit[0] : null;
     }
+    return to;
+  }
+  function sideOk(x, e) {
+    if (/wallet top-?up/i.test(x.note || '')) { const w = acctById(e.account); return !!w && w.kind === 'wallet'; }
+    const to = sideTo(x);
     return !to || to.id === e.account;
   }
+  // …and nobody else is in it: when x names the account e is on, e mustn't name a third party; when x names
+  // none, the two fit as any pair must (pairable: no third party, and two different names aren't both you)
+  const sideFits = (x, e) => sideOk(x, e) && (/wallet top-?up/i.test(x.note || '') || sideTo(x) ? !namedParty(e) : pairable(e, x));
   const sidesFit = (e, p) => p.type !== e.type && !!p.account && p.account !== e.account && Math.abs(p.amount - e.amount) < 0.005 && dayDiff(p.date, e.date) <= 3;
   function pairCrossEntries(res) {
     const ok = e => e.account && counted(e) && e.amount >= 100 && autoEligible(e) && pairKind(e, e.category);
@@ -1286,8 +1300,9 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     open.forEach(e => (byAmt.get(e.amount.toFixed(2)) || []).forEach(x => {
       const side = known.has(x);
       if (x.type === e.type || x.account === e.account || (!side && e.type !== 'debit') || dayDiff(x.date, e.date) > 3) return;
-      if (side) { if (namedParty(e) || !sideOk(x, e)) return; }
-      else if (!pairable(e, x)) return;
+      // a known transfer to or from someone else (a card bill paid through CRED, money you filed as Transfer
+      // to a friend), or under another name while yours isn't known, isn't money reaching your other account
+      if (side ? !sideFits(x, e) : !pairable(e, x)) return;
       edges.push({ e, x, side, gap: dayDiff(x.date, e.date), i: pos.get(e), j: pos.get(x) });
     }));
     edges.sort((a, b) => a.gap - b.gap || (b.side - a.side) || a.i - b.i || a.j - b.j);
@@ -1353,7 +1368,7 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     state.expenses.forEach(e => {
       const a = e.autoXfer; if (!a || a.why !== 'side') return;
       const p = byId.get(a.with);
-      if (!p || !knownXfer(p) || !sidesFit(e, p) || !sideOk(p, e) || namedParty(e) || !pairKind(e, a.prev)) { autoUnmark(e); res.undone++; }
+      if (!p || !knownXfer(p) || !sidesFit(e, p) || !sideFits(p, e) || !pairKind(e, a.prev)) { autoUnmark(e); res.undone++; }
     });
     // 2. payments to/from your own name or one of your other accounts
     state.expenses.forEach(e => {
@@ -1453,13 +1468,19 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     const every = gaps.filter(g => g >= 26 && g <= 35).length >= need ? 'month' : gaps.filter(g => g >= 6 && g <= 8).length >= need ? 'week' : '';
     if (!every) return null;
     const last = ds[ds.length - 1];
-    let next;
+    let next, day = +last.slice(8);
     if (every === 'week') next = addDaysIso(last, 7);
     else {   // the same day next month (the 31st → 30 Apr, 28 Feb)
       const t = new Date(last + 'T00:00'), y = t.getFullYear(), m = t.getMonth() + 1;
-      next = isoDate(new Date(y, m, Math.min(t.getDate(), new Date(y, m + 1, 0).getDate())));
+      // paid on the last day of a short month (28 Feb, 30 Apr): its usual day is the one most recent payments fell on
+      if (day === new Date(y, m, 0).getDate()) {
+        const cnt = {};
+        ds.slice(-6).forEach(d => { const x = +d.slice(8); if (x >= day) cnt[x] = (cnt[x] || 0) + 1; });
+        day = +Object.keys(cnt).sort((a, b) => cnt[b] - cnt[a] || b - a)[0];
+      }
+      next = isoDate(new Date(y, m, Math.min(day, new Date(y, m + 1, 0).getDate())));
     }
-    return { every, last, next, day: +last.slice(8) };
+    return { every, last, next, day };
   }
   const amtRange = a => { const lo = Math.min(...a), hi = Math.max(...a); return hi - lo < 1 ? fmt(lo) : `${fmt(lo)}–${fmt(hi)}`; };
   // What a transaction probably is, from your earlier entries with the same payer (best first).
@@ -1696,7 +1717,8 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     const amtSame = amtKey(e) === m.amt;
     const anyAmt = $('fMatchAny').checked, sameAmt = ($('fMatchAmt').checked && amtSame) || anyAmt;
     let n = 0;
-    if (sameAmt) commentMatches(e, !anyAmt).forEach(x => { x.comment = e.comment; delete x.unread; if (isCrossText(e.comment)) markCross(x); n++; });
+    // a "self transfer" comment would take it out of your totals: not onto one whose category you chose
+    if (sameAmt) commentMatches(e, !anyAmt).forEach(x => { if (x.userCat && isCrossText(e.comment)) return; x.comment = e.comment; delete x.unread; if (isCrossText(e.comment)) markCross(x); n++; });
     if ($('fMatchFuture').checked && (amtSame || anyAmt)) {
       const key = `${payerKey(e)}|${e.type}|${anyAmt ? 'any' : amtKey(e)}`;
       state.settings.commentRules = { ...(state.settings.commentRules || {}), [key]: { c: e.comment } };
@@ -2549,8 +2571,9 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
       ? `${shown.length} transaction${shown.length > 1 ? 's' : ''}${minAmt ? ` over ${fmt(minAmt).replace(/\.00$/, '')}` : ''}${si
         ? ` · put in <b>${fmt(si.out)}</b>${si.back ? ` · came back <b style="color:var(--income)">${fmt(si.back)}</b>` : ''}`
         : `${fd.length || !fc.length ? ` · spent <b>${fmt(sum(fd))}</b>` : ''}${fc.length ? ` · received <b style="color:var(--income)">${fmt(sum(fc))}</b>` : ''}`}${
-        // Spent / Income narrowed further (amount, search, group, review): say what the whole total is
-        (kindFilter === 'spent' || kindFilter === 'income') && (minAmt || q || reviewOnly || groupFilter !== null)
+        // Spent / Income narrowed further (amount, search, group, review): say what the whole total is (not under
+        // a payee's history, which covers every date)
+        (kindFilter === 'spent' || kindFilter === 'income') && !payerFilter && (minAmt || q || reviewOnly || groupFilter !== null)
           ? ` <span class="sub" style="display:inline">· of ${fmt(kindFilter === 'spent' ? spent : income)} ${periodWord()} (other filters on)</span>` : ''}`
       : '';
     if (!shown.length) {
@@ -2608,6 +2631,7 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     let v = a.bal.amount, n = 0;
     state.expenses.forEach(e => {
       if (e.account !== a.id || e.date < a.bal.date || (e.date === a.bal.date && !(a.bal.at && (e.createdAt || 0) > a.bal.at))) return;
+      if (e.date === a.bal.date && a.bal.incl && refsOf(e).some(r => a.bal.incl.includes(r))) return;   // came before the balance reply: in it already
       v += e.type === 'credit' ? e.amount : -e.amount; n++;
     });
     return { amount: Math.round(v * 100) / 100, n };
@@ -3035,7 +3059,8 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
       toast(msg + extra, extra ? 5000 : undefined);
     } else {
       const ne = { id: uid(), createdAt: Date.now(), ...data, ...(pendingRef ? { ref: pendingRef } : {}),
-        ...(!pendingRef || data.category !== preCat ? { userCat: true } : {}),   // a category you picked: transfer detection leaves it alone
+        // a category you picked: transfer detection leaves it alone (Kharcha's, renamed or deleted meanwhile, is still Kharcha's)
+        ...(!pendingRef || data.category !== (fitCat(preCat) || preCat) ? { userCat: true } : {}),
         ...(pendingRef && !data.comment && needsReview(data) ? { unread: true } : {}) };
       // from an email, as an import keeps them: its UPI reference and app (a statement then finds the payment) and the balance it showed
       const x = pendingPre || {};
@@ -3115,8 +3140,9 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     // a payee you say is someone else is not one of your accounts (nor you): its transfer marks are re-checked
     const cur = state.expenses.find(x => x.id === editingId), was = cur && { cat: cur.category, c: cur.comment || '' };
     const t = tidyTransfers();
-    if (cur && cur.category !== was.cat) {   // the open entry was (un)marked: the form follows
-      selectedCat = editingOrigCat = cur.category;
+    if (cur && cur.category !== was.cat) {   // the open entry was (un)marked: the form follows, unless you picked another category in it
+      if (selectedCat === editingOrigCat) selectedCat = cur.category;
+      editingOrigCat = cur.category;
       if ($('fComment').value.trim() === was.c) $('fComment').value = cur.comment || '';
       $('fReviewBanner').classList.toggle('hidden', !cur.unread);
       renderMatchOptions(cur); renderFormCats();
@@ -3401,7 +3427,7 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
       const wb = XLSX.read(buf, { type: 'array', cellDates: true, ...(text ? { raw: true } : {}) });
       // pick the sheet with the most rows; keep every sheet for reports that use several (brokers)
       let best = [];
-      lastBook = { names: wb.SheetNames, sheets: {} };
+      lastBook = { names: wb.SheetNames, sheets: {}, text };
       wb.SheetNames.forEach(n => {
         const rows = XLSX.utils.sheet_to_json(wb.Sheets[n], { header: 1, raw: true, defval: '' });
         lastBook.sheets[n] = rows;
@@ -3518,6 +3544,30 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     const m = String(v).match(/(?:^|[^a-z])(dr|cr)\.?\s*\)?\s*$/i);
     return m ? (m[1].toLowerCase() === 'dr' ? 'debit' : 'credit') : null;
   }
+  // How Kharcha read a row before these readings were corrected: a text "Excel" file's 05/11/2026 as 11 May,
+  // an afternoon date cell as the next day, "500.00(Cr)" and "−1,200" the wrong way, "Rs. 1,250" as 0.13. The
+  // entry such a reading made has that reading's reference: markDups finds it, and it is corrected, not doubled.
+  function oldAmount(v) {
+    if (typeof v === 'number') return v;
+    const s = String(v == null ? '' : v).trim();
+    if (!s || !/\d/.test(s)) return NaN;
+    const n = parseFloat(s.replace(/[^0-9.\-]/g, '').replace(/(?!^)-/g, ''));
+    if (isNaN(n)) return NaN;
+    if (/\(.*\)/.test(s) || /\bdr\.?$/i.test(s) || /^-|-$/.test(s.replace(/[^\d.\-]/g, ''))) return -Math.abs(n);
+    if (/\bcr\.?$/i.test(s)) return Math.abs(n);
+    return n;
+  }
+  const oldDrcr = v => /\bdr\.?\s*$/i.test(String(v)) ? 'debit' : /\bcr\.?\s*$/i.test(String(v)) ? 'credit' : null;
+  function oldDate(v, fmt, text) {
+    if (v instanceof Date && !isNaN(v)) return isoDate(new Date(v.getTime() + 12 * 36e5));
+    if (typeof v === 'number') {
+      if (v > 20000 && v < 80000) { const d = new Date(Date.UTC(1899, 11, 30) + Math.round(v) * 864e5); return mkDate(d.getUTCFullYear(), d.getUTCMonth() + 1, d.getUTCDate()); }
+      return null;
+    }
+    const m = text && String(v || '').trim().match(/^(\d{1,2})[-\/](\d{1,2})[-\/](\d{4})\b/);
+    if (m && +m[1] <= 12) return mkDate(m[3], m[1], m[2]);   // SheetJS took it for a US date
+    return parseDate(v, fmt);
+  }
 
   // ---------- statement import: building the preview ----------
   const imp = { stmtAcct: { id: '', digits: '' }, acctOverride: '', rows: [], header: 0, map: {}, dateFmt: 'dmy', sign: 'neg-debit', items: [], filter: 'all', name: '' };
@@ -3583,7 +3633,8 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     if (n) state.expenses = state.expenses.filter(e => !gone.has(e.id));
     return n;
   }
-  const utrsOf = e => [...new Set([e.utr, ...(String(e.note || e.desc || '') + ' ' + [e.ref, ...(e.refs || [])].join(' ')).match(/\b\d{12}\b/g) || []].filter(Boolean))];
+  // (a 12-digit number in a UPI ID is a mobile number: "919876543210@ybl")
+  const utrsOf = e => [...new Set([e.utr, ...(String(e.note || e.desc || '') + ' ' + [e.ref, ...(e.refs || [])].join(' ')).match(/\b\d{12}\b(?![@\d])/g) || []].filter(Boolean))];
   // References of entries you deleted (short hashes, the latest 800): a file read again — the folder re-checks
   // everything when Kharcha learns a new kind of file — doesn't bring them back.
   const refHash = r => { let h = 5381; for (let i = 0; i < r.length; i++) h = ((h << 5) + h + r.charCodeAt(i)) | 0; return (h >>> 0).toString(36); };
@@ -3609,34 +3660,41 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     // A statement row (date|type|amount|narration) can repeat — two ₹2,000 withdrawals at one ATM, the same
     // fee in two accounts — so each earlier entry stands for one such row; one with another balance, not
     // known to be in the same account, is a different transaction.
-    const otherRow = (x, e) => hasBal(x.balance) && hasBal(e.balance) && Math.abs(x.balance - e.balance) > 0.011 && !(x.account && x.account === e.account);
-    const sameBal = (x, e) => hasBal(x.balance) && hasBal(e.balance) && Math.abs(x.balance - e.balance) < 0.011;
-    items.forEach(x => { x.match = null; x.dup = false; delete x.otherAmt; });
+    // (or the balance an older version read for this row: x.wasBal, see oldAmount)
+    const oldBal = (x, e) => hasBal(x.wasBal) && hasBal(e.balance) && Math.abs(x.wasBal - e.balance) < 0.011;
+    const sameBal = (x, e) => hasBal(x.balance) && hasBal(e.balance) && (Math.abs(x.balance - e.balance) < 0.011 || oldBal(x, e));
+    const otherRow = (x, e) => hasBal(x.balance) && hasBal(e.balance) && !sameBal(x, e) && !(x.account && x.account === e.account);
+    items.forEach(x => { x.match = null; x.dup = false; delete x.otherAmt; delete x.twin; delete x.balFix; });
     [true, false].forEach(byBal => items.forEach(x => {   // the copy with the same balance first, then any other
       const same = !x.dup && x.ref && byRef.get(x.ref); if (!same) return;
       const bank = isBankRef(x.ref), e = same.find(y => !used.has(y.id) && (byBal ? sameBal(x, y) : !(bank && otherRow(x, y))));
-      if (e) used.add(e.id);
+      if (e) { used.add(e.id); if (oldBal(x, e)) x.balFix = e.id; }
       if (e || (!byBal && !bank)) { x.dup = 'exact'; x.include = false; }
     }));
     items.forEach(x => {
       if (x.dup === 'exact') return;
       if (x.ref && gone.has(refHash(x.ref))) { x.dup = 'deleted'; x.include = false; return; }
-      // same UPI reference number, same direction and amount, a few days apart at most: the same payment seen
-      // from another source (a 12-digit loan, account or phone number in a monthly narration repeats every month)
-      const viaUtr = withUtr(x).find(e => !used.has(e.id) && amtIs(e, x.amount) &&
-        (dayDiff(e.date, x.date) <= 4 || (x.utrSure && e.utrSure && x.utr && x.utr === e.utr)));
+      // both carry a UPI reference and they differ: certainly two different payments
+      // (only references both sources printed as the UPI reference — PhonePe/GPay statements, SMS
+      // "RRN/UTR/Ref" — count; a stray 12-digit number in a narration might be something else)
+      const otherRef = e => x.utrSure && e.utrSure && x.utr && e.utr && x.utr !== e.utr;
+      // same UPI reference number, same direction and amount: the same payment seen from another source. The
+      // reference both printed counts at any distance; another 12-digit number in both (a loan, account or phone
+      // number in a monthly narration repeats every month) only a few days apart, neither printing another
+      // reference, and (two statement rows) with balances that agree
+      const viaUtr = withUtr(x).find(e => !used.has(e.id) && amtIs(e, x.amount) && !otherRef(e) &&
+        ((x.utrSure && e.utrSure && x.utr && x.utr === e.utr) || (dayDiff(e.date, x.date) <= 4 &&
+          !(isBankRef(x.ref) && isBankRef(e.ref) && hasBal(x.balance) && hasBal(e.balance) && Math.abs(x.balance - e.balance) > 0.011))));
       if (viaUtr) { x.dup = 'utr'; x.match = viaUtr.id; used.add(viaUtr.id); x.include = false; return; }
       const otherAcct = e => otherAcctOf(x, e);
       // the same UPI payment where PhonePe/GPay/SMS shows another amount than the bank statement (an
       // offer or reward paid part of it): the reference the app printed is in the bank's narration
       const viaUtrAmt = withUtr(x).find(e => !used.has(e.id) && utrPair(x, e) && !otherAcct(e));
       if (viaUtrAmt) { x.dup = 'utr'; x.otherAmt = viaUtrAmt.amount; x.match = viaUtrAmt.id; used.add(viaUtrAmt.id); x.include = false; return; }
-      // both carry a UPI reference and they differ: certainly two different payments
-      // (only references both sources printed as the UPI reference — PhonePe/GPay statements, SMS
-      // "RRN/UTR/Ref" — count; a stray 12-digit number in a narration might be something else)
-      const otherRef = e => x.utrSure && e.utrSure && x.utr && e.utr && x.utr !== e.utr;
       // two bank alerts printed at different times are two payments (₹250 at Starbucks at 10:30 and at 18:45)
-      const xTime = smsTime(x.ref), otherTime = e => !!xTime && refsOf(e).some(r => { const t = smsTime(r); return !!t && t !== xTime; });
+      // (an older version read HDFC's "2026-11-06:10:30:15" or "…06:10:30" as 06:10:30: the same time)
+      const day = x.date.slice(8), was = (a, b) => a.length === 8 && a.slice(0, 2) === day && b.startsWith(a.slice(3));
+      const xTime = smsTime(x.ref), otherTime = e => !!xTime && refsOf(e).some(r => { const t = smsTime(r); return !!t && t !== xTime && !was(t, xTime) && !was(xTime, t); });
       const sameAmt = state.expenses.filter(e => !used.has(e.id) && e.type === x.type && amtIs(e, x.amount) && !otherAcct(e));
       let m = hasBal(x.balance) && sameAmt.find(e => hasBal(e.balance) && Math.abs(e.balance - x.balance) < 0.011 && dayDiff(e.date, x.date) <= 4);
       if (m) x.dup = 'balance';
@@ -3647,13 +3705,64 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
       if (m) { used.add(m.id); x.match = m.id; }
       x.include = !x.dup;
     });
+    // A row an older version misread (see oldAmount) made an entry with that reading's reference: that entry is
+    // this row read right, and is corrected (fixMisread). When this row is in Kharcha already (added beside the
+    // misread entry, or the same payment from an SMS), the misread copy goes instead. Only when most such rows
+    // find theirs (that file was read wrongly before): one same-looking row of another date (₹5,000 at the same ATM
+    // on 11 Feb and 2 Nov) is a payment of its own.
+    const here = new Set(items.map(x => x.ref)), taken = new Set(), found = [];
+    const want = items.filter(x => x.wasRef && !here.has(x.wasRef) && x.dup !== 'deleted');
+    want.forEach(x => {
+      const e = (byRef.get(x.wasRef) || []).find(y => (y.id === x.match || !used.has(y.id)) && !taken.has(y.id) && !otherAcctOf(x, y));
+      if (e) { taken.add(e.id); found.push([x, e]); }
+    });
+    if (found.length * 2 <= want.length) return;
+    found.forEach(([x, e]) => {
+      if (e.id === x.match) { if (e.ref === x.wasRef) x.dup = 'fixed'; return; }   // found by its balance or amount: the misread entry itself
+      if (x.dup && x.dup !== 'maybe') { if (e.ref === x.wasRef) { used.add(e.id); x.twin = e.id; } return; }
+      used.add(e.id); if (x.match) used.delete(x.match);
+      x.dup = 'fixed'; x.match = e.id; x.include = false;
+    });
+  }
+  // rows read right this time (see markDups): the entry an older reading made takes this row's date, direction and
+  // amount; a misread copy beside this row's entry goes, what you added to it (comment, category, group) kept
+  function fixMisread(items) {
+    let n = 0;
+    const byId = id => state.expenses.find(y => y.id === id);
+    items.forEach(x => {
+      if (x.include) return;
+      const bf = x.balFix && byId(x.balFix); if (bf) bf.balance = x.balance;   // its balance was misread
+      if (x.dup === 'fixed') {
+        const e = byId(x.match); if (!e) return;
+        n++;
+        if (e.ref !== x.wasRef) { e.refs = (e.refs || []).filter(r => r !== x.wasRef).concat(x.ref); return; }   // merged into another source's entry: its reference only
+        const typeChanged = e.type !== x.type, fits = catsFor(x.type).some(c => c.name === e.category);
+        Object.assign(e, { date: x.date, type: x.type, amount: x.amount, ref: x.ref });
+        delete e.bankAmt;
+        if (x.balance != null) e.balance = x.balance;
+        if (typeChanged ? !(e.userCat && fits) : !e.userCat && /^Other/.test(e.category)) { e.category = x.category; delete e.userCat; }
+        if (!e.comment && !e.autoXfer && counted(e) && needsReview(e)) e.unread = true;
+      } else if (x.twin) {
+        const e = byId(x.twin), k = x.match ? byId(x.match) : state.expenses.find(y => y !== e && refsOf(y).includes(x.ref));
+        if (!e || !k || e === k) return;
+        if (!k.comment && e.comment && !isAutoComment(e)) { k.comment = e.comment; delete k.unread; }
+        if (e.userCat && !k.userCat && catsFor(k.type).some(c => c.name === e.category)) { k.category = e.category; k.userCat = true; }
+        if (k.group === undefined && e.group !== undefined) k.group = e.group;
+        if (e.refundOf && !k.refundOf) k.refundOf = e.refundOf;
+        state.expenses.forEach(y => { if (y.refundOf === e.id) y.refundOf = k.id; });
+        state.expenses = state.expenses.filter(y => y !== e);
+        n++;
+      }
+    });
+    if (n) tidyTransfers();   // a corrected or removed entry's transfer marks are checked again
+    return n;
   }
   // Duplicates that were left unticked are merged into the entry they match: it gains the new
   // reference (so re-imports are recognised), the balance and the account if it had none.
   function linkDuplicates(items) {
-    let n = 0;
+    let n = fixMisread(items);
     items.forEach(x => {
-      if (x.include || !x.match || x.dup === 'exact') return;
+      if (x.include || !x.match || x.dup === 'exact' || x.dup === 'fixed') return;
       const e = state.expenses.find(y => y.id === x.match); if (!e) return;
       if (!amtIs(e, x.amount)) {   // part paid from the app's wallet: the app's amount is the payment, the bank's its part
         const xApp = appOnly(x);
@@ -3703,29 +3812,35 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
       const desc = String(cell(r, map.desc) || '').replace(/\s+/g, ' ').trim();
       const balRaw = map.balance >= 0 ? parseAmount(cell(r, map.balance)) : NaN;
       const balance = isNaN(balRaw) ? null : Math.round(balRaw * 100) / 100;
-      const push = (type, amount) => {
+      const wasDate = oldDate(cell(r, map.date), imp.dateFmt, imp.legacyText), wb = map.balance >= 0 ? oldAmount(cell(r, map.balance)) : NaN;
+      const wasBal = isNaN(wb) || balance == null ? null : Math.round(wb * 100) / 100;
+      // was: the type and amount an older version read (see oldAmount)
+      const push = (type, amount, was) => {
         amount = Math.round(Math.abs(amount) * 100) / 100;
         if (!(amount > 0)) return;
         const ref = refOf(date, type, amount, desc);
+        const wa = was && Math.round(Math.abs(was.amount) * 100) / 100;
+        const wasRef = wasDate && wa > 0 ? refOf(wasDate, was.type, wa, desc) : '';
         items.push({ date, desc, type, amount, ref, payment: 'Bank', category: classify(desc, type), touched: false, balance, seq: seq++, run,
           account: imp.stmtAcct.id, acctDigits: imp.stmtAcct.digits, acctBank: imp.stmtAcct.bank, acctKind: imp.stmtAcct.kind,
-          bankSure: !!imp.stmtAcct.bank, holder: imp.holder || '' });   // the statement names its own bank
+          bankSure: !!imp.stmtAcct.bank, holder: imp.holder || '', ...(wasRef && wasRef !== ref ? { wasRef } : {}),
+          ...(wasBal != null && Math.abs(wasBal - balance) > 0.005 ? { wasBal } : {}) });   // the statement names its own bank
       };
+      const t = normH(cell(r, map.type));
+      const typeCol = () => map.type >= 0 && /^(dr|d|debit|withdrawal|w)\b/.test(t) ? 'debit' : map.type >= 0 && /^(cr|c|credit|deposit)\b/.test(t) ? 'credit' : null;
       if (map.debit >= 0 || map.credit >= 0) {
         const d = Math.abs(parseAmount(cell(r, map.debit))) || 0;
         const c = Math.abs(parseAmount(cell(r, map.credit))) || 0;
-        if (d) push('debit', d);
-        if (c) push('credit', c);
+        const od = Math.abs(oldAmount(cell(r, map.debit))) || 0, oc = Math.abs(oldAmount(cell(r, map.credit))) || 0;
+        if (d) push('debit', d, od && { type: 'debit', amount: od });
+        if (c) push('credit', c, oc && { type: 'credit', amount: oc });
       } else if (map.amount >= 0) {
         const a = parseAmount(cell(r, map.amount));
         if (isNaN(a) || !a) return;
-        let type = drcrSuffix(cell(r, map.amount));
-        const t = normH(cell(r, map.type));
-        if (type) {}
-        else if (map.type >= 0 && /^(dr|d|debit|withdrawal|w)\b/.test(t)) type = 'debit';
-        else if (map.type >= 0 && /^(cr|c|credit|deposit)\b/.test(t)) type = 'credit';
-        else type = (a < 0) === (imp.sign === 'neg-debit') ? 'debit' : 'credit';
-        push(type, a);
+        const type = drcrSuffix(cell(r, map.amount)) || typeCol() || ((a < 0) === (imp.sign === 'neg-debit') ? 'debit' : 'credit');
+        const oa = oldAmount(cell(r, map.amount));
+        const ot = !isNaN(oa) && oa ? oldDrcr(cell(r, map.amount)) || typeCol() || ((oa < 0) === (imp.oldSign === 'neg-debit') ? 'debit' : 'credit') : '';
+        push(type, a, ot && { type: ot, amount: oa });
       }
     });
     imp.balanceCheck = checkRunningBalance(items);
@@ -3823,7 +3938,7 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
       <div class="irow ${x.include ? '' : 'off'}" data-i="${i}">
         <input type="checkbox" ${x.include ? 'checked' : ''} aria-label="Include">
         <div class="d"><div class="desc">${esc(noteText(x) || '(no description)')}${badgeFor(appOf(x, imp.acctOverride ? finalAcct(x) : x.account))}</div>
-          <div class="meta">${new Date(x.date + 'T00:00').toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' })}${x.dup === 'exact' ? '<span class="tag warn">already imported</span>' : x.dup === 'deleted' ? '<span class="tag warn">you deleted this before · tick to add it again</span>' : x.dup === 'balance' ? '<span class="tag warn">same as existing entry · balance matches</span>' : x.dup === 'utr' ? `<span class="tag warn">same payment already in Kharcha · UTR matches${x.otherAmt ? ` · ${fmt(Math.min(x.amount, x.otherAmt))} of ${fmt(Math.max(x.amount, x.otherAmt))} paid from the bank, the rest from the wallet` : ''}</span>` : x.dup ? '<span class="tag warn">possible duplicate</span>' : ''}${
+          <div class="meta">${new Date(x.date + 'T00:00').toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' })}${x.dup === 'exact' ? '<span class="tag warn">already imported</span>' : x.dup === 'deleted' ? '<span class="tag warn">you deleted this before · tick to add it again</span>' : x.dup === 'fixed' ? '<span class="tag warn">read wrongly before · that entry is corrected</span>' : x.dup === 'balance' ? '<span class="tag warn">same as existing entry · balance matches</span>' : x.dup === 'utr' ? `<span class="tag warn">same payment already in Kharcha · UTR matches${x.otherAmt ? ` · ${fmt(Math.min(x.amount, x.otherAmt))} of ${fmt(Math.max(x.amount, x.otherAmt))} paid from the bank, the rest from the wallet` : ''}</span>` : x.dup ? '<span class="tag warn">possible duplicate</span>' : ''}${
             x.balanceGap ? '<span class="tag warn">balance doesn’t add up here</span>' : ''}${
             acctById(finalAcct(x)) ? `<span class="tag">${esc(acctLabel(acctById(finalAcct(x))))}</span>`
             : x.acctDigits && !imp.acctOverride ? `<span class="tag">New account: ${esc(newAcctLabel(x))}</span>`
@@ -3987,7 +4102,7 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     buildItems();
     // every row was imported before: nothing to review — just record how far this statement reaches
     if (det && imp.items.length && imp.items.every(x => x.dup === 'exact')) {
-      imp.newSelf = ''; coverItems(imp.items); save(); render();
+      imp.newSelf = ''; coverItems(imp.items); fixMisread(imp.items); save(); render();
       toast(`Everything in this statement is already in Kharcha (${imp.items.length} transactions)`, 4000);
       return;
     }
@@ -3995,6 +4110,18 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     showBg();
     $('impList').scrollTop = 0;
     requestAnimationFrame(() => $('impSheet').classList.add('open'));
+  }
+  // One Amount column for money in and out: negative is money out, unless it is a card's (Amex-style exports show
+  // purchases positive and the payment negative): a card statement is mostly purchases, so the sign most of its
+  // rows have is a charge. acct: the account it goes to.
+  function amountSign(acct) {
+    if (!(imp.map.amount >= 0 && imp.map.type < 0)) return 'neg-debit';
+    const rows = imp.rows.slice(imp.header + 1);
+    if (!rows.some(r => parseAmount(r[imp.map.amount]) < 0)) return 'pos-debit';
+    if (!(imp.stmtAcct.kind === 'card' || imp.cardFile || (acct && acct.kind === 'card'))) return 'neg-debit';
+    const amts = rows.filter(r => imp.map.date < 0 || parseDate(r[imp.map.date], imp.dateFmt))
+      .map(r => parseAmount(r[imp.map.amount])).filter(v => v && !isNaN(v));
+    return amts.filter(v => v < 0).length * 2 < amts.length ? 'pos-debit' : 'neg-debit';
   }
   // Column map, account and sign for a bank statement (used by the import screen and the folder)
   function setupStatement(rows, file, det) {
@@ -4027,18 +4154,15 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
         .map(r => r.join(' ')).join(' ');
       imp.stmtAcct.bank = bankFromText(tail);
     }
-    imp.stmtAcct.kind = /credit card|card statement|card account/i.test(headText) ? 'card' : 'bank';
-    if (imp.map.amount >= 0 && imp.map.type < 0) {
-      const anyNeg = rows.slice(imp.header + 1).some(r => parseAmount(r[imp.map.amount]) < 0), acct = acctById(imp.stmtAcct.id);
-      imp.sign = anyNeg ? 'neg-debit' : 'pos-debit';
-      // a card statement is mostly purchases: the sign most of its rows have is a charge (Amex-style
-      // exports show purchases positive and the payment negative); a bank account's money out is negative
-      if (anyNeg && (imp.stmtAcct.kind === 'card' || (acct && acct.kind === 'card'))) {
-        const amts = rows.slice(imp.header + 1).filter(r => imp.map.date < 0 || parseDate(r[imp.map.date], imp.dateFmt))
-          .map(r => parseAmount(r[imp.map.amount])).filter(v => v && !isNaN(v));
-        if (amts.filter(v => v < 0).length * 2 < amts.length) imp.sign = 'pos-debit';
-      }
-    } else imp.sign = 'neg-debit';
+    imp.stmtAcct.kind = /credit card|card statement|card account|apple card|card ?member/i.test(headText) ? 'card' : 'bank';
+    // Amex's own download is a bare "activity.csv" (Date, Description, Amount)
+    imp.cardFile = /american express|\bamex\b/i.test(headText) || /^activity\b[^\/]*\.csv$/i.test(file.name);
+    imp.signSet = false;
+    imp.sign = amountSign(acctById(imp.stmtAcct.id));
+    // what older versions made of it (see oldAmount)
+    imp.legacyText = !!(lastBook && lastBook.text);
+    imp.oldSign = imp.map.amount >= 0 && imp.map.type < 0 && rows.slice(imp.header + 1).some(r => oldAmount(r[imp.map.amount]) < 0) ? 'neg-debit'
+      : imp.map.amount >= 0 && imp.map.type < 0 ? 'pos-debit' : 'neg-debit';
     const holder = detectHolderName(rows, imp.header);
     imp.holder = statementHolder(rows, imp.header);
     // your name from the first statement: kept once it is imported (taken back if the import is cancelled)
@@ -4117,6 +4241,10 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     const m = t.match(/-\s*([A-Z][A-Za-z ]{2,25}Bank)\s*$/) || t.match(/\b(HDFC|ICICI|SBI|Axis|Kotak|South Indian|Indian|Canara|City Union|Union|IDFC|Yes|IndusInd|Federal|PNB|Bank of Baroda|BOB)\s*Bank\b/i);
     return m ? m[1].replace(/\s*bank$/i, '').trim() + ' Bank' : '';
   }
+  // the bank an alert comes from: its signature ("- Axis Bank", "-SBI", "- Bank of Baroda"), else the first
+  // bank named in it (UPI IDs aside), which may be the payee's
+  const alertBank = t => (b => bankFromText(b) || bankFromText((String(t).match(/[-–]\s*([A-Za-z][A-Za-z .&]{1,40}?)\s*\.?\s*$/) || [])[1] || '') ||
+    bankFromText(noVpa(t)) || b)(bankName(t));
   // opts.email: text is an excerpt of an alert email (bank footers often mention OTPs, so don't skip on that)
   function parseSms(raw, opts = {}) {
     const t = String(raw).replace(/\s+/g, ' ').trim();
@@ -4141,7 +4269,13 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     const bank = bankName(t);   // the sender's own signature ("- Axis Bank"), not a payee such as "HDFC ERGO"
     // a debit card spends from the bank account; "HDFC Bank Card 1234" is HDFC's credit card
     const debitCard = /\bdebit\s*card\b/i.test(t) && !/\bcredit\s*card\b/i.test(t);
-    const acctKind = !debitCard && /credit ?card|card (no\.?|number|ending|x+|\*)|\bcard x+\d|\bcc\s*\d*x+|\bbank card\s*[x*]*\d{4}\b/i.test(t) ? 'card' : 'bank';
+    let acct = matchAccount(t), acctKind = !debitCard && /credit ?card|card (no\.?|number|ending|x+|\*)|\bcard x+\d|\bcc\s*\d*x+|\bbank card\s*[x*]*\d{4}\b/i.test(t) ? 'card' : 'bank';
+    if (debitCard && !acct.id) {
+      // the digits are the card's, not its account's: the one bank account you have at that bank, else (as
+      // before) a card of its own, without the balance (it is the bank account's, counted there)
+      const b = alertBank(t), at = b ? (state.accounts || []).filter(a => a.kind === 'bank' && bankFromText(a.name) === b) : [];
+      if (at.length === 1) acct = { id: at[0].id, digits: '' }; else acctKind = 'card';
+    }
     const balM = acctKind === 'card' ? null :
       t.match(/\b(?:avl\.?|avail(?:able)?|a\/c|clear|closing|total)?\s*bal(?:ance)?\.?(?:\s+(?:is|of))?\s*[:\-]?\s*(?:rs\.?|inr|₹)\s*:?\s*([\d,]+(?:\.\d{1,2})?)/i);
     const smsBalance = balM ? parseFloat(balM[1].replace(/,/g, '')) : null;
@@ -4166,11 +4300,12 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     if (cardCredit && !moneyBack && /payment|received|thank/i.test(t) && catsFor('credit').some(c => c.name === 'Transfer')) cat = 'Transfer';
     else if (cardCredit && moneyBack && /^Other/.test(cat) && catsFor('credit').some(c => c.name === 'Refund')) cat = 'Refund';
     // without a reference, the time and balance tell two same-day payments of one amount apart
-    const time = (t.match(/\b(?:[01]?\d|2[0-3]):[0-5]\d(?::[0-5]\d)?\b/) || [])[0] || '';
+    // (HDFC's "On 2026-11-06:10:30:15" puts the day before the hour: the time is what follows it)
+    const time = (t.match(/\d{4}-\d{2}-\d{2}:((?:[01]?\d|2[0-3]):[0-5]\d(?::[0-5]\d)?)\b/) || [])[1] ||
+      (t.match(/\b(?:[01]?\d|2[0-3]):[0-5]\d(?::[0-5]\d)?\b/) || [])[0] || '';
     const tail = party ? party.toLowerCase() + (time ? '|' + time : '') + (smsBalance != null ? '|' + smsBalance.toFixed(2) : '') : t.toLowerCase();
-    const acct = matchAccount(t);
     return { date, desc, type, amount, payment, category: cat, touched: false, account: acct.id, acctDigits: acct.digits, ...(acct.learn ? { learn: acct.learn } : {}),
-      acctBank: bankFromText(bank) || bankFromText(noVpa(t)) || bank, acctKind, balance: smsBalance, seq: 0, utr, utrSure: !!utr && utr === rrn, app: appFrom(t),
+      acctBank: alertBank(t), acctKind, balance: smsBalance, seq: 0, utr, utrSure: !!utr && utr === rrn, app: appFrom(t),
       ref: rrn ? `sms|${rrn}|${type}|${amount.toFixed(2)}` : `sms|${date}|${type}|${amount.toFixed(2)}|${tail}` };
   }
   // "Avl bal in A/c XX8810 as on 06-NOV-26: INR 1,23,456.78" — a balance reply without a transaction
@@ -4188,7 +4323,7 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     if (!acct.digits && !acct.id) return null;
     let amount = parseFloat(m[1].replace(/,/g, ''));
     if (/dr/i.test(m[2] || '')) amount = -amount;
-    return { balance: amount, date: smsDate(t, fallbackDate), account: acct.id, acctDigits: acct.digits, ...(acct.learn ? { learn: acct.learn } : {}), acctBank: (b => bankFromText(b) || bankFromText(t) || b)(bankName(t)), acctKind: 'bank' };
+    return { balance: amount, date: smsDate(t, fallbackDate), account: acct.id, acctDigits: acct.digits, ...(acct.learn ? { learn: acct.learn } : {}), acctBank: alertBank(t), acctKind: 'bank' };
   }
   let lastBalanceReplies = [];
   // fallbackDate / a "kharcha:on:2026-11-07" line before a message (the day the iPhone app got it): the date
@@ -4209,7 +4344,8 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
       else {
         const x = parseSms(c, o);
         if (x) keep(x);
-        else { const b = parseBalanceSms(c, on); if (b) lastBalanceReplies.push(b); }
+        // the messages before it (in the order the inbox got them) are in that balance already
+        else { const b = parseBalanceSms(c, on); if (b) { b.before = out.map(x => x.ref).filter(Boolean).slice(-50); lastBalanceReplies.push(b); } }
       }
     });
     return out;
@@ -4224,7 +4360,7 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
       if (b.learn) learnDigits(a.id, b.learn);
       // the balance as of now (at): a later SMS or statement row of the same day replaces it, and entries
       // added after it move the estimate
-      if (!a.bal || b.date >= a.bal.date) { a.bal = { amount: b.balance, date: b.date, seq: 0, at: Date.now() }; done.push(`${acctName(a)} ••${a.digits[0]} ${fmt(b.balance)}`); }
+      if (!a.bal || b.date >= a.bal.date) { a.bal = { amount: b.balance, date: b.date, seq: 0, at: Date.now(), ...(b.before && b.before.length ? { incl: b.before } : {}) }; done.push(`${acctName(a)} ••${a.digits[0]} ${fmt(b.balance)}`); }
       else older.push(`${acctName(a)} ••${a.digits[0]}`);
     });
     lastBalanceReplies = [];
@@ -4262,6 +4398,15 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     requestAnimationFrame(() => $('impSheet').classList.add('open'));
     return true;
   }
+  // Duplicates for a review; for Gmail's Re-sync (drop: the email entries being replaced) as if those entries
+  // were gone already. One of them that sat beside a same-day payment of the same amount was a payment of its
+  // own: its row isn't a "possible duplicate" of that payment.
+  function markReviewDups(items, drop) {
+    const all = state.expenses, refs = new Set();
+    if (drop && drop.size) { all.forEach(e => { if (drop.has(e.id) && e.ref) refs.add(e.ref); }); state.expenses = all.filter(e => !drop.has(e.id)); }
+    try { markDups(items); } finally { state.expenses = all; }
+    items.forEach(x => { if (x.dup === 'maybe' && refs.has(x.ref)) { x.dup = false; x.match = null; x.include = true; } });
+  }
   function openSmsSheet(prefill) {
     $('smsText').value = prefill || '';
     $('smsMail').classList.toggle('hidden', !(state.settings.mail && state.settings.mail.url));
@@ -4290,7 +4435,7 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
   $('impMap').addEventListener('change', e => {
     if (e.target.dataset.map) imp.map[e.target.dataset.map] = +e.target.value;
     if (e.target.id === 'impDateFmt') imp.dateFmt = e.target.value;
-    if (e.target.id === 'impSign') imp.sign = e.target.value;
+    if (e.target.id === 'impSign') { imp.sign = e.target.value; imp.signSet = true; }
     buildItems(); renderImport();
   });
   $('impFilters').addEventListener('click', e => {
@@ -4458,9 +4603,15 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
   $('sAcct').addEventListener('click', e => { if (e.target.closest('[data-acct]')) { acctFilter = ''; render(); } });
   $('impAcct').addEventListener('change', e => {
     imp.acctOverride = e.target.value;
+    // a card account chosen for a file with one Amount column (one you didn't set the sign for): its
+    // purchases may be the positive amounts
+    if (imp.mode === 'file' && !imp.signSet) {
+      const sign = amountSign(acctById(imp.acctOverride && imp.acctOverride !== '__none' ? imp.acctOverride : imp.stmtAcct.id));
+      if (sign !== imp.sign) { imp.sign = sign; $('impSign').value = sign; buildItems(); renderImport(); return; }
+    }
     // duplicates depend on the account: look again in the chosen one (a row whose result stays the same keeps its tick)
     const before = imp.items.map(x => [x.dup, x.include]);
-    applyAcctOverride(imp.items); markDups(imp.items);
+    applyAcctOverride(imp.items); markReviewDups(imp.items, imp.replace);
     imp.items.forEach((x, i) => { if (x.dup === before[i][0]) x.include = before[i][1]; });
     renderImport();
   });
@@ -4839,7 +4990,7 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
       if (bad.has(o)) return;
       const names = state.settings.payeeNames || {};
       const carry = (obj, from, to) => { if (obj[from] === undefined) return; moved++; if (obj[to] === undefined) obj[to] = obj[from]; if (JSON.stringify(obj[to]) === JSON.stringify(obj[from])) delete obj[from]; };
-      carry(names, o, nk); carry(state.rules, o, nk);
+      carry(names, o, nk); ['', '|debit', '|credit'].forEach(t => carry(state.rules, o + t, nk + t));   // also a rule for one kind of entry
       const cr = state.settings.commentRules || {};
       Object.keys(cr).forEach(r => { if (r.startsWith(o + '|')) carry(cr, r, nk + r.slice(o.length)); });
     });
@@ -4848,7 +4999,7 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
   // When Kharcha's rules improve, entries it categorised itself are re-checked once (never ones you set,
   // commented, or that are transfers, except cash taken by a SELF cheque): today "Other" that a rule now recognises, UPI payments that a
   // branch name ("ATM SERVICE BRANCH") had wrongly filed as Cash, and imported entries older rules filed wrongly.
-  const RULES_VERSION = 6;   // 5: loans; 6: FD interest, TDS, term deposits, fund houses, charges, own a/c, SELF cheques, names
+  const RULES_VERSION = 7;   // 5: loans; 6: FD interest, TDS, term deposits, fund houses, charges, own a/c, SELF cheques, names; 7: what 6 filed wrongly
   if ((state.settings.rulesV || 1) < 3) {
     // 3: payouts from PhonePe / BharatPe got one payee key each (see SETTLERS)
     carryKeys(d => merchantKey(d, true));
@@ -4867,9 +5018,22 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
           !(state.accounts || []).some(b => b.business && b.business.incomeCat === old)) state.categories = state.categories.filter(x => x.name !== old);
     });
   }
-  if (!state.settings.bankLabelKeys) {   // an alert's bank or sender ("To SWIGGY · Indian Bank") is no longer part of the payee
+  // an alert's bank or sender ("To SWIGGY · Indian Bank") is no longer part of the payee (2: with the rules for
+  // one kind of entry, "RAHUL INDIAN|credit", which the first move left behind)
+  if ((state.settings.bankLabelKeys || 0) < 2) {
     const moved = carryKeys(d => merchantKey(d, false, true));
-    state.settings.bankLabelKeys = 1; if (moved) save();
+    state.settings.bankLabelKeys = 2; if (moved) save();
+  }
+  // Email entries you added from Gmail › Browse before Kharcha marked them (byHand), so Re-sync never replaces or
+  // removes them: the transaction form writes an entry's account before its reference, an import the other way round
+  if (!state.settings.byHandMarked) {
+    let n = 0;
+    state.expenses.forEach(e => {
+      if (!e || e.byHand || !/^mail\|/.test(e.ref || '')) return;
+      const k = Object.keys(e), a = k.indexOf('account'), r = k.indexOf('ref');
+      if (a >= 0 && r > a) { e.byHand = true; n++; }
+    });
+    state.settings.byHandMarked = 1; if (n) save();
   }
   if (!state.settings.stubsDropped) {   // PhonePe's 2 digits ("38") kept beside the real ending they learned ("7238")
     let n = 0;
@@ -4890,11 +5054,14 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
   }
   if ((state.settings.rulesV || 1) < RULES_VERSION) {
     let n = 0;
-    // 6: what rules before it filed wrongly, and (when only some moves are right) where such an entry may go:
-    // FD interest and TDS as Investment, a fund house or a society's maintenance as Fees, cash taken by a SELF
-    // cheque as Transfer, "Dinesh" as Food, "Zara Khan" as Shopping, "Facebook" or a card fee as Education
-    const MISFILED = [['Investment', /\btds\b|\bint(erest)?\b/, ['Interest', 'Fees & Charges']], ['Fees & Charges', /\bamc\b|charges|\bchg\b/],
-      ['Transfer', /\bself\b/, ['Cash']], ['Food', /dine/], ['Shopping', /zara/], ['Education', /fee|book/]]
+    // 6: what rules before it filed wrongly, and where such an entry may go: FD interest and TDS as Investment,
+    // a fund house or a society's maintenance as Fees, cash taken by a SELF cheque as Transfer, "Dinesh" as Food,
+    // "Zara Khan" as Shopping, "Facebook" or a card fee as Education. 7: what 6 filed wrongly: a fund house's
+    // salary or dividend, or a facility firm's bill, as Investment; a school fee paid by NEFT as Fees
+    const MISFILED = [['Investment', /\btds\b|\bint(erest)?\b/, ['Interest', 'Fees & Charges']],
+      ['Investment', /\bamc\b|asset manag|\bcams\b|kfin|karvy/, ['Salary', 'Other Income', 'Fees & Charges', 'Bills', 'Rent']],
+      ['Fees & Charges', /\bamc\b|charges|\bchg\b/, ['Investment', 'Bills', 'Rent', 'Transport', 'Other']], ['Fees & Charges', /\bfees?\b/, ['Education']],
+      ['Transfer', /\bself\b/, ['Cash']], ['Food', /dine/], ['Shopping', /zara/], ['Education', /fee|book/, ['Fees & Charges', 'Entertainment', 'Other']]]
       .map(([c, re, to]) => [catAlias(c), re, to && to.map(catAlias)]).filter(([c]) => !/^Other/.test(c));   // deleted into Other: checked as Other
     state.expenses.forEach(e => {
       if (e.userCat || e.autoXfer || (e.comment && !isAutoComment(e))) return;
@@ -5043,10 +5210,7 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
       save();
       if (view === 'settings') renderMailStatus();
       const n = fresh.length;
-      // duplicates are looked for as if the entries being replaced were gone already
-      const all = state.expenses;
-      if (drop.size) state.expenses = all.filter(e => !drop.has(e.id));
-      try { kept.sort((a, b) => b.date.localeCompare(a.date)); markDups(kept); } finally { state.expenses = all; }
+      kept.sort((a, b) => b.date.localeCompare(a.date)); markReviewDups(kept, drop);
       if (openItemsPreview(kept, resync ? `Gmail · ${n} alert email${n === 1 ? '' : 's'} read again` : `Gmail · ${n} new alert email${n === 1 ? '' : 's'}`, true, true)) {
         if (drop.size) imp.replace = drop;
       } else if (drop.size) {   // nothing to add back: what they added isn't a transaction by the latest rules
@@ -5352,7 +5516,7 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     let remote = null; try { remote = json ? JSON.parse(json) : null; } catch (e) {}
     remote = remote && Array.isArray(remote.expenses) ? migrate(remote) : null;
     const rec = readSync(), n = (rec.n || 0) + 1, next = { n };
-    let tag = null;
+    let tag = null, seen = null;   // seen: what iCloud holds now
     if (remote) {
       tag = remote.settings.syncTag;
       tag = Array.isArray(tag) && tag.length && tag.every(x => typeof x === 'string') ? tag : null;
@@ -5372,17 +5536,23 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
       let restored = 0;
       if (!wiped && baseN > 20 && loadN < baseN / 2) { base = null; restored = Math.max(0, remote.expenses.length - state.expenses.length); }
       const merged = migrate(merge3(base, state, remote));
-      if (JSON.stringify(merged) !== JSON.stringify(state)) { adopt(merged); followCatAliases(); saveLocal(); render(); renderAi(); }
+      if (JSON.stringify(merged) !== JSON.stringify(state)) { adopt(merged); followCatAliases(); saveLocal(); render(); renderAi(); folderReadNeedAi(); }
       if (restored) toast(`☁️ This iPhone had lost entries — restored ${restored} from iCloud`, 6000);
-      next.seen = digestOf(remote); next.seen.id = tag ? tag[0] : ''; next.seen.n = n;
+      seen = digestOf(remote); seen.id = tag ? tag[0] : ''; seen.n = n;
+      // iCloud's copy is this iPhone's own last upload: the copy last merged from another device stays
+      // remembered too, as another device may still upload a copy made from it (then that is the base)
+      const own = !!tag && !!rec.pushed && tag[0] === rec.pushed.id && !rec.replace && !rec.legacy && rec.seen && rec.seen.l && rec.seen.s;
+      next.seen = own ? rec.seen : seen;
       if (rec.pushed && !rec.replace && !rec.legacy) next.pushed = rec.pushed;
     }
     loadN = Infinity;
     const d = digestOf(state);
-    if (!next.seen || !sameDigest(d, next.seen)) {
+    if (!seen || !sameDigest(d, seen)) {
       d.id = uid(); d.n = n + 0.5;
       syncQueue = syncQueue.slice(-9).concat(d);
-      native({ type: 'cloudPush', data: JSON.stringify({ ...state, settings: { ...state.settings, syncTag: [d.id].concat(tag || []).slice(0, 12) } }) });
+      // the copies it is made from: iCloud's, and this iPhone's own last upload (its data grew from that one)
+      const mine = rec.pushed && !rec.replace && !rec.legacy && rec.pushed.id && !(tag || []).includes(rec.pushed.id) ? [rec.pushed.id] : [];
+      native({ type: 'cloudPush', data: JSON.stringify({ ...state, settings: { ...state.settings, syncTag: [d.id].concat(mine, tag || []).slice(0, 12) } }) });
     } else cloudInfo.error = '';
     writeSync(next);
     renderCloudStatus();
@@ -5610,9 +5780,8 @@ Rules: include only completed transactions — skip OTPs, offers, ads, due/bill 
     $('aiStatus').textContent = 'Testing…';
     try { await aiRaw({ model: 'deepseek-chat', max_tokens: 5, messages: [{ role: 'user', content: 'Reply OK' }] });
       state.settings.ai.ok = true; save(); renderAi();
-      const keys = NATIVE && folderInfo.name ? folderNeedAi() : [];
-      if (keys.length) { keys.forEach(k => folderHad.delete(k)); setFolderNeedAi([]); native({ type: 'folderForget', keys }); }
-      toast('DeepSeek connected ✓' + (keys.length ? ` · reading ${keys.length} PDF${keys.length > 1 ? 's' : ''} from your folder` : '')); }
+      const n = folderReadNeedAi();
+      toast('DeepSeek connected ✓' + (n ? ` · reading ${n} PDF${n > 1 ? 's' : ''} from your folder` : '')); }
     catch (e) { $('aiStatus').textContent = '⚠︎ ' + e.message; }
   });
   $('aiModel').addEventListener('change', e => { if (state.settings.ai) { state.settings.ai.model = e.target.value; save(); } });
@@ -5647,6 +5816,12 @@ Rules: include only completed transactions — skip OTPs, offers, ads, due/bill 
   const FOLDER_NEED_AI = 'expense-tracker-v1:folderNeedAi', FOLDER_TRIES = 'expense-tracker-v1:folderTries';
   const folderNeedAi = () => { try { return JSON.parse(localStorage.getItem(FOLDER_NEED_AI) || '[]'); } catch (e) { return []; } };
   const setFolderNeedAi = keys => { try { localStorage.setItem(FOLDER_NEED_AI, JSON.stringify(keys.slice(-100))); } catch (e) {} };
+  // once a working key is here (saved on this iPhone, or arriving from iCloud): those PDFs are looked at again
+  function folderReadNeedAi() {
+    const keys = NATIVE && folderInfo.name && aiOn() && aiCfg().ok ? folderNeedAi() : [];
+    if (keys.length) { keys.forEach(k => folderHad.delete(k)); setFolderNeedAi([]); native({ type: 'folderForget', keys }); }
+    return keys.length;
+  }
   function folderTries(key) {
     let t = {}; try { t = JSON.parse(localStorage.getItem(FOLDER_TRIES) || '{}') || {}; } catch (e) {}
     t[key] = (t[key] || 0) + 1;
@@ -5660,11 +5835,16 @@ Rules: include only completed transactions — skip OTPs, offers, ads, due/bill 
     r.kind = 'DeepSeek'; aiBusy = true;
     let items;
     try { items = await aiExtractParts(aiSplit(lines), label, context); } finally { aiFree(); }
-    return commitAuto(items, r);
+    const out = commitAuto(items, r);
+    if (out.later) out.items = items;   // what DeepSeek read is kept for then, not asked for again
+    return out;
   }
   // Same rules as tapping Import on the review screen: new rows are added, exact repeats skipped,
   // rows matching an entry (UPI reference, balance, same day & amount) merged into it.
+  // Not while a review is open (one opened while the file was read): its rows were checked for
+  // duplicates without these, so tapping Import would add them again. The file waits for it.
   function commitAuto(items, r, marked) {
+    if (sheetOpen()) { r.later = true; return r; }
     if (!marked) { items.sort((a, b) => b.date.localeCompare(a.date)); markDups(items); }
     if (items.some(x => x.app)) tagSameRecords(items);
     const add = items.filter(x => x.include && x.dup !== 'exact');
@@ -5736,6 +5916,7 @@ Rules: include only completed transactions — skip OTPs, offers, ads, due/bill 
       toast(`📂 Importing ${f.name}…`, 600000);
       let r;
       if (f.note) r = { name: f.name, added: 0, merged: 0, same: 0, note: f.note, retry: !!f.retry };   // too big, or couldn't be opened
+      else if (f.items) r = commitAuto(f.items, { name: f.name, added: 0, merged: 0, same: 0, note: '', kind: 'DeepSeek' });   // read before a review opened
       else {
         try {
           const bin = atob(f.b64), bytes = new Uint8Array(bin.length);
@@ -5744,7 +5925,7 @@ Rules: include only completed transactions — skip OTPs, offers, ads, due/bill 
         } catch (e) { r = { name: f.name, added: 0, merged: 0, same: 0, note: 'couldn’t open this file' }; }
       }
       folderCur = '';
-      if (r.later) { if (gen === folderGen) folderQ.unshift(f); break; }   // a review is open or DeepSeek is busy: after that
+      if (r.later) { if (r.items) f.items = r.items; if (gen === folderGen) folderQ.unshift(f); break; }   // a review is open or DeepSeek is busy: after that
       if (r.retry && folderTries(f.key) >= 3) { r.retry = false; r.note += ' (tried 3 times: open it with 📥 Import)'; }
       saveLocal();   // kept before the file counts as imported
       if (r.retry) native({ type: 'folderLater', keys: [f.key] });
@@ -5765,7 +5946,7 @@ Rules: include only completed transactions — skip OTPs, offers, ads, due/bill 
     const failed = done.filter(r => r.note).length;
     toast(`📂 ${done.length} file${done.length > 1 ? 's' : ''} from your folder: ${added} new transaction${added === 1 ? '' : 's'}${merged ? ` · ${merged} already in Kharcha` : ''}${fds ? ` · ${fds} FD${fds > 1 ? 's' : ''} saved` : ''}${brk ? ` · ${brk} broker report${brk > 1 ? 's' : ''} read` : ''}${failed ? ` · ${failed} need${failed === 1 ? 's' : ''} attention (Settings)` : ''}`, 5000);
   }
-  window.expensesFolderInfo = (name, msg) => { folderInfo.name = name; folderInfo.msg = msg || ''; renderFolder(); };
+  window.expensesFolderInfo = (name, msg) => { folderInfo.name = name; folderInfo.msg = msg || ''; renderFolder(); folderReadNeedAi(); };
   window.expensesFolderFiles = (files, pending, error, more) => {
     folderInfo.pending = pending || 0; folderInfo.error = error || ''; folderInfo.checked = Date.now(); folderInfo.msg = ''; folderInfo.more = more || 0;
     // while the saved data can't be read, they wait in the queue (runFolderQueue) and are imported after the restore
@@ -5827,6 +6008,13 @@ Rules: include only completed transactions — skip OTPs, offers, ads, due/bill 
     const bal = applyBalanceReplies();
     if (!items.length) return bal ? 0 : -1;
     markDups(items);
+    // only the date, type and amount match an entry ("possible duplicate"): the same payment only when it names
+    // the same payee; otherwise this is a payment of its own (it is never merged into another one unasked)
+    items.forEach(x => {
+      if (x.dup !== 'maybe') return;
+      const e = state.expenses.find(y => y.id === x.match), a = payerKey(x), b = e ? payerKey(e) : '';
+      if (!(a && b && samePayer(a, b))) { x.dup = false; x.match = null; x.include = true; }
+    });
     if (linkDuplicates(items)) updateBalances(items.filter(x => x.match));
     const commentCat = type => {   // category you used before with the same comment
       const cnt = {};
