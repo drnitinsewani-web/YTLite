@@ -63,6 +63,12 @@
   .emoji { width: 40px; height: 40px; border-radius: 12px; background: var(--surface-2); display: grid; place-items: center; font-size: 20px; flex: none; }
   .item .info { flex: 1; min-width: 0; }
   .item .cat { font-weight: 600; }
+  .item.unread { box-shadow: inset 4px 0 0 var(--accent); background: color-mix(in srgb, var(--accent) 9%, transparent); }
+  .item.unread .cat, .item.unread .amt { font-weight: 800; }
+  .item.unread .cat::after { content: ""; display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--accent); margin-left: 8px; vertical-align: middle; }
+  .item .comment { font-size: 13px; color: var(--text); opacity: .8; margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  nav button .badge { position: absolute; top: 4px; left: 56%; min-width: 18px; height: 18px; padding: 0 5px; border-radius: 9px; background: var(--danger); color: #fff; font-size: 11px; font-weight: 700; line-height: 18px; display: inline-block; }
+  .review-banner { margin: 10px 0 0; padding: 10px 12px; border-radius: 12px; font-size: 13px; background: color-mix(in srgb, var(--warn) 16%, transparent); color: var(--text); }
   .item .note { color: var(--muted); font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .amt { font-weight: 650; font-variant-numeric: tabular-nums; white-space: nowrap; }
   .amt.credit { color: var(--income); }
@@ -382,6 +388,9 @@
       <h2>Preferences</h2>
       <label for="currency">Currency</label>
       <select id="currency"></select>
+      <label for="reviewMin">Mark imported transactions over this amount “to review”</label>
+      <input id="reviewMin" type="number" inputmode="decimal" min="0" step="any" placeholder="1000">
+      <div class="sub">They stay highlighted until you open them and save a comment. 0 = off.</div>
       <label for="budget">Monthly budget (0 = none)</label>
       <input id="budget" type="number" inputmode="decimal" min="0" step="any">
       <label for="selfName">Your name as on bank statements</label>
@@ -469,7 +478,7 @@
 <button class="fab" id="fab" aria-label="Add transaction">+</button>
 
 <nav>
-  <button data-view="list" class="active"><span>🧾</span>Expenses</button>
+  <button data-view="list" class="active" style="position:relative"><span>🧾</span>Expenses<b class="badge hidden" id="navBadge"></b></button>
   <button data-view="summary"><span>📊</span>Summary</button>
   <button data-view="settings"><span>⚙️</span>Settings</button>
 </nav>
@@ -493,6 +502,9 @@
       <select id="fPay"><option>Cash</option><option>Card</option><option>UPI</option><option>Bank</option><option>Other</option></select>
     </div>
   </div>
+  <div class="review-banner hidden" id="fReviewBanner">To review — add a comment and Save to mark it as reviewed.</div>
+  <label for="fComment">Comment</label>
+  <input id="fComment" type="text" placeholder="What was this for?" maxlength="300">
   <div id="fAcctWrap"><label for="fAcct">Account</label><select id="fAcct"></select></div>
   <label for="fNote">Note</label>
   <input id="fNote" type="text" placeholder="e.g. Lunch with team" maxlength="200">
@@ -716,9 +728,14 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     });
   }
   const AMT_PRESETS = [0, 1000, 5000, 10000];
+  // "To review": imported transactions above the threshold stay unread until a comment is saved.
+  let reviewOnly = false;
+  const reviewMin = () => { const v = state.settings.reviewMin; return v == null ? 1000 : v; };
+  const needsReview = x => reviewMin() > 0 && x.amount > reviewMin();
   function renderAmtBar() {
     const custom = minAmt && !AMT_PRESETS.includes(minAmt);
-    $('amtBar').innerHTML = AMT_PRESETS.map(v =>
+    const toReview = inMonth(monthKey(current)).filter(e => e.unread).length;
+    $('amtBar').innerHTML = (toReview || reviewOnly ? `<button class="chip ${reviewOnly ? 'sel' : ''}" data-review="1">● To review ${toReview}</button>` : '') + AMT_PRESETS.map(v =>
       `<button class="chip ${minAmt === v ? 'sel' : ''}" data-min="${v}">${v ? 'Over ' + fmt(v).replace(/\.00$/, '') : 'All amounts'}</button>`).join('') +
       `<button class="chip ${custom ? 'sel' : ''}" data-min="custom">${custom ? 'Over ' + fmt(minAmt).replace(/\.00$/, '') : 'Custom…'}</button>`;
   }
@@ -876,6 +893,9 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     const isNowMonth = monthKey(current) === monthKey(new Date());
     $('nextM').style.visibility = isNowMonth ? 'hidden' : 'visible';
     renderAcctBar();
+    const unread = state.expenses.filter(e => e.unread).length;
+    $('navBadge').textContent = unread > 99 ? '99+' : unread;
+    $('navBadge').classList.toggle('hidden', !unread);
     if (view === 'list') renderList();
     if (view === 'summary') renderSummary();
     if (view === 'settings') renderSettings();
@@ -914,15 +934,16 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     const shown = items
       .filter(e => {
         if (minAmt && e.amount <= minAmt) return false;
+        if (reviewOnly && !e.unread) return false;
         if (!q) return true;
         return parseQuery(q).every(t => t.op
           ? (t.op === '>' ? e.amount > t.v : t.op === '>=' ? e.amount >= t.v : t.op === '<' ? e.amount < t.v : e.amount <= t.v)
-          : (e.note.toLowerCase().includes(t.word) || e.category.toLowerCase().includes(t.word)));
+          : (e.note.toLowerCase().includes(t.word) || e.category.toLowerCase().includes(t.word) || String(e.comment || '').toLowerCase().includes(t.word)));
       })
       .sort((a, b) => b.date.localeCompare(a.date) || b.createdAt - a.createdAt);
 
     renderAmtBar();
-    const filtering = minAmt || q;
+    const filtering = minAmt || q || reviewOnly;
     const fd = shown.filter(e => e.type === 'debit' && counted(e)), fc = shown.filter(e => e.type === 'credit' && counted(e));
     $('filterSummary').innerHTML = filtering && shown.length
       ? `${shown.length} transaction${shown.length > 1 ? 's' : ''}${minAmt ? ` over ${fmt(minAmt).replace(/\.00$/, '')}` : ''} · spent <b>${fmt(sum(fd))}</b>${fc.length ? ` · received <b style="color:var(--income)">${fmt(sum(fc))}</b>` : ''}`
@@ -943,10 +964,11 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
       return `<div class="day"><span>${label}</span><span>${right}</span></div>
         <div class="list">${groups[d].map(e => {
           const c = catOf(e.category);
-          return `<div class="item" data-id="${e.id}">
+          return `<div class="item ${e.unread ? 'unread' : ''}" data-id="${e.id}">
             <div class="emoji">${esc(c.emoji)}</div>
             <div class="info"><div class="cat">${esc(c.name)}</div>
-              <div class="note">${esc([e.note, !acctFilter && acctById(e.account) ? acctLabel(acctById(e.account)) : e.payment].filter(Boolean).join(' · '))}</div></div>
+              <div class="note">${esc([e.note, !acctFilter && acctById(e.account) ? acctLabel(acctById(e.account)) : e.payment].filter(Boolean).join(' · '))}</div>
+              ${e.comment ? `<div class="comment">💬 ${esc(e.comment)}</div>` : ''}</div>
             ${amtHtml(e)}</div>`;
         }).join('')}</div>`;
     }).join('');
@@ -1063,6 +1085,7 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     }
     sel.value = state.settings.currency;
     $('budget').value = state.settings.budget || '';
+    $('reviewMin').value = reviewMin();
     $('selfName').value = state.settings.selfName || '';
     renderMailStatus();
     $('autoAdd').checked = !!state.settings.autoAddShared;
@@ -1105,6 +1128,8 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     $('sheetTitle').textContent = exp ? 'Edit transaction' : pre ? 'Add from email' : 'Add transaction';
     $('fAmount').value = src && src.amount ? src.amount : '';
     $('fNote').value = src ? src.note || '' : '';
+    $('fComment').value = exp ? exp.comment || '' : '';
+    $('fReviewBanner').classList.toggle('hidden', !(exp ? exp.unread : (pre && needsReview(pre))));
     let pay = 'Cash'; try { pay = localStorage.getItem(KEY + ':pay') || pay; } catch (e) {}
     $('fPay').value = src ? (src.payment || 'Other') : pay;
     const today = new Date();
@@ -1134,19 +1159,29 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     const data = {
       type: formType, amount: Math.round(amount * 100) / 100, category: selectedCat,
       date: $('fDate').value || isoDate(new Date()), note: $('fNote').value.trim(), payment: $('fPay').value,
-      account: $('fAcct').value || ''
+      account: $('fAcct').value || '',
+      comment: $('fComment').value.trim()
     };
+    if (!data.comment) delete data.comment;
     try { localStorage.setItem(KEY + ':acct', data.account); } catch (e) {}
     try { localStorage.setItem(KEY + ':pay', data.payment); } catch (e) {}
     if (editingId) {
       const e = state.expenses.find(x => x.id === editingId);
+      if (!data.comment) delete e.comment;
       Object.assign(e, data);
+      let msg = 'Updated';
       if (e.ref && data.category !== editingOrigCat && data.note) {
         const k = learn(data.note, data.category);
-        toast(k ? `Updated · will file “${k}” under ${data.category}` : 'Updated');
-      } else toast('Updated');
+        if (k) msg = `Updated · will file “${k}” under ${data.category}`;
+      }
+      if (e.unread) {
+        if (data.comment) { delete e.unread; msg = 'Reviewed ✓'; }
+        else msg = 'Saved · still to review until you add a comment';
+      }
+      toast(msg);
     } else {
-      state.expenses.push({ id: uid(), createdAt: Date.now(), ...data, ...(pendingRef ? { ref: pendingRef } : {}) });
+      state.expenses.push({ id: uid(), createdAt: Date.now(), ...data, ...(pendingRef ? { ref: pendingRef } : {}),
+        ...(pendingRef && !data.comment && needsReview(data) ? { unread: true } : {}) });
       if (pendingRef.startsWith('mail|')) { const m = mailCfg(); m.seen = [...new Set([...(m.seen || []), pendingRef.slice(5)])].slice(-1000); }
       toast((data.type === 'credit' ? 'Added income ' : 'Added ') + fmt(data.amount));
     }
@@ -1742,7 +1777,8 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     const add = items.map((x, i) => ({
       id: uid(), createdAt: now + i, type: x.type, amount: x.amount, category: x.category,
       date: x.date, note: x.desc, payment: x.payment || 'Bank', ref: x.ref, account: x.account || '',
-      ...(x.balance != null ? { balance: x.balance } : {})
+      ...(x.balance != null ? { balance: x.balance } : {}),
+      ...(needsReview(x) ? { unread: true } : {})
     }));
     updateBalances(items);
     if (created.length) label = (label || `Imported ${add.length} transactions`) + ` · added account${created.length > 1 ? 's' : ''} ` + created.map(a => acctLabel(a)).join(', ');
@@ -1781,6 +1817,7 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
   $('nextM').addEventListener('click', () => { current = new Date(current.getFullYear(), current.getMonth() + 1, 1); render(); });
   $('search').addEventListener('input', renderList);
   $('amtBar').addEventListener('click', e => {
+    if (e.target.closest('[data-review]')) { reviewOnly = !reviewOnly; renderList(); return; }
     const b = e.target.closest('[data-min]'); if (!b) return;
     if (b.dataset.min !== 'custom') { setMinAmt(+b.dataset.min); return; }
     const v = prompt('Show transactions over this amount', minAmt || '');
@@ -1852,6 +1889,10 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
 
   // ---------- settings ----------
   $('currency').addEventListener('change', e => { state.settings.currency = e.target.value; save(); toast('Currency set to ' + e.target.value); });
+  $('reviewMin').addEventListener('change', e => {
+    state.settings.reviewMin = Math.max(0, parseFloat(e.target.value) || 0); save();
+    toast(state.settings.reviewMin ? `New imports over ${fmt(state.settings.reviewMin).replace(/\.00$/, '')} will be marked to review` : 'Review marking turned off');
+  });
   $('budget').addEventListener('change', e => { state.settings.budget = Math.max(0, parseFloat(e.target.value) || 0); save(); toast('Budget saved'); });
   $('selfName').addEventListener('change', e => { state.settings.selfName = e.target.value.trim(); selfRe = selfPatterns(); save(); toast('Saved'); });
   $('addCat').addEventListener('click', () => {
@@ -1884,9 +1925,9 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
   }
   $('exportCsv').addEventListener('click', () => {
     const q = v => `"${String(v).replace(/"/g, '""')}"`;
-    const rows = [['Date', 'Type', 'Category', 'Amount', 'Currency', 'Payment', 'Account', 'Note']]
+    const rows = [['Date', 'Type', 'Category', 'Amount', 'Currency', 'Payment', 'Account', 'Note', 'Comment']]
       .concat([...state.expenses].sort((a, b) => a.date.localeCompare(b.date))
-        .map(e => [e.date, e.type === 'credit' ? 'Credit' : 'Debit', e.category, e.amount, state.settings.currency, e.payment || '', (acctById(e.account) || {}).name || '', e.note]));
+        .map(e => [e.date, e.type === 'credit' ? 'Credit' : 'Debit', e.category, e.amount, state.settings.currency, e.payment || '', (acctById(e.account) || {}).name || '', e.note, e.comment || '']));
     download(`transactions-${isoDate(new Date())}.csv`, rows.map(r => r.map(q).join(',')).join('\n'), 'text/csv');
   });
   $('backup').addEventListener('click', () =>
@@ -1902,7 +1943,8 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
           amount: x.amount, category: String(x.category || 'Other'), date: x.date, note: String(x.note || ''),
           payment: String(x.payment || ''), ...(x.ref ? { ref: String(x.ref) } : {}), ...(x.account ? { account: String(x.account) } : {}),
           ...(typeof x.balance === 'number' ? { balance: x.balance } : {}),
-          ...(Array.isArray(x.refs) ? { refs: x.refs.map(String) } : {}) }));
+          ...(Array.isArray(x.refs) ? { refs: x.refs.map(String) } : {}),
+          ...(x.comment ? { comment: String(x.comment) } : {}), ...(x.unread ? { unread: true } : {}) }));
       if (!confirm(`Replace current data with ${valid.length} transactions from backup?`)) return;
       state = migrate({ ...data, expenses: valid });
       save(); $('currency').innerHTML = ''; render(); toast('Restored');
