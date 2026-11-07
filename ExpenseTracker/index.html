@@ -71,6 +71,8 @@
   .item .rv { font-size: 10px; font-weight: 800; letter-spacing: .06em; padding: 2px 7px; border-radius: 99px; background: var(--warn); color: #1f1300; }
   .item .comment { font-size: 13px; color: var(--text); opacity: .8; margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   nav button .badge { position: absolute; top: 4px; left: 56%; min-width: 18px; height: 18px; padding: 0 5px; border-radius: 9px; background: var(--danger); color: #fff; font-size: 11px; font-weight: 700; line-height: 18px; display: inline-block; }
+  .mchk { display: flex; gap: 10px; align-items: center; margin: 8px 0 0; color: var(--text); font-size: 14px; }
+  .mchk input { width: 20px; height: 20px; padding: 0; flex: none; accent-color: var(--accent); }
   .review-banner { margin: 10px 0 0; padding: 10px 12px; border-radius: 12px; font-size: 13px; background: color-mix(in srgb, var(--warn) 16%, transparent); color: var(--text); }
   .item .note { color: var(--muted); font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .amt { font-weight: 650; font-variant-numeric: tabular-nums; white-space: nowrap; }
@@ -513,6 +515,11 @@
   <div class="review-banner hidden" id="fReviewBanner">To review — add a comment and Save to mark it as reviewed.</div>
   <label for="fComment">Comment</label>
   <input id="fComment" type="text" placeholder="What was this for?" maxlength="300">
+  <div id="fMatch" class="hidden" style="margin-top:8px;font-size:14px;line-height:1.35">
+    <label class="mchk" id="fMatchAmtRow"><input type="checkbox" id="fMatchAmt"><span>Also apply to <b id="fMatchAmtN">0</b> with the same payer &amp; amount</span></label>
+    <label class="mchk" id="fMatchAnyRow"><input type="checkbox" id="fMatchAny"><span>Also apply to <b id="fMatchAnyN">0</b> from the same payer, any amount</span></label>
+    <label class="mchk"><input type="checkbox" id="fMatchFuture"><span>Use for future imports from <b id="fMatchWho"></b></span></label>
+  </div>
   <div id="fAcctWrap"><label for="fAcct">Account</label><select id="fAcct"></select></div>
   <label for="fNote">Note</label>
   <input id="fNote" type="text" placeholder="e.g. Lunch with team" maxlength="200">
@@ -750,21 +757,55 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
   // Round figures (whole rupees, multiples of ₹100: 500, 1,000, 10,000…) are usually one-off transfers
   // with different purposes, so their comments are never copied or turned into rules.
   const isRound = amt => Math.abs(amt - Math.round(amt)) < 0.005 && Math.round(amt) % 100 === 0;
-  const commentKey = e => {
-    if (isRound(Number(e.amount))) return '';
-    const k = merchantKey(e.note || e.desc || ''); return k.length >= 3 ? `${k}|${e.type}|${Number(e.amount).toFixed(2)}` : '';
-  };
-  function applyCommentRule(e) {
-    const rules = state.settings.commentRules || {};
-    const k = commentKey(e);
-    if (!k || !rules[k] || e.comment) return false;
-    e.comment = rules[k]; delete e.unread; return true;
+  // Rule keys: "MERCHANT|type|1463.62" (same amount) or "MERCHANT|type|any". Values are
+  // { c: comment } when the user chose them; plain strings are older automatic rules, which are
+  // ignored for round amounts.
+  const payerKey = e => { const k = merchantKey(e.note || e.desc || ''); return k.length >= 3 ? k : ''; };
+  const amtKey = e => Number(e.amount).toFixed(2);
+  function ruleComment(e) {
+    const rules = state.settings.commentRules || {}, k = payerKey(e);
+    if (!k) return '';
+    const exact = rules[`${k}|${e.type}|${amtKey(e)}`], any = rules[`${k}|${e.type}|any`];
+    if (exact && typeof exact === 'object') return exact.c;
+    if (exact && !isRound(e.amount)) return exact;
+    if (any) return typeof any === 'object' ? any.c : any;
+    return '';
   }
+  function applyCommentRule(e) {
+    if (e.comment) return false;
+    const c = ruleComment(e); if (!c) return false;
+    e.comment = c; delete e.unread; return true;
+  }
+  // existing uncommented entries matching e: same payer & type, and (optionally) the same amount
+  const commentMatches = (e, sameAmount) => {
+    const k = payerKey(e); if (!k) return [];
+    return state.expenses.filter(x => x.id !== e.id && !x.comment && x.type === e.type && payerKey(x) === k &&
+      (!sameAmount || amtKey(x) === amtKey(e)));
+  };
+  function renderMatchOptions(e) {
+    const k = e && payerKey(e);
+    $('fMatch').classList.toggle('hidden', !k);
+    if (!k) return;
+    const same = commentMatches(e, true).length, any = commentMatches(e, false).length;
+    $('fMatchAmtN').textContent = same; $('fMatchAnyN').textContent = any;
+    $('fMatchAmtRow').classList.toggle('hidden', !same);
+    $('fMatchAnyRow').classList.toggle('hidden', any <= same);
+    $('fMatchWho').textContent = k.toLowerCase().replace(/\b\w/g, c => c.toUpperCase());
+    const round = isRound(e.amount);
+    $('fMatchAmt').checked = !!same && !round;
+    $('fMatchAny').checked = false;
+    $('fMatchFuture').checked = !round;
+  }
+  // Apply the saved comment as chosen in the edit sheet; returns how many other entries changed.
   function learnComment(e) {
-    const k = commentKey(e); if (!k || !e.comment) return 0;
-    state.settings.commentRules = { ...(state.settings.commentRules || {}), [k]: e.comment };
+    if (!e.comment || !payerKey(e)) return 0;
+    const anyAmt = $('fMatchAny').checked, sameAmt = $('fMatchAmt').checked || anyAmt;
     let n = 0;
-    state.expenses.forEach(x => { if (x !== e && !x.comment && commentKey(x) === k) { x.comment = e.comment; delete x.unread; n++; } });
+    if (sameAmt) commentMatches(e, !anyAmt).forEach(x => { x.comment = e.comment; delete x.unread; n++; });
+    if ($('fMatchFuture').checked) {
+      const key = `${payerKey(e)}|${e.type}|${anyAmt ? 'any' : amtKey(e)}`;
+      state.settings.commentRules = { ...(state.settings.commentRules || {}), [key]: { c: e.comment } };
+    }
     return n;
   }
   function renderAmtBar() {
@@ -1163,13 +1204,15 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     $('catChips').innerHTML = state.categories.map((c, i) => c.kind !== 'credit' ? chip(c, i) : '').join('');
     $('incChips').innerHTML = state.categories.map((c, i) => c.kind === 'credit' ? chip(c, i) : '').join('');
     const rules = Object.entries(state.rules);
-    const crules = Object.entries(state.settings.commentRules || {}).filter(([k]) => !isRound(+k.split('|')[2]));
+    const crules = Object.entries(state.settings.commentRules || {})
+      .filter(([k, v]) => typeof v === 'object' || !isRound(+k.split('|')[2]))
+      .map(([k, v]) => [k, typeof v === 'object' ? v.c : v]);
     $('ruleCount').textContent = rules.length + crules.length ? `(${rules.length + crules.length})` : '';
     $('ruleChips').innerHTML = rules.length + crules.length
       ? rules.sort((a, b) => a[0].localeCompare(b[0])).map(([k, v]) =>
           `<span class="chip">${esc(k)} <small>→</small> ${esc(catOf(v).emoji)} ${esc(v)}<span class="x" data-rule="${esc(k)}" role="button" aria-label="Forget">✕</span></span>`).join('') +
         crules.map(([k, v]) => { const [m, t, a] = k.split('|');
-          return `<span class="chip">💬 ${esc(m)} <small>${t === 'credit' ? '+' : ''}${esc(fmt(+a))} →</small> ${esc(v)}<span class="x" data-crule="${esc(k)}" role="button" aria-label="Forget">✕</span></span>`; }).join('')
+          return `<span class="chip">💬 ${esc(m)} <small>${a === 'any' ? 'any amount' : (t === 'credit' ? '+' : '') + esc(fmt(+a))} →</small> ${esc(v)}<span class="x" data-crule="${esc(k)}" role="button" aria-label="Forget">✕</span></span>`; }).join('')
       : '<span class="sub" style="margin:0">None yet.</span>';
   }
 
@@ -1198,6 +1241,7 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     $('fAmount').value = src && src.amount ? src.amount : '';
     $('fNote').value = src ? src.note || '' : '';
     $('fComment').value = exp ? exp.comment || '' : '';
+    renderMatchOptions(exp || null);
     $('fReviewBanner').classList.toggle('hidden', !(exp ? exp.unread : (pre && needsReview(pre))));
     let pay = 'Cash'; try { pay = localStorage.getItem(KEY + ':pay') || pay; } catch (e) {}
     $('fPay').value = src ? (src.payment || 'Other') : pay;
@@ -1249,8 +1293,7 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
       }
       if (data.comment) {
         const n = learnComment(e);
-        if (n) msg += ` · same comment added to ${n} matching transaction${n > 1 ? 's' : ''}`;
-        else if (isRound(e.amount)) msg += ' · round amount, so the comment isn’t copied to others';
+        if (n) msg += ` · same comment added to ${n} other transaction${n > 1 ? 's' : ''}`;
       }
       toast(msg);
     } else {
