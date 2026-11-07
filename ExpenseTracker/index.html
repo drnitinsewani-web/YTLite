@@ -1573,7 +1573,7 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
       }
       if (!x.acctDigits) return;
       const d = x.acctDigits;
-      let a = (state.accounts || []).find(y => y.digits.some(z => z.endsWith(d) || d.endsWith(z)));
+      let a = (state.accounts || []).find(y => y.digits.some(z => (z.endsWith(d) || d.endsWith(z)) && (x.acctKind !== 'card' || (z.length >= 4 && d.length >= 4))));
       if (!a) {
         const kind = x.acctKind || 'bank';
         const base = x.acctBank || (kind === 'card' ? 'Card' : 'Bank account');
@@ -2196,7 +2196,7 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     const base = payerFilter ? state.expenses.filter(e => samePayer(payerKey(e), payerFilter)) : items;
     $('payerBanner').classList.toggle('hidden', !payerFilter);
     if (payerFilter) {
-      const paid = sum(base.filter(e => e.type === 'debit')), got = sum(base.filter(e => e.type === 'credit'));
+      const paid = sum(base.filter(e => e.type === 'debit')), got = sum(base.filter(e => e.type === 'credit' && !refundTarget(e)));   // payments are net of their linked refunds
       const dates = base.map(e => e.date).sort();
       const span = dates.length ? `${new Date(dates[0] + 'T00:00').toLocaleDateString(undefined, { month: 'short', year: 'numeric' })} – ${new Date(dates[dates.length - 1] + 'T00:00').toLocaleDateString(undefined, { month: 'short', year: 'numeric' })}` : '';
       $('payerBanner').innerHTML = `<div style="display:flex;justify-content:space-between;align-items:center;gap:10px">
@@ -2513,7 +2513,9 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     const e = state.expenses.find(x => x.id === editingId); if (!e) return;
     if (u) {
       const c = state.expenses.find(x => x.id === u.dataset.refundunlink); if (!c) return;
-      delete c.refundOf; save(); render(); renderRefund(e); toast('Refund link removed — both count again'); return;
+      delete c.refundOf;
+      if (!c.userCat && c.category === 'Refund') { c.category = classify(c.note || '', 'credit'); if (c === e) { selectedCat = editingOrigCat = c.category; renderFormCats(); } }
+      save(); render(); renderRefund(e); toast('Refund link removed — both count again'); return;
     }
     const other = state.expenses.find(x => x.id === l.dataset.refundlink); if (!other) return;
     const credit = e.type === 'credit' ? e : other, debit = e.type === 'credit' ? other : e;
@@ -2665,7 +2667,9 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     renderFormCats();
   });
   $('fDelete').addEventListener('click', () => {
-    if (!confirm('Delete this transaction?')) return;
+    const del = state.expenses.find(e => e.id === editingId), back = del ? refundsOf(del) : [];
+    if (!confirm(back.length ? `Delete this transaction?\n\nIts refund${back.length > 1 ? 's' : ''} (${back.map(c => fmt(c.amount)).join(', ')}) will then count as income.` : 'Delete this transaction?')) return;
+    if (del) forget([del]);
     state.expenses = state.expenses.filter(e => e.id !== editingId);
     save(); closeAll(); render(); toast('Deleted');
   });
@@ -2715,6 +2719,7 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     const e = state.expenses.find(x => x.id === editingId), im = importOf(e); if (!im) return;
     if (!confirm(`Delete all ${im.list.length} entries ${im.b.name ? `“${im.b.name}”` : 'this import'} added on ${shortD(isoDate(new Date(im.b.at)))}?\n\nEntries that were already in Kharcha before it stay. Removing a file from the folder doesn't do this by itself.`)) return;
     const ids = new Set(im.list.map(x => x.id));
+    forget(im.list);
     state.expenses = state.expenses.filter(x => !ids.has(x.id));
     state.settings.imports = (state.settings.imports || []).filter(x => x !== im.b);
     tidyTransfers(); save(); closeAll(); render();
@@ -3123,8 +3128,15 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     return n;
   }
   const utrsOf = e => [...new Set([e.utr, ...(String(e.note || e.desc || '') + ' ' + [e.ref, ...(e.refs || [])].join(' ')).match(/\b\d{12}\b/g) || []].filter(Boolean))];
+  // References of entries you deleted (short hashes, the latest 800): a file read again — the folder re-checks
+  // everything when Kharcha learns a new kind of file — doesn't bring them back.
+  const refHash = r => { let h = 5381; for (let i = 0; i < r.length; i++) h = ((h << 5) + h + r.charCodeAt(i)) | 0; return (h >>> 0).toString(36); };
+  function forget(list) {
+    const hs = list.flatMap(refsOf).map(refHash); if (!hs.length) return;
+    state.settings.gone = [...new Set((state.settings.gone || []).concat(hs))].slice(-800);
+  }
   function markDups(items) {
-    const refs = new Set(state.expenses.flatMap(refsOf));
+    const refs = new Set(state.expenses.flatMap(refsOf)), gone = new Set(state.settings.gone || []);
     const byUtr = new Map();   // every entry per UPI reference (an SMS and the app's entry can share one)
     state.expenses.forEach(e => utrsOf(e).forEach(u => { const k = u + '|' + e.type; byUtr.set(k, (byUtr.get(k) || []).concat(e)); }));
     const withUtr = x => utrsOf(x).flatMap(u => byUtr.get(u + '|' + x.type) || []);
@@ -3132,6 +3144,7 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     items.forEach(x => {
       x.match = null;
       if (refs.has(x.ref)) { x.dup = 'exact'; x.include = false; return; }
+      if (x.ref && gone.has(refHash(x.ref))) { x.dup = 'deleted'; x.include = false; return; }
       // same UPI reference number, same direction and amount: the same payment seen from another source
       const viaUtr = withUtr(x).find(e => !used.has(e.id) && amtIs(e, x.amount));
       if (viaUtr) { x.dup = 'utr'; x.match = viaUtr.id; used.add(viaUtr.id); x.include = false; return; }
@@ -3320,7 +3333,7 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
       <div class="irow ${x.include ? '' : 'off'}" data-i="${i}">
         <input type="checkbox" ${x.include ? 'checked' : ''} aria-label="Include">
         <div class="d"><div class="desc">${esc(noteText(x) || '(no description)')}${badgeFor(appOf(x, imp.acctOverride ? finalAcct(x) : x.account))}</div>
-          <div class="meta">${new Date(x.date + 'T00:00').toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' })}${x.dup === 'exact' ? '<span class="tag warn">already imported</span>' : x.dup === 'balance' ? '<span class="tag warn">same as existing entry · balance matches</span>' : x.dup === 'utr' ? `<span class="tag warn">same payment already in Kharcha · UTR matches${x.otherAmt ? ` · ${fmt(Math.min(x.amount, x.otherAmt))} of ${fmt(Math.max(x.amount, x.otherAmt))} paid from the bank, the rest from the wallet` : ''}</span>` : x.dup ? '<span class="tag warn">possible duplicate</span>' : ''}${
+          <div class="meta">${new Date(x.date + 'T00:00').toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' })}${x.dup === 'exact' ? '<span class="tag warn">already imported</span>' : x.dup === 'deleted' ? '<span class="tag warn">you deleted this before · tick to add it again</span>' : x.dup === 'balance' ? '<span class="tag warn">same as existing entry · balance matches</span>' : x.dup === 'utr' ? `<span class="tag warn">same payment already in Kharcha · UTR matches${x.otherAmt ? ` · ${fmt(Math.min(x.amount, x.otherAmt))} of ${fmt(Math.max(x.amount, x.otherAmt))} paid from the bank, the rest from the wallet` : ''}</span>` : x.dup ? '<span class="tag warn">possible duplicate</span>' : ''}${
             x.balanceGap ? '<span class="tag warn">balance doesn’t add up here</span>' : ''}${
             acctById(finalAcct(x)) ? `<span class="tag">${esc(acctLabel(acctById(finalAcct(x))))}</span>`
             : x.acctDigits && !imp.acctOverride ? `<span class="tag">New account: ${esc(newAcctLabel(x))}</span>`
@@ -3356,6 +3369,8 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
   // ("06/04/2026 13189813357 Google Play 650-2530000 US* 0 25 USD 2,375.87"), HDFC's time, SBI's "D".
   // Purchases are spending; a payment you made to the card is a transfer from your bank (the bank's
   // "CC BillPay" / "Auto Debit CC…" debit is one already), so the bill is never counted twice.
+  // a PhonePe statement opens with "Transaction Statement for +91…"; a card statement may mention PhonePe in a row
+  const phonePeHead = lines => /transaction statement for/i.test(lines.slice(0, 8).join(' '));
   const isCardStatement = lines => {
     const t = lines.slice(0, 150).join(' \n ');
     return /credit\s*card/i.test(t) && /(total|minimum)\s+(amount\s+)?due|payment\s+due\s+date|total\s+dues|amount\s+payable/i.test(t);
@@ -3368,12 +3383,15 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
   function parseCardStatement(lines, fileName = '') {
     const text = lines.join(' \n ');
     // card numbers: "4315XXXXXXXX7005", "4386 XXXX XXXX 1234", "XXXX XXXX XXXX 1234"
+    // card numbers: "4315XXXXXXXX7005", "5522 60XX XXXX 1234", "533467******1234", "**** **** **** 1234",
+    // Amex "XXXX-XXXXXX-81003" (6+ masked characters, so "savings account XX7238" is not a card)
+    const CARD_NO = /(^|[^\w*•])((?:\d{4}[ -]?)?\d{0,2})((?:[ -]?[Xx*•]{2,}){1,5})[ -]?(\d{4,5})(?!\d)/g;
+    const cardIn = l => { const out = []; for (const m of String(l).matchAll(CARD_NO)) if ((m[3].match(/[Xx*•]/g) || []).length >= 6) out.push({ first: m[2].replace(/\D/g, '').slice(0, 4), last: m[4].slice(-4) }); return out; };
     const cards = [];
-    for (const m of text.matchAll(/\b(\d{4})[ -]?[X*x•]{2,4}[ -]?[X*x•]{2,4}[ -]?(\d{4})\b|\b[X*x•]{4}(?:[ -]?[X*x•]{4}){1,2}[ -]?(\d{4})\b/g)) {
-      const last = m[2] || m[3], first = m[1] || '';
-      if (last && !cards.some(c => c.last === last)) cards.push({ first, last });
-    }
+    lines.forEach(l => cardIn(l).forEach(c => { if (!cards.some(x => x.last === c.last)) cards.push(c); }));
     const main = cards.find(c => c.first && c.first !== '0000') || cards[0];
+    // an account already known for a card (4+ digits: PhonePe's 2-digit endings are bank accounts)
+    const acctFor = c => c && (state.accounts || []).find(a => (a.digits || []).some(z => z.length >= 4 && z.slice(-4) === c.last));
     // the period it covers: "Statement period : April 6, 2026 to May 5, 2026", else the statement date
     const datesIn = t => (String(t).match(ANY_DATE) || []).map(d => parseDate(d.replace(/\.(?=\s)/, ''), 'dmy')).filter(Boolean);
     let from = '', to = '';
@@ -3381,9 +3399,15 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     if (pi >= 0) { const ds = datesIn(lines.slice(pi, pi + 2).join(' ').replace(/^.*?statement\s+period/i, '')); if (ds.length >= 2) { from = ds[0]; to = ds[1]; } }
     if (!to) { const si = lines.findIndex(l => /statement\s+date/i.test(l)); if (si >= 0) to = datesIn(lines.slice(si, si + 3).join(' ').replace(/^.*?statement\s+date/i, ''))[0] || ''; }
     const today = isoDate(new Date());
-    const bank = bankFromText(text), acct = (state.accounts || []).find(a => (a.digits || []).some(z => z.length >= 4 && cards.some(c => c.last === z.slice(-4))));
-    const items = []; let seq = 0;
+    // the card's account: known by its number, or by the card account's own "0000…" number
+    const bank = bankFromText(text), mainAcct = acctFor(main) || cards.filter(c => c !== main && (!c.first || c.first === '0000')).map(acctFor).find(Boolean);
+    // "0000XXXXXXXX1279" is the card account's own number (its payments are listed under it); another real
+    // card number is an add-on or replaced card: its rows go to its own account when Kharcha has one
+    const own = c => c && c !== main && c.first !== '0000' ? acctFor(c) : null;
+    const more = cards.filter(c => !own(c)).map(c => c.last);
+    const items = []; let seq = 0, cur = null;
     lines.forEach(l => {
+      const cs0 = cardIn(l); if (cs0.length && !CARD_ROW.test(l)) { cur = cards.find(c => c.last === cs0[0].last) || cur; return; }
       const m = l.match(CARD_ROW); if (!m) return;
       const date = parseDate(m[1].replace(/\.(?=\s)/, ''), 'dmy'); if (!date || date > today) return;
       if (to && (date > to || (from && date < addDaysIso(from, -45)))) return;   // due dates and other dates in the heading
@@ -3396,12 +3420,18 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
       const sfx = (m[4] || '').toLowerCase();
       const paid = /payment\s*(rec|recd|received)|thank\s*you|auto\s*debit\s*payment|autopay|bbps|payment\s+-?\s*(neft|imps|upi)/i.test(desc);
       const type = sfx === 'cr' || sfx === 'c' || (!sfx && paid) ? 'credit' : 'debit';
+      // money in that is your payment to the card, however the bank words it
+      const payIn = type === 'credit' && (paid || /\bpay(ment)?\b|transfer|\bneft\b|\bimps\b|\brtgs\b|\bupi\b|net ?banking|auto ?debit|\brecd\b|received|cheque|\bchq\b|cash dep/i.test(desc));
+      // a purchase converted to EMI: this credit cancels the purchase; the monthly instalments are the spending
+      const emiConv = type === 'credit' && /emi\s*(conv|book)|conver\w*\s+(to|in(to)?)\s+emi|flexi\s*pay|loan\s+on\s+card/i.test(desc);
       // money back on a card that isn't your payment is a refund or reversal, not income
-      let category = type === 'credit' && paid ? 'Transfer' : classify(desc, type);
-      if (type === 'credit' && !paid && /^Other/.test(category) && catsFor('credit').some(c => c.name === 'Refund')) category = 'Refund';
+      let category = payIn && !emiConv ? 'Transfer' : classify(desc, type);
+      if (type === 'credit' && !payIn && /^Other/.test(category) && catsFor('credit').some(c => c.name === 'Refund')) category = 'Refund';
+      if (emiConv && catsFor('credit').some(c => c.name === 'Refund')) category = 'Refund';
+      const acct = own(cur) || mainAcct;
       items.push({ date, desc, type, amount, ref: refOf(date, type, amount, serial ? `${desc} #${serial}` : desc), payment: 'Card', category, touched: false,
         balance: null, seq: seq++, account: acct ? acct.id : '', acctDigits: acct ? '' : (main ? main.last : ''), acctBank: bank, acctKind: 'card', bankSure: !!bank,
-        moreDigits: cards.map(c => c.last), stmtTo: to || '' });
+        moreDigits: own(cur) ? [] : more, stmtTo: to || '', ...(emiConv ? { emiConv: true } : {}) });
     });
     if (!to && items.length) { const last = items.reduce((x, i) => i.date > x ? i.date : x, ''); items.forEach(i => { i.stmtTo = last; }); }
     const label = `${bank || 'Credit'} card${main ? ' ••' + main.last : ''}${to ? ' · to ' + shortD(to) : ''}`;
@@ -3423,7 +3453,7 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
       if (isFdAdvice(lines)) { const fd = parseFdAdvice(lines); toast(fd ? saveFd(fd) : 'This looks like an FD advice, but its amount or maturity date couldn’t be read', 6000); return; }
       const gp = isGPay(lines) ? parseGPay(lines) : [];
       if (gp.length) { previewStatement(gp, `Google Pay · ${file.name}`, 'No transactions found in this PDF'); return; }
-      if (!isPhonePe(lines) && isCardStatement(lines)) {
+      if (isCardStatement(lines) && !phonePeHead(lines)) {
         const cs = parseCardStatement(lines, file.name);
         if (cs.items.length || !aiOn()) { previewStatement(cs.items, `${cs.label} · ${file.name}`, 'No transactions found in this card statement'); return; }
       }
@@ -3774,6 +3804,11 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
       delete e.unread;
     });
     state.expenses.push(...add);
+    add.forEach((e, i) => {
+      if (!items[i] || !items[i].emiConv) return;
+      const d = state.expenses.find(y => y.type === 'debit' && y.account === e.account && Math.abs(y.amount - e.amount) < 0.005 && y.date <= e.date && dayDiff(y.date, e.date) <= 90 && !refundedOf(y) && !/emi/i.test(y.note || ''));
+      if (d) { e.refundOf = d.id; delete e.unread; delete d.unread; }
+    });
     if (add.length) state.settings.imports = (state.settings.imports || []).concat({ at: now, n: add.length, name: String(src || '').slice(0, 80) }).slice(-80);
     const utrMerged = mergeUtrPairs();
     if (utrMerged) label = (label || `Imported ${add.length} transactions`) + ` · ${utrMerged} matched by UPI reference`;
@@ -4219,6 +4254,7 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
       state.expenses.filter(cand).sort((a, b) => a.createdAt - b.createdAt).forEach(e => { if (run.length && e.createdAt !== run[run.length - 1].createdAt + 1) flush(); run.push(e); });
       flush();
       const gone = state.expenses.filter(e => bad.has(e.id)), spent = gone.filter(e => e.type === 'debit').reduce((t, e) => t + e.amount, 0);
+      forget(gone);
       state.expenses = state.expenses.filter(e => !bad.has(e.id));
       setTimeout(() => toast(`Removed ${gone.length} entries that trading reports had added as bank transactions (${fmt(spent)} that wasn't spending)`, 7000), 1500);
     }
@@ -4625,7 +4661,7 @@ Rules: include only completed transactions — skip OTPs, offers, ads, due/bill 
     const cutoff = isoDate(new Date(Date.now() - 456 * 864e5));
     const rows = state.expenses.filter(e => e.date >= cutoff).sort((a, b) => b.date.localeCompare(a.date)).slice(0, 1500);
     const months = {};
-    state.expenses.forEach(e => { const m = e.date.slice(0, 7); months[m] = months[m] || { out: 0, in: 0 }; if (counted(e)) months[m][e.type === 'credit' ? 'in' : 'out'] += e.amount; });
+    state.expenses.forEach(e => { const m = e.date.slice(0, 7); months[m] = months[m] || { out: 0, in: 0 }; if (counted(e)) months[m][e.type === 'credit' ? 'in' : 'out'] += amtOf(e); });
     const data = rows.map(e => [e.date, e.type === 'credit' ? 'in' : 'out', e.amount, e.category + (groupOf(e) ? ' [' + groupOf(e) + ']' : ''), acctName(acctById(e.account)) || e.payment || '', noteText(e).slice(0, 60), String(e.comment || '').slice(0, 40)].join(' | ')).join('\n');
     const sys = `You are Kharcha, a helpful personal-finance assistant for an Indian user. Answer in short, plain sentences using ₹ amounts with Indian digit grouping. Base every number on the data; if the data doesn't cover it, say so. Categories "Transfer" (moves between own accounts) and "Investment" are not spending. Today is ${isoDate(new Date())}.`;
     const user = `Monthly totals (all data, excluding transfers): ${Object.keys(months).sort().map(m => `${m}: out ₹${Math.round(months[m].out)}, in ₹${Math.round(months[m].in)}`).join('; ')}\n\nEntries (date | in/out | amount | category [group] | account | description | user note), newest first${rows.length >= 1500 ? ', most recent 1500 only' : ''}:\n${data}\n\nQuestion: ${q}`;
@@ -4699,11 +4735,11 @@ Rules: include only completed transactions — skip OTPs, offers, ads, due/bill 
         if (isFdAdvice(lines)) { const fd = parseFdAdvice(lines); r.kind = 'Fixed deposit'; if (fd) r.fd = saveFd(fd).replace(/^🏦 /, ''); else r.note = 'FD advice: amount or maturity date not readable'; return r; }
         const gp = isGPay(lines) ? parseGPay(lines) : [];
         if (gp.length) { r.kind = 'Google Pay'; return commitAuto(gp, r); }
-        if (isPhonePe(lines)) { r.kind = 'PhonePe'; return commitAuto(parsePhonePe(lines), r); }
-        if (isCardStatement(lines)) {
+        if (isCardStatement(lines) && !phonePeHead(lines)) {
           const cs = parseCardStatement(lines, file.name);
           if (cs.items.length || !aiOn()) { r.kind = cs.label; if (!cs.items.length) r.note = 'card statement with no transactions found'; return commitAuto(cs.items, r); }
         }
+        if (isPhonePe(lines)) { r.kind = 'PhonePe'; return commitAuto(parsePhonePe(lines), r); }
         if (aiOn()) { r.kind = 'DeepSeek'; return commitAuto(await aiExtractParts(aiSplit(lines), file.name, lines.slice(0, 12).join('\n')), r); }
         r.note = 'not a PhonePe or Google Pay PDF (add a DeepSeek key in Settings to read other PDFs)'; return r;
       }
@@ -4884,7 +4920,7 @@ Rules: include only completed transactions — skip OTPs, offers, ads, due/bill 
   $('autoAdd').checked = !!state.settings.autoAddShared;
   $('autoAdd').addEventListener('change', e => { state.settings.autoAddShared = e.target.checked; save(); toast(e.target.checked ? 'Messages will be added automatically' : 'Messages will wait for your review'); });
   // bump when Kharcha learns a new kind of file, so the statement folder is looked at again
-  const PARSER_VERSION = 7;   // 4: FD advices · 5: broker ledgers and P&L reports · 6: statement periods · 7: credit card PDFs
+  const PARSER_VERSION = 8;   // 4: FD advices · 5: broker ledgers and P&L reports · 6: statement periods · 7: credit card PDFs · 8: card PDFs that mention PhonePe, more card layouts
   if (NATIVE) native({ type: 'ready', parser: PARSER_VERSION });
   if (loadProblem) toast('⚠︎ Kharcha couldn’t read its saved data, so nothing will be saved until it is restored. Settings › Data › Automatic backups.', 10000);
   const autoMail = () => {

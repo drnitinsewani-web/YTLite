@@ -118,16 +118,30 @@ enum KharchaData {
               let expenses = obj["expenses"] as? [[String: Any]] else { return nil }
         let excluded = Set(((obj["categories"] as? [[String: Any]]) ?? [])
             .filter { ($0["exclude"] as? Bool) == true }.compactMap { $0["name"] as? String })
-            .union(["Transfer", "Investment"])
+            .union(["Transfer", "Investment", "Loan"])
         let month = String(today().prefix(7))
+        let num: (Any?) -> Double = { v in (v as? Double) ?? Double("\(v ?? 0)") ?? 0 }
+        // as in the app: money back linked to a payment (refundOf) is not income, and the payment
+        // counts only what didn't come back; transfers Kharcha marked (autoXfer) never count
+        var debitIds = Set<String>()
+        for e in expenses where (e["type"] as? String) == "debit" { if let id = e["id"] as? String { debitIds.insert(id) } }
+        var refunded: [String: Double] = [:]
+        for e in expenses where (e["type"] as? String) == "credit" {
+            if let to = e["refundOf"] as? String, debitIds.contains(to) { refunded[to, default: 0] += num(e["amount"]) }
+        }
         var spent = 0.0, income = 0.0, byCat: [String: Double] = [:], toReview = 0
         for e in expenses {
             if (e["unread"] as? Bool) == true { toReview += 1 }
             guard let d = e["date"] as? String, d.hasPrefix(month) else { continue }
-            let amt = (e["amount"] as? Double) ?? Double("\(e["amount"] ?? 0)") ?? 0
             let cat = (e["category"] as? String) ?? "Other"
-            if excluded.contains(cat) { continue }
-            if (e["type"] as? String) == "credit" { income += amt } else { spent += amt; byCat[cat, default: 0] += amt }
+            if excluded.contains(cat) || e["autoXfer"] != nil { continue }
+            if (e["type"] as? String) == "credit" {
+                if let to = e["refundOf"] as? String, debitIds.contains(to) { continue }
+                income += num(e["amount"])
+            } else {
+                let amt = max(0, num(e["amount"]) - refunded[(e["id"] as? String) ?? "", default: 0])
+                spent += amt; byCat[cat, default: 0] += amt
+            }
         }
         let top = byCat.max { $0.value < $1.value }.map { (name: $0.key, amount: $0.value) }
         return Summary(spent: spent, income: income, top: top, toReview: toReview)
