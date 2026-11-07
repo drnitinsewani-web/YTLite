@@ -752,6 +752,7 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
   ];
   const STOP = new Set(('UPI NEFT IMPS RTGS POS ATM TXN TRF TRANSFER REF NO PAYMENT PAY PAID TO FROM BY DR CR VPS IPS ACH NACH ECS MB INB IB NET BIL BILL ONL ECOM PURCHASE PUR DEBIT CREDIT CARD THE AND FOR VIA ' +
     'OK OKAXIS OKICICI OKSBI OKHDFCBANK YBL IBL AXL PAYTM APL HDFCBANK ICICI HDFC AXIS SBI SBIN KOTAK KKBK UTIB ICIC BANK BNK LTD PVT LIMITED INDIA PRIVATE ' +
+    'UTR RRN PHONEPE GPAY GOOGLE ACCOUNT ACCT ACC SAVINGS CURRENT ' +
     'COLLECT REQUEST SENT RECEIVED MOB MOBILE MMT NFS CHQ CHEQUE DEP WDL INFT TPT IFT SI IMPSP UPIOUT UPIIN UPIAR UPIRET UPIINTENT YOU ARE BEING ON YES UNION BARODA CANARA PNB IDFC INDUSIND FEDERAL').split(' '));
 
   const $ = id => document.getElementById(id);
@@ -769,6 +770,16 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
       categories: DEFAULT_CATS.map(({ since, ...c }) => c),
       settings: { currency: /-IN$/i.test(lang) ? 'INR' : 'USD', budget: 0, selfName: '' }
     };
+  }
+  // Rules learned under payee keys that were only labels ("ACCOUNT UTR", "UTR PHONEPE") matched
+  // unrelated payments; drop them.
+  function dropLabelRules(s) {
+    const bad = k => /(^|\s)(UTR|PHONEPE|GPAY|ACCOUNT|RRN)(\s|\||$)/.test(k);
+    let n = 0;
+    Object.keys(s.rules || {}).forEach(k => { if (bad(k)) { delete s.rules[k]; n++; } });
+    const cr = (s.settings || {}).commentRules || {};
+    Object.keys(cr).forEach(k => { if (bad(k.split('|')[0] + '|')) { delete cr[k]; n++; } });
+    return n;
   }
   function migrate(s) {
     const d = defaultState();
@@ -790,6 +801,7 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
       if (min > 0) s.expenses.forEach(e => { if (e.ref && !e.comment && e.amount > min) e.unread = true; });
       s.settings.reviewBackfill = true;
     }
+    dropLabelRules(s);
     return s;
   }
   function load() {
@@ -1290,12 +1302,19 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
   }
 
   // ---------- classification ----------
+  // Payee of a transaction as up to two name words ("SAFE GOLD"). Kharcha's own labels (" · UTR …",
+  // " · PhonePe") are ignored. A payee known only by a masked account number ("Paid to Bank Account
+  // XXXXXXXXXX1090", "XXXXXXXXXX38", "******9880") is keyed by its last digits ("ACCT 1090"), so
+  // payments to different accounts are never treated as the same payee.
   function merchantKey(desc) {
+    const text = String(desc).replace(/\s·\s(?:UTR\s*\d+|PhonePe|GPay|Paytm)\b/gi, ' ').toUpperCase().replace(/[\w.\-]*@[\w.\-]*/g, ' ');
     const seen = [];
-    String(desc).toUpperCase().replace(/[\w.\-]*@[\w.\-]*/g, ' ').split(/[^A-Z0-9&]+/).filter(t => !/\d/.test(t)).forEach(t => {
+    text.split(/[^A-Z0-9&]+/).filter(t => !/\d/.test(t)).forEach(t => {
       if (t.length >= 3 && !/^X+$/.test(t) && !STOP.has(t) && !seen.includes(t)) seen.push(t);
     });
-    return seen.slice(0, 2).join(' ');
+    if (seen.length) return seen.slice(0, 2).join(' ');
+    const masked = text.match(/(?:[X*]{2,}\s*)(\d{2,6})\b/);
+    return masked ? 'ACCT ' + masked[1].slice(-4) : '';
   }
   // Patterns that match the account holder's own name as banks print it (UPI cuts names to ~10 chars).
   function selfPatterns() {
