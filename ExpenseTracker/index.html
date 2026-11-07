@@ -2419,6 +2419,10 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
   function showBg() { $('sheetBg').style.display = 'block'; }
   function closeAll() {
     imp.tagOnImport = null;
+    if (imp.newSelf) {   // a statement's holder name taken as yours, but its import was cancelled
+      if (state.settings.selfName === imp.newSelf) { state.settings.selfName = ''; selfRe = selfPatterns(); save(); }
+      imp.newSelf = '';
+    }
     setTimeout(() => runFolderQueue(), 500);   // statements from the folder wait while a sheet is open
     $('sheet').classList.remove('open'); $('impSheet').classList.remove('open'); $('smsSheet').classList.remove('open'); $('mailSheet').classList.remove('open'); $('catSheet').classList.remove('open');
     $('sheetBg').style.display = 'none';
@@ -2800,12 +2804,13 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     const data = new Uint8Array(await file.arrayBuffer());
     let doc, password;
     const tries = [undefined, ...knownPasswords()];
-    for (let attempt = 0; attempt < tries.length + 3; attempt++) {
+    for (let attempt = 0; ; attempt++) {
       try { doc = await pdfjsLib.getDocument({ data: data.slice(), password, isEvalSupported: false }).promise; break; }
       catch (e) {
         if (e && e.name === 'PasswordException') {
           if (attempt + 1 < tries.length) { password = tries[attempt + 1]; continue; }
           if (noPrompt) throw new Error('PASSWORD');
+          if (attempt >= tries.length + 3) break;   // four typed passwords, each tried
           password = prompt(attempt >= tries.length ? 'Wrong password. Try again:' : 'This PDF is password-protected. Enter its password:');
           if (password === null) throw new Error('Cancelled');
         } else throw e;
@@ -2934,15 +2939,21 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
       const t = r.lines.join(' ').replace(/\s+/g, ' ');
       const dm = t.match(DATE);
       const date = dm[1] ? parseDate(`${dm[2]} ${dm[1]} ${dm[3]}`, 'dmy') : parseDate(`${dm[4]} ${dm[5]} ${dm[6]}`, 'dmy');
-      const tm = t.match(/\b(DEBIT|CREDIT)\b/i);
-      const am = t.match(/(?:₹|rs\.?|inr)\s*([\d,]+(?:\.\d{1,2})?)/i);
+      // the Type column (DEBIT / CREDIT in capitals) sits right before the amount; the payee can hold
+      // either word or a number ("HDFC Credit Card", "Flowers 4 U")
+      let tm = t.match(/\b(DEBIT|CREDIT)\s*(?:₹|\b(?:[Rr][Ss]|INR|inr)\b\.?)\s*([\d,]+(?:\.\d{1,2})?)/), am = tm && [tm[0], tm[2]];
+      if (!tm) {
+        am = t.match(/₹\s*([\d,]+(?:\.\d{1,2})?)/) || t.match(/\b(?:rs\.?|inr)\s*([\d,]+(?:\.\d{1,2})?)/i);
+        const before = am ? t.slice(0, am.index) : t;
+        tm = before.match(/\b(DEBIT|CREDIT)\b(?!.*\b(?:DEBIT|CREDIT)\b)/) || before.match(/\b(debit|credit)\b(?!.*\b(?:debit|credit)\b)/i);
+      }
       if (!date || !tm || !am) return;
       const type = tm[1].toUpperCase() === 'CREDIT' ? 'credit' : 'debit';
       const amount = Math.round(parseFloat(am[1].replace(/,/g, '')) * 100) / 100;
       if (!(amount > 0)) return;
       // description = text between the time and DEBIT/CREDIT, minus the reference lines
-      let desc = t.replace(DATE, '').replace(/^\s*\d{1,2}:\d{2}\s*(am|pm)?/i, '')
-        .replace(/\b(DEBIT|CREDIT)\b.*$/i, '').replace(/Transaction ID.*$/i, '').trim();
+      let desc = t.slice(0, tm.index).replace(DATE, '').replace(/^\s*\d{1,2}:\d{2}\s*(am|pm)?/i, '')
+        .replace(/Transaction ID.*$/i, '').trim();
       if (!desc) desc = (t.match(/(Paid to|Received from|Sent to|Transfer(?:red)? to|Transfer(?:red)? from)\s+([^₹]+?)(?=\s+(?:Transaction ID|UTR|Paid by|Debited from|Credited to|DEBIT|CREDIT|₹|$))/i) || [, '', ''])[2];
       const party = (desc.match(/^(?:Paid to|Received from|Sent to|Payment to|Transfer(?:red)? (?:to|from))\s+(.+)$/i) || [])[1] || '';
       const utr = (t.match(/UTR\s*No\.?\s*:?\s*([0-9]{8,})/i) || [])[1] || '';
@@ -2959,7 +2970,12 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     if (/\.(xlsx?|ods)$/i.test(file.name)) {
       try { await loadScript(SHEETJS); }
       catch (e) { throw new Error('Excel support needs an internet connection the first time. Or save the file as CSV and import that.'); }
-      const wb = XLSX.read(await file.arrayBuffer(), { type: 'array', cellDates: true });
+      const buf = new Uint8Array(await file.arrayBuffer());
+      // many banks' "Excel" download is an HTML table or tab-separated text: keep its cells as text, or
+      // SheetJS reads "05/11/2026" the US way (May 11); parseDate and guessDateFmt read them instead
+      const text = buf.length > 1 && ((buf[0] === 0xFF && buf[1] === 0xFE) || (buf[0] === 0xFE && buf[1] === 0xFF) ||   // UTF-16 text
+        (!(buf[0] === 0x50 && buf[1] === 0x4B) && !(buf[0] === 0xD0 && buf[1] === 0xCF) && buf.subarray(0, 1024).indexOf(0) < 0));
+      const wb = XLSX.read(buf, { type: 'array', cellDates: true, ...(text ? { raw: true } : {}) });
       // pick the sheet with the most rows; keep every sheet for reports that use several (brokers)
       let best = [];
       lastBook = { names: wb.SheetNames, sheets: {} };
@@ -2988,26 +3004,33 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
         }
         return -1;
       };
-      const type = find([/^(dr ?\/ ?cr|cr ?\/ ?dr|dr cr|debit ?\/ ?credit|type|txn type|transaction type|d\/c|c\/d)$/]);
+      // a Dr/Cr column before a "Transaction Type" one (which may only name the channel: UPI, NEFT…)
+      let type = find([/^(dr ?\/ ?cr|cr ?\/ ?dr|dr cr|debit ?\/ ?credit|d\/c|c\/d)$/, /^(type|txn type|transaction type)$/]);
       const date = find([/^(txn|transaction|tran|trans|posting|post|booking)\.? ?(date|dt)/, /^date$/, /date(?!.*value)/, /^value ?(date|dt)/, /\bdt\b/], [type]);
       const desc = find([/narration/, /description/, /particulars/, /remarks/, /transaction (details|info)/, /details/, /memo|payee|merchant|name/], [type, date]);
-      const debit = find([/withdrawal|debit|\bdr\b|paid out|money out|outflow/], [type, date, desc]);
-      const credit = find([/deposit|credit|\bcr\b|paid in|money in|inflow/], [type, date, desc, debit]);
+      let debit = find([/withdrawal|debit|\bdr\b|paid out|money out|outflow/], [type, date, desc]);
+      let credit = find([/deposit|credit|\bcr\b|paid in|money in|inflow/], [type, date, desc, debit]);
       const amount = find([/^amount|amount$|\bamt\b|^value$/], [type, date, desc, debit, credit]);
       if (date >= 0 && (debit >= 0 && credit >= 0 || amount >= 0)) {
         const balance = h.findIndex((x, j) => x && ![type, date, desc, debit, credit, amount].includes(j) && /balance|\bbal\b/.test(x));
+        if (!(debit >= 0 && credit >= 0)) {   // one Amount column: a lone "Dr / Cr Indicator" match is its type, not a debit column
+          const lone = debit >= 0 ? debit : credit;
+          if (type < 0 && lone >= 0 && lone !== balance && /\bdr\b.*\bcr\b|\bcr\b.*\bdr\b|debit.*credit|credit.*debit|indicator/.test(h[lone])) type = lone;
+          debit = credit = -1;
+        }
         return { header: i, map: { date, desc, debit, credit, amount: (debit >= 0 && credit >= 0) ? -1 : amount, type, balance } };
       }
     }
-    // no header row found: guess from the data itself
+    // no header row found: guess from the data itself (an amount cell holds only a number, not "UPI/6123…/SWIGGY")
+    const isAmt = c => typeof c === 'number' ? Math.abs(c) < 1e9 : /^[-+(]?\s*(?:₹|rs\.?|inr)?\s*[-(]?\s*(?:\d{1,3}(?:,\d{2,3})+|\d{1,9})(?:\.\d{1,2})?\s*\)?\s*(?:dr|cr)?\.?\s*-?$/i.test(String(c).trim());
     const first = rows.findIndex(r => r.some(c => parseDate(c, 'dmy')));
     if (first < 0) return null;
     const r = rows[first];
     const date = r.findIndex(c => parseDate(c, 'dmy'));
-    const nums = r.map((c, j) => j !== date && !isNaN(parseAmount(c)) ? j : -1).filter(j => j >= 0);
-    const desc = r.findIndex((c, j) => j !== date && typeof c === 'string' && /[a-z]{3}/i.test(c));
+    const desc = r.findIndex((c, j) => j !== date && typeof c === 'string' && /[a-z]{3}/i.test(c) && !isAmt(c));
+    const nums = r.map((c, j) => j !== date && j !== desc && String(c).trim() !== '' && isAmt(c) ? j : -1).filter(j => j >= 0);
     if (!nums.length) return null;
-    return { header: first - 1, map: { date, desc, debit: -1, credit: -1, amount: nums[0], type: -1, balance: -1 } };
+    return { header: first - 1, guessed: true, map: { date, desc, debit: -1, credit: -1, amount: nums[0], type: -1, balance: -1 } };
   }
 
   const MONTHS = ['jan','feb','mar','apr','may','jun','jul','aug','sep','oct','nov','dec'];
@@ -3019,9 +3042,14 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     return dt.getMonth() === m - 1 ? isoDate(dt) : null;
   }
   function parseDate(v, fmt) {
-    if (v instanceof Date && !isNaN(v)) return isoDate(new Date(v.getTime() + 12 * 36e5));
-    if (typeof v === 'number') {
-      if (v > 20000 && v < 80000) { const d = new Date(Date.UTC(1899, 11, 30) + Math.round(v) * 864e5); return mkDate(d.getUTCFullYear(), d.getUTCMonth() + 1, d.getUTCDate()); }
+    if (v instanceof Date && !isNaN(v)) {
+      // SheetJS's date cells are off by the seconds it drops from the 1899 time-zone offset (23:59:50 the
+      // day before, in India): take exactly that back, so a 14:30 cell stays on its own day
+      const b = new Date(1899, 11, 30), skew = b.getTime() - Date.UTC(1899, 11, 30) - b.getTimezoneOffset() * 6e4;
+      return isoDate(new Date(v.getTime() - (Math.abs(skew) < 12e4 ? skew : 0)));
+    }
+    if (typeof v === 'number') {   // an Excel serial date; a time of day is its fraction
+      if (v > 20000 && v < 80000) { const d = new Date(Date.UTC(1899, 11, 30) + Math.floor(v + 1e-6) * 864e5); return mkDate(d.getUTCFullYear(), d.getUTCMonth() + 1, d.getUTCDate()); }
       return null;
     }
     const s = String(v || '').trim();
@@ -3049,19 +3077,24 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     if (mdy > dmy) return 'mdy';
     return state.settings.currency === 'USD' ? 'mdy' : 'dmy';
   }
-  // Signed number: "(1,200.00)", "-1200", "1,200.00 Dr" are negative; "1,200 Cr" positive.
+  // Signed number: "(1,200.00)", "-1200", "−1200", "1,200.00 Dr", "1,200.00Dr" are negative; "1,200 Cr",
+  // "1,200.00(Cr)" positive. "Rs. 1,250.00" is 1250: a dot right after a word isn't a decimal point.
   function parseAmount(v) {
     if (typeof v === 'number') return v;
-    const s = String(v == null ? '' : v).trim();
+    const s = String(v == null ? '' : v).replace(/[\u2212\u2012\u2013\uFE63\uFF0D]/g, '-').trim();
     if (!s || !/\d/.test(s)) return NaN;
-    const n = parseFloat(s.replace(/[^0-9.\-]/g, '').replace(/(?!^)-/g, ''));
+    const n = parseFloat(s.replace(/[a-z]\./gi, ' ').replace(/[^0-9.\-]/g, '').replace(/(?!^)-/g, ''));
     if (isNaN(n)) return NaN;
-    if (/\(.*\)/.test(s) || /\bdr\.?$/i.test(s) || /^-|-$/.test(s.replace(/[^\d.\-]/g, ''))) return -Math.abs(n);
-    if (/\bcr\.?$/i.test(s)) return Math.abs(n);
+    const dc = drcrSuffix(s);
+    if (dc === 'debit' || /^-|-$/.test(s.replace(/[^\d.\-]/g, '')) || /\([^()]*\d[^()]*\)/.test(s)) return -Math.abs(n);
+    if (dc === 'credit') return Math.abs(n);
     return n;
   }
-
-  const drcrSuffix = v => /\bdr\.?\s*$/i.test(String(v)) ? 'debit' : /\bcr\.?\s*$/i.test(String(v)) ? 'credit' : null;
+  // "500 Dr", "500.00Dr", "500.00 (CR)", "1,000 Cr." → 'debit' / 'credit'
+  function drcrSuffix(v) {
+    const m = String(v).match(/(?:^|[^a-z])(dr|cr)\.?\s*\)?\s*$/i);
+    return m ? (m[1].toLowerCase() === 'dr' ? 'debit' : 'credit') : null;
+  }
 
   // ---------- statement import: building the preview ----------
   const imp = { stmtAcct: { id: '', digits: '' }, acctOverride: '', rows: [], header: 0, map: {}, dateFmt: 'dmy', sign: 'neg-debit', items: [], filter: 'all', name: '' };
@@ -3136,21 +3169,39 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     state.settings.gone = [...new Set((state.settings.gone || []).concat(hs))].slice(-800);
   }
   function markDups(items) {
-    const refs = new Set(state.expenses.flatMap(refsOf)), gone = new Set(state.settings.gone || []);
+    const gone = new Set(state.settings.gone || []);
+    const byRef = new Map();   // every entry per reference
+    state.expenses.forEach(e => refsOf(e).forEach(r => byRef.set(r, (byRef.get(r) || []).concat(e))));
     const byUtr = new Map();   // every entry per UPI reference (an SMS and the app's entry can share one)
     state.expenses.forEach(e => utrsOf(e).forEach(u => { const k = u + '|' + e.type; byUtr.set(k, (byUtr.get(k) || []).concat(e)); }));
     const withUtr = x => utrsOf(x).flatMap(u => byUtr.get(u + '|' + x.type) || []);
     const used = new Set();
+    // an account number the app doesn't know yet (x.acctDigits) is a different account from every existing one
+    const otherAcctOf = (x, e) => x.account ? (e.account && e.account !== x.account)
+      : (x.acctDigits && e.account && !((acctById(e.account) || {}).digits || []).some(z => z.endsWith(x.acctDigits) || x.acctDigits.endsWith(z)));
+    const hasBal = v => v != null && !isNaN(v);
+    // Seen before (same statement row / SMS / email): first, so that entry isn't matched to another row too.
+    // A statement row (date|type|amount|narration) can repeat — two ₹2,000 withdrawals at one ATM, the same
+    // fee in two accounts — so each earlier entry stands for one such row; one with another balance, not
+    // known to be in the same account, is a different transaction.
+    const otherRow = (x, e) => hasBal(x.balance) && hasBal(e.balance) && Math.abs(x.balance - e.balance) > 0.011 && !(x.account && x.account === e.account);
+    const sameBal = (x, e) => hasBal(x.balance) && hasBal(e.balance) && Math.abs(x.balance - e.balance) < 0.011;
+    items.forEach(x => { x.match = null; x.dup = false; delete x.otherAmt; });
+    [true, false].forEach(byBal => items.forEach(x => {   // the copy with the same balance first, then any other
+      const same = !x.dup && x.ref && byRef.get(x.ref); if (!same) return;
+      const bank = isBankRef(x.ref), e = same.find(y => !used.has(y.id) && (byBal ? sameBal(x, y) : !(bank && otherRow(x, y))));
+      if (e) used.add(e.id);
+      if (e || (!byBal && !bank)) { x.dup = 'exact'; x.include = false; }
+    }));
     items.forEach(x => {
-      x.match = null;
-      if (refs.has(x.ref)) { x.dup = 'exact'; x.include = false; return; }
+      if (x.dup === 'exact') return;
       if (x.ref && gone.has(refHash(x.ref))) { x.dup = 'deleted'; x.include = false; return; }
-      // same UPI reference number, same direction and amount: the same payment seen from another source
-      const viaUtr = withUtr(x).find(e => !used.has(e.id) && amtIs(e, x.amount));
+      // same UPI reference number, same direction and amount, a few days apart at most: the same payment seen
+      // from another source (a loan or account number in a monthly narration is 12 digits too)
+      const viaUtr = withUtr(x).find(e => !used.has(e.id) && amtIs(e, x.amount) &&
+        (dayDiff(e.date, x.date) <= 4 || (x.utrSure && e.utrSure && x.utr && x.utr === e.utr)));
       if (viaUtr) { x.dup = 'utr'; x.match = viaUtr.id; used.add(viaUtr.id); x.include = false; return; }
-      // an account number the app doesn't know yet (x.acctDigits) is a different account from every existing one
-      const otherAcct = e => x.account ? (e.account && e.account !== x.account)
-        : (x.acctDigits && e.account && !((acctById(e.account) || {}).digits || []).some(z => z.endsWith(x.acctDigits) || x.acctDigits.endsWith(z)));
+      const otherAcct = e => otherAcctOf(x, e);
       // the same UPI payment where PhonePe/GPay/SMS shows another amount than the bank statement (an
       // offer or reward paid part of it): the reference the app printed is in the bank's narration
       const viaUtrAmt = withUtr(x).find(e => !used.has(e.id) && utrPair(x, e) && !otherAcct(e));
@@ -3160,7 +3211,6 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
       // "RRN/UTR/Ref" — count; a stray 12-digit number in a narration might be something else)
       const otherRef = e => x.utrSure && e.utrSure && x.utr && e.utr && x.utr !== e.utr;
       const sameAmt = state.expenses.filter(e => !used.has(e.id) && e.type === x.type && amtIs(e, x.amount) && !otherAcct(e));
-      const hasBal = v => v != null && !isNaN(v);
       let m = hasBal(x.balance) && sameAmt.find(e => hasBal(e.balance) && Math.abs(e.balance - x.balance) < 0.011 && dayDiff(e.date, x.date) <= 4);
       if (m) x.dup = 'balance';
       else {
@@ -3193,14 +3243,17 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     if (n) mergeUtrPairs();   // a bank row just joined to its SMS can now meet the app's entry (also when nothing else is new)
     return n;
   }
-  // Latest known balance per account (from statement rows and SMS/email alerts).
+  // Latest known balance per account (from statement rows and SMS/email alerts). seq orders the rows of
+  // one statement (x.run); on the same day, a balance from another import (an SMS after the statement) is newer.
+  let stmtRuns = 0;
   function updateBalances(items) {
     items.forEach(x => {
       const a = acctById(x.account);
       if (!a || x.balance == null || a.kind === 'card') return;
       const cur = a.bal;
-      const newer = !cur || x.date > cur.date || (x.date === cur.date && (x.seq || 0) >= (cur.seq || 0));
-      if (newer) a.bal = { amount: x.balance, date: x.date, seq: x.seq || 0 };
+      const newer = !cur || x.date > cur.date || (x.date === cur.date &&
+        (((x.run || '') !== (cur.run || '') && (cur.seq || 0) < 1e9) || (x.seq || 0) >= (cur.seq || 0)));
+      if (newer) a.bal = { amount: x.balance, date: x.date, seq: x.seq || 0, ...(x.run ? { run: x.run } : {}) };
     });
   }
   // How far each account's bank statements reach (a.stmtTo), recorded when a statement is imported
@@ -3214,7 +3267,7 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
   function buildItems() {
     const { map } = imp;
     const cell = (r, j) => j >= 0 ? r[j] : '';
-    const items = [];
+    const items = [], run = Date.now().toString(36) + '.' + (++stmtRuns);
     let seq = 0;
     imp.rows.slice(imp.header + 1).forEach(r => {
       if (!Array.isArray(r)) return;
@@ -3227,7 +3280,7 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
         amount = Math.round(Math.abs(amount) * 100) / 100;
         if (!(amount > 0)) return;
         const ref = refOf(date, type, amount, desc);
-        items.push({ date, desc, type, amount, ref, payment: 'Bank', category: classify(desc, type), touched: false, balance, seq: seq++,
+        items.push({ date, desc, type, amount, ref, payment: 'Bank', category: classify(desc, type), touched: false, balance, seq: seq++, run,
           account: imp.stmtAcct.id, acctDigits: imp.stmtAcct.digits, acctBank: imp.stmtAcct.bank, acctKind: imp.stmtAcct.kind,
           bankSure: !!imp.stmtAcct.bank, holder: imp.holder || '' });   // the statement names its own bank
       };
@@ -3252,6 +3305,7 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     items.sort((a, b) => b.date.localeCompare(a.date) || b.seq - a.seq);
     const lastRow = items.reduce((m, x) => x.date > m ? x.date : m, '');
     items.forEach(x => { x.stmtTo = imp.stmtTo && imp.stmtTo >= lastRow ? imp.stmtTo : lastRow; });
+    applyAcctOverride(items);
     markDups(items);
     imp.items = items;
   }
@@ -3275,6 +3329,15 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
   }
 
   const finalAcct = x => imp.acctOverride === '__none' ? '' : (imp.acctOverride || x.account || '');
+  // "Put all in …" / "No account": the rows take that account, so duplicates are looked for in it
+  // (x.auto keeps the account each row was matched to, for "matched automatically")
+  function applyAcctOverride(items) {
+    items.forEach(x => {
+      if (!x.auto) x.auto = { account: x.account || '', acctDigits: x.acctDigits || '' };
+      x.account = imp.acctOverride === '__none' ? '' : imp.acctOverride || x.auto.account;
+      x.acctDigits = imp.acctOverride ? '' : x.auto.acctDigits;
+    });
+  }
   function renderImport() {
     const it = imp.items;
     $('impTitle').textContent = imp.mode === 'file' ? 'Import statement' : 'Review transactions';
@@ -3479,13 +3542,13 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     if (looksLikeTrades(rows, det)) { toast('This is a trading report (trades or P&L), not a bank statement — nothing added. Angel One and Upstox reports show in Summary › Brokers.', 6000); return; }
     if (!det && aiOn() && rows.length) { aiReadLines(rowsToLines(rows), file.name, rowsContext(rows)); return; }
     setupStatement(rows, file, det);
-    $('impMap').open = !det;
+    $('impMap').open = !det || !!det.guessed;
     $('toast').classList.remove('show');
     fillMapSelects();
     buildItems();
     // every row was imported before: nothing to review — just record how far this statement reaches
     if (det && imp.items.length && imp.items.every(x => x.dup === 'exact')) {
-      coverItems(imp.items); save(); render();
+      imp.newSelf = ''; coverItems(imp.items); save(); render();
       toast(`Everything in this statement is already in Kharcha (${imp.items.length} transactions)`, 4000);
       return;
     }
@@ -3500,14 +3563,18 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     imp.header = det ? det.header : 0;
     imp.map = det ? det.map : { date: -1, desc: -1, debit: -1, credit: -1, amount: -1, type: -1, balance: -1 };
     imp.dateFmt = imp.map.date >= 0 ? guessDateFmt(rows, imp.map.date) : 'dmy';
-    const headText = rows.slice(0, Math.max(1, imp.header)).map(r => r.join(' ')).join(' \n ') + ' ' + file.name.replace(/[_\-.]/g, ' ');
+    // the heading above the column names (none in a file without them: its first row is a transaction)
+    const headText = rows.slice(0, imp.header < 0 ? 0 : Math.max(1, imp.header)).map(r => r.join(' ')).join(' \n ') + ' ' + file.name.replace(/[_\-.]/g, ' ');
     // the period the statement covers ends at the latest date in its heading (not at its last
-    // transaction: an account can be quiet for weeks)
+    // transaction: an account can be quiet for weeks), not at a payment due date or the day it was made
     const today = isoDate(new Date()), DATEISH = /^\s*(\d{1,2}[\/\-.]\d{1,2}[\/\-.]\d{2,4}|\d{4}-\d{2}-\d{2}|\d{1,2}[- ][A-Za-z]{3,9}[- ,]+\d{2,4})\b/;
+    const NOT_END = /\bdue\b|generat|printed|print date|download|requested|run (on|date)/i;
     imp.stmtTo = '';
-    rows.slice(0, imp.header).forEach(r => (r || []).forEach(c => {
+    rows.slice(0, Math.max(0, imp.header)).forEach(r => (r || []).forEach((c, j) => {
       const d = c instanceof Date ? parseDate(c, 'dmy') : DATEISH.test(String(c)) ? parseDate(String(c).trim(), imp.dateFmt) : null;
-      if (d && d <= today && d > imp.stmtTo) imp.stmtTo = d;
+      if (!d || d > today || d <= imp.stmtTo) return;
+      const label = r.slice(0, j).map(v => String(v ?? '').trim()).filter(Boolean).pop() || '';   // the cell before it
+      if (!NOT_END.test(label)) imp.stmtTo = d;
     }));
     imp.stmtAcct = matchAccount(headText, true);
     // only trust a bare long number for a new account when it is the only one in the header
@@ -3523,12 +3590,21 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     }
     imp.stmtAcct.kind = /credit card|card statement|card account/i.test(headText) ? 'card' : 'bank';
     if (imp.map.amount >= 0 && imp.map.type < 0) {
-      const anyNeg = rows.slice(imp.header + 1).some(r => parseAmount(r[imp.map.amount]) < 0);
+      const anyNeg = rows.slice(imp.header + 1).some(r => parseAmount(r[imp.map.amount]) < 0), acct = acctById(imp.stmtAcct.id);
       imp.sign = anyNeg ? 'neg-debit' : 'pos-debit';
+      // a card statement is mostly purchases: the sign most of its rows have is a charge (Amex-style
+      // exports show purchases positive and the payment negative); a bank account's money out is negative
+      if (anyNeg && (imp.stmtAcct.kind === 'card' || (acct && acct.kind === 'card'))) {
+        const amts = rows.slice(imp.header + 1).filter(r => imp.map.date < 0 || parseDate(r[imp.map.date], imp.dateFmt))
+          .map(r => parseAmount(r[imp.map.amount])).filter(v => v && !isNaN(v));
+        if (amts.filter(v => v < 0).length * 2 < amts.length) imp.sign = 'pos-debit';
+      }
     } else imp.sign = 'neg-debit';
     const holder = detectHolderName(rows, imp.header);
     imp.holder = statementHolder(rows, imp.header);
-    if (holder && !state.settings.selfName) { state.settings.selfName = holder; save(); }
+    // your name from the first statement: kept once it is imported (taken back if the import is cancelled)
+    imp.newSelf = '';
+    if (holder && !state.settings.selfName) { state.settings.selfName = imp.newSelf = holder; }
     selfRe = selfPatterns();
   }
 
@@ -3733,9 +3809,10 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
         n => { save(); renderImport(); toast(n ? `🤖 Categorised ${n} — check and change any that look wrong` : 'DeepSeek could not tell these apart', 3500); });
       return;
     }
-    if (ai && ai.dataset.ai === 'read') { const rows = imp.rows, name = imp.name; closeAll(); aiReadLines(rowsToLines(rows), name, rowsContext(rows)); return; }
+    if (ai && ai.dataset.ai === 'read') { const rows = imp.rows, name = imp.name; if (imp.newSelf) { imp.newSelf = ''; save(); } closeAll(); aiReadLines(rowsToLines(rows), name, rowsContext(rows)); return; }
     const t = e.target.closest('[data-tick]');
-    if (t) { imp.items.forEach(x => { if (imp.pass && imp.pass(x)) x.include = t.dataset.tick === '1'; }); renderImport(); return; }
+    // (rows already in Kharcha, or deleted before, are ticked one by one only)
+    if (t) { imp.items.forEach(x => { if (imp.pass && imp.pass(x) && !(t.dataset.tick === '1' && (x.dup === 'exact' || x.dup === 'deleted'))) x.include = t.dataset.tick === '1'; }); renderImport(); return; }
     const b = e.target.closest('[data-f]'); if (!b) return;
     imp.filter = b.dataset.f; renderImport(); $('impList').scrollTop = 0;
   });
@@ -3825,11 +3902,12 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     toast(label || `Imported ${add.length} transactions`);
   }
   $('impGo').addEventListener('click', () => {
+    imp.newSelf = '';   // the statement's holder name stays as yours
     if (imp.tagOnImport) { tagSameRecords(imp.tagOnImport); imp.tagOnImport = null; }
     if (imp.mode === 'file' && !imp.acctOverride && imp.stmtAcct.learn) learnDigits(imp.stmtAcct.id, imp.stmtAcct.learn);
     const items = imp.items.filter(x => x.include);
     items.forEach(x => {
-      if (imp.acctOverride) { x.account = finalAcct(x); x.acctDigits = ''; x.bankSure = false; delete x.learn; }   // user chose an account (or none)
+      if (imp.acctOverride) { x.account = finalAcct(x); x.acctDigits = ''; x.walletName = ''; x.bankSure = false; delete x.learn; }   // user chose an account (or none)
     });
     const skipped = imp.items.filter(x => !x.include);
     skipped.forEach(x => { if (imp.acctOverride) x.account = finalAcct(x); });
@@ -3880,7 +3958,14 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     const b = e.target.closest('[data-acct]'); if (!b) return;
     acctFilter = b.dataset.acct; render();
   });
-  $('impAcct').addEventListener('change', e => { imp.acctOverride = e.target.value; renderImport(); });
+  $('impAcct').addEventListener('change', e => {
+    imp.acctOverride = e.target.value;
+    // duplicates depend on the account: look again in the chosen one (a row whose result stays the same keeps its tick)
+    const before = imp.items.map(x => [x.dup, x.include]);
+    applyAcctOverride(imp.items); markDups(imp.items);
+    imp.items.forEach((x, i) => { if (x.dup === before[i][0]) x.include = before[i][1]; });
+    renderImport();
+  });
   $('addAcct').addEventListener('click', () => {
     const name = $('newAcctName').value.trim();
     const digits = $('newAcctDigits').value.split(/[^0-9]+/).filter(d => d.length >= 3).map(d => d.slice(-6));
@@ -4625,7 +4710,7 @@ Rules: include only completed transactions — skip OTPs, offers, ads, due/bill 
     const seen = new Set();
     return items.filter(x => { const k = `${x.date}|${x.type}|${x.amount}|${x.utr || x.desc}|${x.balance ?? ''}`; if (seen.has(k)) return false; seen.add(k); return true; });
   }
-  const rowsToLines = rows => rows.map(r => r.map(c => c instanceof Date ? isoDate(c) : String(c ?? '').trim()).filter(Boolean).join(' | '));
+  const rowsToLines = rows => rows.map(r => r.map(c => c instanceof Date ? parseDate(c) : String(c ?? '').trim()).filter(Boolean).join(' | '));
   function rowsContext(rows) {
     const firstData = rows.findIndex(r => r.some(c => parseDate(c, 'dmy')) && r.some(c => parseAmount(c)));
     return rowsToLines(rows.slice(0, Math.max(1, Math.min(firstData < 0 ? 8 : firstData, 15)))).join('\n');
@@ -4751,8 +4836,8 @@ Rules: include only completed transactions — skip OTPs, offers, ads, due/bill 
       if (ph >= 0) { r.kind = 'PhonePe'; return commitAuto(parsePhonePeRows(rows, ph), r); }
       const det = detectColumns(rows);
       if (looksLikeTrades(rows, det)) { r.note = 'a trading report, not a bank statement — nothing added'; return r; }
-      if (det) {
-        setupStatement(rows, file, det); imp.mode = 'file'; imp.acctOverride = ''; imp.filter = 'all';
+      if (det && !det.guessed) {   // columns guessed without a header row are only used on the review screen
+        setupStatement(rows, file, det); imp.mode = 'file'; imp.acctOverride = ''; imp.filter = 'all'; imp.newSelf = '';
         buildItems();   // also marks duplicates and checks the running balance
         if (imp.stmtAcct.learn) learnDigits(imp.stmtAcct.id, imp.stmtAcct.learn);
         r.kind = imp.stmtAcct.bank || 'Bank statement';
@@ -4760,7 +4845,7 @@ Rules: include only completed transactions — skip OTPs, offers, ads, due/bill 
         return commitAuto(imp.items, r, true);
       }
       if (aiOn() && rows.length) { r.kind = 'DeepSeek'; return commitAuto(await aiExtractParts(aiSplit(rowsToLines(rows)), file.name, rowsContext(rows)), r); }
-      r.note = 'columns not recognised: import it once with 📥 Import to set them'; return r;
+      r.note = 'columns not recognised: open it with 📥 Import and choose them there'; return r;
     } catch (e) {
       r.note = (e && e.message) || 'couldn’t read this file'; r.retry = true;   // e.g. DeepSeek offline: try again next time
       return r;
