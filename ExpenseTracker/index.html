@@ -591,9 +591,10 @@
     <button type="button" data-type="credit">Income</button>
   </div>
   <input class="amount-input" id="fAmount" type="number" inputmode="decimal" step="any" min="0" placeholder="0.00" required style="margin-top:10px">
+  <div class="sub hidden" id="fAppAmt" style="margin:4px 0 0"></div>
   <label>Category</label>
   <div class="chips" id="fCats"></div>
-  <label class="mchk hidden" id="fCatAllRow" style="font-size:14px;line-height:1.35"><input type="checkbox" id="fCatAll"><span>Also move <b id="fCatAllN">0</b> other entries from <b id="fCatAllWho"></b> to <b id="fCatAllCat"></b></span></label>
+  <label class="mchk hidden" id="fCatAllRow" style="font-size:14px;line-height:1.35"><input type="checkbox" id="fCatAll"><span>Also move <b id="fCatAllN">0</b> other <span id="fCatAllWord">entries</span> from <b id="fCatAllWho"></b> to <b id="fCatAllCat"></b></span></label>
   <div id="fGroupWrap" class="hidden"><label>Group</label><div class="chips" id="fGroup"></div></div>
   <div class="row2">
     <div><label for="fDate">Date</label><input id="fDate" type="date" required></div>
@@ -802,8 +803,10 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
   }
   // Rules learned under payee keys that were only labels ("ACCOUNT UTR", "UTR PHONEPE") matched
   // unrelated payments; drop them.
+  // payee keys Kharcha gives payment-aggregator payouts (see SETTLERS): real payees, not labels
+  const FIXED_KEYS = new Set(['PHONEPE LIMITED', 'BHARATPE']);
   function dropLabelRules(s) {
-    const bad = k => /(^|\s)(UTR|PHONEPE|GPAY|ACCOUNT|RRN)(\s|\||$)/.test(k);
+    const bad = k => !FIXED_KEYS.has(k.split('|')[0]) && /(^|\s)(UTR|PHONEPE|GPAY|ACCOUNT|RRN)(\s|\||$)/.test(k);
     let n = 0;
     Object.keys(s.rules || {}).forEach(k => { if (bad(k)) { delete s.rules[k]; n++; } });
     const cr = (s.settings || {}).commentRules || {};
@@ -1046,7 +1049,7 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     return classifyMemo.get(k);
   };
   const autoEligible = e => !e.userCat && (!ownComment(e) || CROSS_RE.test(e.comment)) &&
-    (!!e.autoXfer || /^Other/.test(e.category) || e.category === ruleCat(e));
+    (!!e.autoXfer || /^Other/.test(e.category) || e.category === ruleCat(e) || bizFiled(e));
   function autoMark(e, why, comment, withId) {
     if (!e.autoXfer) e.autoXfer = { prev: e.category, ...(e.unread ? { unread: true } : {}) };
     Object.assign(e.autoXfer, { why }); if (withId) e.autoXfer.with = withId; else delete e.autoXfer.with;
@@ -1187,12 +1190,12 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     $('fMatchFuture').checked = !round;
   }
   // ---------- learning from past entries: suggestions and repeating payments ----------
-  let payerIdx = { stamp: -1, n: -1, map: null };
+  let payerIdx = { stamp: -1, n: -1, map: null, arr: null };
   function payerIndex() {
-    if (payerIdx.stamp === dataStamp && payerIdx.n === state.expenses.length) return payerIdx.map;
+    if (payerIdx.arr === state.expenses && payerIdx.stamp === dataStamp && payerIdx.n === state.expenses.length) return payerIdx.map;
     const map = new Map();
     state.expenses.forEach(x => { const k = payerKey(x); if (!k) return; const w = k.split(' ')[0]; if (!map.has(w)) map.set(w, []); map.get(w).push(x); });
-    payerIdx = { stamp: dataStamp, n: state.expenses.length, map };
+    payerIdx = { stamp: dataStamp, n: state.expenses.length, map, arr: state.expenses };
     return map;
   }
   const pastLike = e => {
@@ -1775,6 +1778,7 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
   const BUSINESS_RE = /diagnostic|clinic|hospital|medical|nursing|pharma|\blabs?\b|laboratory|enterprises?|traders?|industries|\bpvt\b|private|limited|\bltd\b|\bllp\b|stores?|agenc(y|ies)|services|solutions|associates|\bco\b|centre|center/i;
   const MEDICAL_RE = /diagnostic|clinic|hospital|medical|nursing|pharma|\blabs?\b|laboratory|dental|health/i;
   const STD_INCOME = new Set(['Salary', 'Refund', 'Interest', 'Other Income']);
+  const isStdIncome = name => STD_INCOME.has(name) || [...STD_INCOME].some(n => catAlias(n) === name);
   function businessPlan(a) {
     const med = MEDICAL_RE.test(a.holder || '');
     const groups = allGroups(), want = med ? 'Hospital' : 'Business';
@@ -1782,16 +1786,23 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     // a money-in category you already chose for this account's collections ("Nidaan phonepe income") wins
     const tally = {};
     state.expenses.forEach(e => {
-      if (e.account === a.id && e.type === 'credit' && e.userCat && counted(e) && !STD_INCOME.has(catAlias(e.category)) && !STD_INCOME.has(e.category))
+      if (e.account === a.id && e.type === 'credit' && e.userCat && counted(e) && !isStdIncome(e.category))
         tally[e.category] = (tally[e.category] || 0) + 1;
     });
     const own = Object.keys(tally).sort((x, y) => tally[y] - tally[x]).find(n => catsFor('credit').some(c => c.name === n));
     if (own) return { group, incomeCat: own, emoji: catOf(own).emoji || '💼' };
     return { group, incomeCat: med ? 'Clinic income' : 'Business income', emoji: med ? '🏥' : '💼' };
   }
-  const isBusinessIncome = (e, a) => e.type === 'credit' && !e.userCat && !e.autoXfer && e.category === 'Other Income' && !!(a && a.business);
-  // money coming into a business account, in its income category: counted, but no comment needed for each
-  const bizIncome = x => { if (x.type !== 'credit' || !x.account) return false; const a = acctById(x.account); return !!(a && a.business && x.category === a.business.incomeCat); };
+  const isBusinessIncome = (e, a) => e.type === 'credit' && !e.userCat && !e.autoXfer && e.category === 'Other Income' && !!(a && a.business && a.business.incomeCat);
+  // money coming into a business account in its income category, or another income category of your
+  // own (not Salary/Refund/Interest/Other Income): counted, but no comment needed for each
+  const bizIncome = x => {
+    if (x.type !== 'credit' || !x.account) return false;
+    const a = acctById(x.account); if (!a || !a.business) return false;
+    return x.category === a.business.incomeCat || (counted(x) && !isStdIncome(x.category) && catOf(x.category).kind !== 'debit');
+  };
+  // filed in the business income category by Kharcha (not by you): transfer detection may still re-file it
+  const bizFiled = e => { if (e.type !== 'credit' || e.userCat || !e.account) return false; const a = acctById(e.account); return !!(a && a.business && e.category === a.business.incomeCat); };
   function setupBusiness(id, plan) {
     const a = acctById(id); if (!a) return;
     let c = state.categories.find(x => x.name.toLowerCase() === plan.incomeCat.toLowerCase());
@@ -2001,10 +2012,16 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
   // the app you paid with) and its settlement narrations are cut at different lengths ("PHONEPE
   // LIMITED-PAYMENT AGGREGATOR …", "PHONEPE LIMITED-PAYMEN …"); BharatPe also pays as "Resilient
   // Innovations". Each gets one fixed key, so all of its payouts are one payer.
+  // Only bank transfers from the company (NEFT/RTGS/IMPS): a UPI payment to a shop's BharatPe or
+  // PhonePe QR ("UPI/DR/…/RAJU KIRANA/…/bharatpe.9000012345@fbpe/Pay to BharatPe Merchant") keeps the shop's key.
   const SETTLERS = [[/\bphone ?pe (?:limited|ltd|pvt|private)\b|\bphone ?pe\b.*\baggregat/i, 'PHONEPE LIMITED'],
-    [/\bbharat ?pe\b|\bresilient innovations\b/i, 'BHARATPE']];
+    [/\bbharat ?pe(?![.@\w])|\bresilient innovations\b/i, 'BHARATPE']];
+  const isPayout = t => /\b(?:neft|rtgs|imps)|aggregat|settle/i.test(t) && !/\bupi/i.test(t);
   function merchantKey(desc, legacy = false) {
-    if (!legacy) { const s = SETTLERS.find(([re]) => re.test(String(desc))); if (s) return s[1]; }
+    if (!legacy && isPayout(String(desc))) {
+      const t = String(desc).replace(/[\w.\-]*@[\w.\-]*/g, ' ');
+      const s = SETTLERS.find(([re]) => re.test(t)); if (s) return s[1];
+    }
     const text = String(desc).replace(/\s·\s(?:UTR\s*\d+|PhonePe|GPay|Paytm)\b/gi, ' ').toUpperCase().replace(/[\w.\-]*@[\w.\-]*/g, ' ');
     const seen = [];
     text.split(/[^A-Z0-9&]+/).filter(t => !/\d/.test(t)).forEach(t => {
@@ -2369,6 +2386,8 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
   // ---------- add / edit ----------
   // formGroup: null = follow the category's group, otherwise the chosen group ('' = none)
   let formGroup = null, catEditMode = false;
+  // the group an entry gets without its own choice: its account's business group, else its category's
+  const formDefGroup = () => acctGroup({ account: $('fAcct').value }) || catOf(selectedCat).group || '';
   function renderFormCats() {
     $('fType').querySelectorAll('button').forEach(b => b.classList.toggle('sel', b.dataset.type === formType));
     $('fCats').classList.toggle('editing', catEditMode);
@@ -2381,17 +2400,21 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     const groups = allGroups();
     $('fGroupWrap').classList.toggle('hidden', !groups.length);
     if (!groups.length) return;
-    const catG = catOf(selectedCat).group || '';
+    const acctG = acctGroup({ account: $('fAcct').value }), catG = formDefGroup();
     const cur = formGroup === null ? catG : formGroup;
     $('fGroup').innerHTML = groups.concat(['']).map(g => `<button type="button" class="chip ${g === cur ? 'sel' : ''}" data-group="${esc(g)}">${g ? esc(g) : 'No group'}</button>`).join('') +
-      `<span class="sub" style="margin:0;align-self:center">${formGroup === null ? (catG ? `from ${esc(selectedCat)}` : '') : 'this transaction only'}</span>`;
+      `<span class="sub" style="margin:0;align-self:center">${formGroup === null ? (acctG ? 'from the account' : catG ? `from ${esc(selectedCat)}` : '') : 'this transaction only'}</span>`;
   }
   // Other entries from the same payer that follow a category you choose in the edit sheet: same type,
   // category picked automatically (never one you chose yourself, nor a transfer).
   function catMatches(e, cat) {
     const k = e && payerKey(e); if (!k || !cat) return [];
-    return (payerIndex().get(k.split(' ')[0]) || []).filter(x => x.id !== e.id && x.type === e.type && !x.userCat && !x.autoXfer &&
-      x.category !== cat && x.category !== 'Transfer' && samePayer(payerKey(x), k));
+    const words = k.split(' ').length;
+    return (payerIndex().get(k.split(' ')[0]) || []).filter(x => {
+      if (x.id === e.id || x.type !== e.type || x.userCat || x.autoXfer || x.category === cat || x.category === 'Transfer') return false;
+      const xk = payerKey(x);
+      return xk === k || (samePayer(xk, k) && xk.split(' ').length === words);
+    });
   }
   let catAllFor = '';
   function renderCatAll() {
@@ -2399,7 +2422,7 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     const list = e && formType === e.type && selectedCat !== editingOrigCat && !catEditMode ? catMatches(e, selectedCat) : [];
     $('fCatAllRow').classList.toggle('hidden', !list.length);
     if (!list.length) return;
-    $('fCatAllN').textContent = list.length;
+    $('fCatAllN').textContent = list.length; $('fCatAllWord').textContent = list.length === 1 ? 'entry' : 'entries';
     $('fCatAllWho').textContent = payerName(payerKey(e));
     $('fCatAllCat').textContent = selectedCat;
     if (catAllFor !== selectedCat) { $('fCatAll').checked = true; catAllFor = selectedCat; }   // ticked for each newly picked category
@@ -2423,6 +2446,8 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     $('fHistory').classList.toggle('hidden', !(hn > 1) || payerFilter === hk);
     if (hn > 1) { $('fHistory').textContent = `🕘 All transactions with ${payerName(hk)} (${hn})`; $('fHistory').dataset.key = hk; }
     $('fReviewBanner').classList.toggle('hidden', !(exp ? exp.unread : (pre && needsReview(pre))));
+    $('fAppAmt').classList.toggle('hidden', !(exp && exp.bankAmt));
+    if (exp && exp.bankAmt) $('fAppAmt').textContent = `One payment of ${fmt(exp.amount)}: ${fmt(exp.bankAmt)} from the bank account (its statement) and ${fmt(Math.max(0, exp.amount - exp.bankAmt))} ${exp.app === 'phonepe' ? 'from your PhonePe wallet' : `from ${appLabel(exp.app)} (balance, offer or reward)`} — ${appLabel(exp.app)}'s statement lists the whole amount.`;
     let pay = 'Cash'; try { pay = localStorage.getItem(KEY + ':pay') || pay; } catch (e) {}
     $('fPay').value = src ? (src.payment || 'Other') : pay;
     const today = new Date();
@@ -2458,7 +2483,7 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
       comment: $('fComment').value.trim()
     };
     if (!data.comment) delete data.comment;
-    const ownGroup = formGroup !== null && formGroup !== (catOf(selectedCat).group || '');
+    const ownGroup = formGroup !== null && formGroup !== formDefGroup();
     if (ownGroup) data.group = formGroup;
     try { localStorage.setItem(KEY + ':acct', data.account); } catch (e) {}
     try { localStorage.setItem(KEY + ':pay', data.payment); } catch (e) {}
@@ -2487,6 +2512,11 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
         others.forEach(x => { x.category = data.category; x.userCat = true; if (x.unread && (!counted(x) || bizIncome(x))) delete x.unread; });
         pendingTidy = true;
         extra += ` · ${others.length} other entr${others.length > 1 ? 'ies' : 'y'} from ${who} moved too`;
+        const ba = acctById(e.account);
+        if (ba && ba.business && e.type === 'credit' && editingOrigCat === ba.business.incomeCat && counted(e) && !isStdIncome(data.category)) {
+          ba.business.incomeCat = data.category;
+          extra += ` · ${acctLabel(ba)}'s collections now go to ${data.category}`;
+        }
       }
       if (!counted(e) || bizIncome(e)) delete e.unread;   // transfers / investments / a business's collections never need review
       if (e.unread) {
@@ -2522,10 +2552,11 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     if (catEditMode) { openCatSheet(state.categories.findIndex(c => c.name === b.dataset.cat), true); return; }
     selectedCat = b.dataset.cat; renderFormCats();
   });
+  $('fAcct').addEventListener('change', () => renderFormCats());   // the default group follows a business account
   $('fGroup').addEventListener('click', e => {
     const b = e.target.closest('[data-group]'); if (!b) return;
     const g = b.dataset.group;
-    formGroup = g === (catOf(selectedCat).group || '') ? null : g;   // same as the category: just follow it
+    formGroup = g === formDefGroup() ? null : g;   // same as the account's / category's: just follow it
     renderFormCats();
   });
   $('fDelete').addEventListener('click', () => {
@@ -2918,6 +2949,46 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
   const dayDiff = (a, b) => Math.abs(new Date(a + 'T00:00') - new Date(b + 'T00:00')) / 864e5;
   const refsOf = e => [e.ref, ...(e.refs || [])].filter(Boolean);
   // 12-digit UPI reference (UTR/RRN) numbers mentioned in a transaction
+  const isBankRef = r => /^\d{4}-\d{2}-\d{2}\|/.test(r || '');
+  // A PhonePe/GPay payment paid partly from the app's wallet: the app's statement lists the whole amount
+  // under the bank account, the bank only the part it paid, both with the same UPI reference. One side a
+  // bank-statement row, the other an app-statement entry with that reference, same direction, within
+  // 2 days, the bank's amount smaller (equal amounts merge the usual way).
+  const isAppRef = r => /^(upi|phonepe|gpay)\|/.test(r || '');
+  const utrPair = (x, e) => {
+    if (x.type !== e.type || dayDiff(e.date, x.date) > 2 || e.autoXfer || x.autoXfer || e.bankAmt || x.bankAmt) return false;
+    const xb = refsOf(x).some(isBankRef), eb = refsOf(e).some(isBankRef);
+    if (xb === eb) return false;
+    const app = xb ? e : x, bank = xb ? x : e;
+    return bank.amount < app.amount - 0.005 && refsOf(app).some(isAppRef) && !!(app.utrSure && app.utr && utrsOf(bank).includes(app.utr));
+  };
+  const appLabel = k => ({ phonepe: 'PhonePe', gpay: 'Google Pay', paytm: 'Paytm' })[k] || 'The app';
+  // Pairs imported before Kharcha knew this: merged into the entry recorded first, at the bank's amount.
+  function mergeUtrPairs() {
+    const byUtr = new Map();
+    state.expenses.forEach(e => { if (e.utrSure && e.utr && !refsOf(e).some(isBankRef)) byUtr.set(e.utr + '|' + e.type, e); });
+    if (!byUtr.size) return 0;
+    const gone = new Set(); let n = 0;
+    state.expenses.forEach(b => {
+      if (gone.has(b.id) || !refsOf(b).some(isBankRef)) return;
+      const a = utrsOf(b).map(u => byUtr.get(u + '|' + b.type)).find(x => x && x !== b && !gone.has(x.id) && utrPair(x, b) &&
+        !(x.account && b.account && x.account !== b.account));
+      if (!a) return;
+      const keep = (a.createdAt || 0) <= (b.createdAt || 0) ? a : b, drop = keep === a ? b : a;
+      keep.amount = a.amount; keep.bankAmt = b.amount;
+      keep.refs = [...new Set([...(keep.refs || []), ...refsOf(drop)])].filter(r => r !== keep.ref);
+      if (keep.balance == null && b.balance != null) keep.balance = b.balance;
+      if (!keep.account && drop.account) keep.account = drop.account;
+      keep.utr = a.utr; keep.utrSure = true; if (a.app) keep.app = a.app;
+      if (!keep.comment && drop.comment) keep.comment = drop.comment;
+      if (!keep.userCat && (drop.userCat || (/^Other/.test(keep.category) && !/^Other/.test(drop.category)))) { keep.category = drop.category; if (drop.userCat) keep.userCat = true; }
+      if (keep.group === undefined && drop.group !== undefined) keep.group = drop.group;
+      if (keep.comment || !drop.unread) delete keep.unread;
+      gone.add(drop.id); n++;
+    });
+    if (n) state.expenses = state.expenses.filter(e => !gone.has(e.id));
+    return n;
+  }
   const utrsOf = e => [...new Set([e.utr, ...(String(e.note || e.desc || '') + ' ' + [e.ref, ...(e.refs || [])].join(' ')).match(/\b\d{12}\b/g) || []].filter(Boolean))];
   function markDups(items) {
     const refs = new Set(state.expenses.flatMap(refsOf));
@@ -2933,6 +3004,10 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
       // an account number the app doesn't know yet (x.acctDigits) is a different account from every existing one
       const otherAcct = e => x.account ? (e.account && e.account !== x.account)
         : (x.acctDigits && e.account && !((acctById(e.account) || {}).digits || []).some(z => z.endsWith(x.acctDigits) || x.acctDigits.endsWith(z)));
+      // the same UPI payment where PhonePe/GPay/SMS shows another amount than the bank statement (an
+      // offer or reward paid part of it): the reference the app printed is in the bank's narration
+      const viaUtrAmt = utrsOf(x).map(u => byUtr.get(u + '|' + x.type)).find(e => e && !used.has(e.id) && utrPair(x, e) && !otherAcct(e));
+      if (viaUtrAmt) { x.dup = 'utr'; x.otherAmt = viaUtrAmt.amount; x.match = viaUtrAmt.id; used.add(viaUtrAmt.id); x.include = false; return; }
       // both carry a UPI reference and they differ: certainly two different payments
       // (only references both sources printed as the UPI reference — PhonePe/GPay statements, SMS
       // "RRN/UTR/Ref" — count; a stray 12-digit number in a narration might be something else)
@@ -2956,6 +3031,10 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     items.forEach(x => {
       if (x.include || !x.match || x.dup === 'exact') return;
       const e = state.expenses.find(y => y.id === x.match); if (!e) return;
+      if (Math.abs(e.amount - x.amount) >= 0.005) {   // part paid from the app's wallet: the app's amount is the payment, the bank's its part
+        const xb = isBankRef(x.ref);
+        e.bankAmt = xb ? x.amount : e.amount; e.amount = xb ? e.amount : x.amount;
+      }
       if (x.ref && !refsOf(e).includes(x.ref)) e.refs = (e.refs || []).concat(x.ref);
       if (x.balance != null && e.balance == null) e.balance = x.balance;
       if (!e.account && x.account) e.account = x.account;
@@ -3105,7 +3184,7 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
       <div class="irow ${x.include ? '' : 'off'}" data-i="${i}">
         <input type="checkbox" ${x.include ? 'checked' : ''} aria-label="Include">
         <div class="d"><div class="desc">${esc(noteText(x) || '(no description)')}${badgeFor(appOf(x, imp.acctOverride ? finalAcct(x) : x.account))}</div>
-          <div class="meta">${new Date(x.date + 'T00:00').toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' })}${x.dup === 'exact' ? '<span class="tag warn">already imported</span>' : x.dup === 'balance' ? '<span class="tag warn">same as existing entry · balance matches</span>' : x.dup === 'utr' ? '<span class="tag warn">same payment already in Kharcha · UTR matches</span>' : x.dup ? '<span class="tag warn">possible duplicate</span>' : ''}${
+          <div class="meta">${new Date(x.date + 'T00:00').toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' })}${x.dup === 'exact' ? '<span class="tag warn">already imported</span>' : x.dup === 'balance' ? '<span class="tag warn">same as existing entry · balance matches</span>' : x.dup === 'utr' ? `<span class="tag warn">same payment already in Kharcha · UTR matches${x.otherAmt ? ` · ${fmt(Math.min(x.amount, x.otherAmt))} of ${fmt(Math.max(x.amount, x.otherAmt))} paid from the bank, the rest from the wallet` : ''}</span>` : x.dup ? '<span class="tag warn">possible duplicate</span>' : ''}${
             x.balanceGap ? '<span class="tag warn">balance doesn’t add up here</span>' : ''}${
             acctById(finalAcct(x)) ? `<span class="tag">${esc(acctLabel(acctById(finalAcct(x))))}</span>`
             : x.acctDigits && !imp.acctOverride ? `<span class="tag">New account: ${esc(newAcctLabel(x))}</span>`
@@ -3485,6 +3564,8 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
       delete e.unread;
     });
     state.expenses.push(...add);
+    const utrMerged = mergeUtrPairs();
+    if (utrMerged) label = (label || `Imported ${add.length} transactions`) + ` · ${utrMerged} matched by UPI reference`;
     const t = tidyTransfers();
     const own = selfRows + t.self + t.acct + t.pair;
     if (own) label = (label || `Imported ${add.length} transactions`) + ` · ${own} between your own accounts → Transfer`;
@@ -3687,6 +3768,7 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
   // rename every use of a category: transactions, learned rules, earlier renames
   function renameCategory(from, to) {
     state.expenses.forEach(e => { if (e.category === from) e.category = to; });
+    (state.accounts || []).forEach(a => { if (a.business && a.business.incomeCat === from) a.business.incomeCat = to; });
     Object.keys(state.rules).forEach(k => { if (state.rules[k] === from) state.rules[k] = to; });
     const al = { ...(state.settings.catAlias || {}) };
     Object.keys(al).forEach(k => { if (al[k] === from) al[k] = to; });
@@ -3740,6 +3822,10 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
       e.category = target && (target.kind === 'both' || target.kind === e.type) ? to : (e.type === 'credit' ? 'Other Income' : 'Other');
     });
     Object.keys(state.rules).forEach(k => { if (state.rules[k] === c.name) { if (to) state.rules[k] = to; else delete state.rules[k]; } });
+    (state.accounts || []).forEach(a => {   // a business account's collections follow to an income category, else stay where they land
+      if (!a.business || a.business.incomeCat !== c.name) return;
+      if (target && target.kind !== 'debit' && !isStdIncome(to)) a.business.incomeCat = to; else delete a.business.incomeCat;
+    });
     const al = { ...(state.settings.catAlias || {}) };
     Object.keys(al).forEach(k => { if (al[k] === c.name) al[k] = to || undefined; });
     if (to) al[c.name] = to;
@@ -3845,7 +3931,7 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
   // When Kharcha's rules improve, entries it categorised itself are re-checked once (never ones you set,
   // commented, or that are transfers): today "Other" that a rule now recognises, and UPI payments that a
   // branch name ("ATM SERVICE BRANCH") had wrongly filed as Cash.
-  const RULES_VERSION = 3;
+  const RULES_VERSION = 4;
   if ((state.settings.rulesV || 1) < 3) {
     // 3: payouts from PhonePe / BharatPe got one payee key each (see SETTLERS). A name, category or
     // comment rule saved under an old key moves to the new one, when every entry with the old key moved.
@@ -3858,10 +3944,10 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     to.forEach((nk, o) => {
       if (bad.has(o)) return;
       const names = state.settings.payeeNames || {};
-      if (names[o] !== undefined) { if (names[nk] === undefined) names[nk] = names[o]; delete names[o]; }
-      if (state.rules[o] !== undefined) { if (state.rules[nk] === undefined) state.rules[nk] = state.rules[o]; delete state.rules[o]; }
+      const carry = (obj, from, to) => { if (obj[from] === undefined) return; if (obj[to] === undefined) obj[to] = obj[from]; if (JSON.stringify(obj[to]) === JSON.stringify(obj[from])) delete obj[from]; };
+      carry(names, o, nk); carry(state.rules, o, nk);
       const cr = state.settings.commentRules || {};
-      Object.keys(cr).forEach(r => { if (r.startsWith(o + '|')) { const r2 = nk + r.slice(o.length); if (cr[r2] === undefined) cr[r2] = cr[r]; delete cr[r]; } });
+      Object.keys(cr).forEach(r => { if (r.startsWith(o + '|')) carry(cr, r, nk + r.slice(o.length)); });
     });
     // A business account set up with a made-up "Clinic income" / "Business income" while you had
     // already chosen your own money-in category for it: its collections move to yours, and the
@@ -3878,6 +3964,15 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
           !(state.accounts || []).some(b => b.business && b.business.incomeCat === old)) state.categories = state.categories.filter(x => x.name !== old);
     });
   }
+  if ((state.settings.rulesV || 1) < 4) {
+    FIXED_KEYS.forEach(k => {
+      if (state.rules[k]) return;
+      const its = state.expenses.filter(e => payerKey(e) === k);
+      const t = {}; its.forEach(e => { if (!/^Other/.test(e.category) && counted(e) && catsFor(e.type).some(c => c.name === e.category)) t[e.category] = (t[e.category] || 0) + 1; });
+      const best = Object.keys(t).sort((a, b) => t[b] - t[a])[0];
+      if (best && t[best] * 2 >= its.length) state.rules[k] = best;
+    });
+  }
   if ((state.settings.rulesV || 1) < RULES_VERSION) {
     let n = 0;
     state.expenses.forEach(e => {
@@ -3887,9 +3982,14 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
       const c = classify(e.note, e.type, true);
       if (c !== e.category && (wrongCash || !/^Other/.test(c))) { e.category = c; n++; }
     });
+    state.expenses.forEach(e => { if (e.unread && bizIncome(e)) delete e.unread; });   // a business's collections need no comment each
     state.settings.rulesV = RULES_VERSION;
     if (n) setTimeout(() => toast(`Re-checked categories with improved rules: ${n} entr${n === 1 ? 'y' : 'ies'} updated`, 4000), 800);
     save();
+  }
+  {
+    const n = mergeUtrPairs();
+    if (n) { save(); setTimeout(() => toast(`${n} payment${n > 1 ? 's were' : ' was'} in Kharcha twice: PhonePe listed the whole amount, your bank only the part it paid (the rest came from the PhonePe wallet). Now one entry each.`, 6000), 5200); }
   }
   if (tidyTransfers().total) save();
   render();
