@@ -1774,7 +1774,7 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
           how, from: its.reduce((m, e) => e.date < m ? e.date : m, today), to: today });
         return;
       }
-      const stTo = st.reduce((m, e) => e.date > m ? e.date : m, '');
+      const stTo = st.reduce((m, e) => e.date > m ? e.date : m, a.stmtTo || '');
       const behind = dayDiff(stTo, today);
       if (behind > 35 || (lastAny > stTo && dayDiff(stTo, lastAny) > 7)) {
         add({ id: `acct-newer:${a.id}:${month}`, prio: 2, icon: a.kind === 'card' ? '💳' : '🏦', title: `${label}: newer ${what}`,
@@ -2854,6 +2854,10 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
       if (newer) a.bal = { amount: x.balance, date: x.date, seq: x.seq || 0 };
     });
   }
+  // How far each account's bank statements reach (a.stmtTo), recorded when a statement is imported
+  function coverItems(list) {
+    list.forEach(x => { const a = x.stmtTo && x.account && acctById(x.account); if (a && (!a.stmtTo || x.stmtTo > a.stmtTo)) a.stmtTo = x.stmtTo; });
+  }
   function buildItems() {
     const { map } = imp;
     const cell = (r, j) => j >= 0 ? r[j] : '';
@@ -2871,7 +2875,8 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
         if (!(amount > 0)) return;
         const ref = refOf(date, type, amount, desc);
         items.push({ date, desc, type, amount, ref, payment: 'Bank', category: classify(desc, type), touched: false, balance, seq: seq++,
-          account: imp.stmtAcct.id, acctDigits: imp.stmtAcct.digits, acctBank: imp.stmtAcct.bank, acctKind: imp.stmtAcct.kind });
+          account: imp.stmtAcct.id, acctDigits: imp.stmtAcct.digits, acctBank: imp.stmtAcct.bank, acctKind: imp.stmtAcct.kind,
+          bankSure: !!imp.stmtAcct.bank });   // the statement names its own bank
       };
       if (map.debit >= 0 || map.credit >= 0) {
         const d = Math.abs(parseAmount(cell(r, map.debit))) || 0;
@@ -2892,6 +2897,8 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     });
     imp.balanceCheck = checkRunningBalance(items);
     items.sort((a, b) => b.date.localeCompare(a.date) || b.seq - a.seq);
+    const lastRow = items.reduce((m, x) => x.date > m ? x.date : m, '');
+    items.forEach(x => { x.stmtTo = imp.stmtTo && imp.stmtTo >= lastRow ? imp.stmtTo : lastRow; });
     markDups(items);
     imp.items = items;
   }
@@ -2984,8 +2991,10 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
         <select aria-label="Category">${opts[x.type].map(c => `<option ${c.name === x.category ? 'selected' : ''} value="${esc(c.name)}">${esc(c.emoji)} ${esc(c.name)}</option>`).join('')}</select>
       </div>`).join('');
     $('impList').innerHTML = rows || '<div class="empty">Nothing here.</div>';
-    $('impGo').textContent = `Import ${inc.length} transaction${inc.length === 1 ? '' : 's'}`;
-    $('impGo').disabled = !inc.length;
+    // nothing new but some rows match existing entries: Import still merges them (and records the period)
+    const merges = it.filter(x => !x.include && x.match && x.dup !== 'exact').length;
+    $('impGo').textContent = inc.length ? `Import ${inc.length} transaction${inc.length === 1 ? '' : 's'}` : merges ? `Merge ${merges} into existing entr${merges === 1 ? 'y' : 'ies'}` : 'Nothing new to import';
+    $('impGo').disabled = !inc.length && !merges;
   }
 
   function fillMapSelects() {
@@ -3035,6 +3044,12 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     $('toast').classList.remove('show');
     fillMapSelects();
     buildItems();
+    // every row was imported before: nothing to review — just record how far this statement reaches
+    if (det && imp.items.length && imp.items.every(x => x.dup === 'exact')) {
+      coverItems(imp.items); save(); render();
+      toast(`Everything in this statement is already in Kharcha (${imp.items.length} transactions)`, 4000);
+      return;
+    }
     renderImport();
     showBg();
     $('impList').scrollTop = 0;
@@ -3047,6 +3062,14 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     imp.map = det ? det.map : { date: -1, desc: -1, debit: -1, credit: -1, amount: -1, type: -1, balance: -1 };
     imp.dateFmt = imp.map.date >= 0 ? guessDateFmt(rows, imp.map.date) : 'dmy';
     const headText = rows.slice(0, Math.max(1, imp.header)).map(r => r.join(' ')).join(' \n ') + ' ' + file.name.replace(/[_\-.]/g, ' ');
+    // the period the statement covers ends at the latest date in its heading (not at its last
+    // transaction: an account can be quiet for weeks)
+    const today = isoDate(new Date()), DATEISH = /^\s*(\d{1,2}[\/\-.]\d{1,2}[\/\-.]\d{2,4}|\d{4}-\d{2}-\d{2}|\d{1,2}[- ][A-Za-z]{3,9}[- ,]+\d{2,4})\b/;
+    imp.stmtTo = '';
+    rows.slice(0, imp.header).forEach(r => (r || []).forEach(c => {
+      const d = c instanceof Date ? parseDate(c, 'dmy') : DATEISH.test(String(c)) ? parseDate(String(c).trim(), imp.dateFmt) : null;
+      if (d && d <= today && d > imp.stmtTo) imp.stmtTo = d;
+    }));
     imp.stmtAcct = matchAccount(headText, true);
     // only trust a bare long number for a new account when it is the only one in the header
     if (!imp.stmtAcct.id && !acctDigitsIn(headText, false).length) {
@@ -3308,6 +3331,7 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     const now = Date.now();
     items.forEach(x => { if (x.learn && x.account) learnDigits(x.account, x.learn); });
     const created = ensureAccounts(items);
+    coverItems(items);
     const add = items.map((x, i) => ({
       id: uid(), createdAt: now + i, type: x.type, amount: x.amount, category: x.category,
       date: x.date, note: x.desc, payment: x.payment || 'Bank', ref: x.ref, account: x.account || '',
@@ -3355,6 +3379,7 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     });
     const skipped = imp.items.filter(x => !x.include);
     skipped.forEach(x => { if (imp.acctOverride) x.account = finalAcct(x); });
+    if (!imp.acctOverride) coverItems(skipped);   // a statement whose rows were all known still counts
     const linked = linkDuplicates(skipped);
     updateBalances(skipped.filter(x => x.match));
     if (linked && !items.length) { save(); closeAll(); render(); toast(`Merged ${linked} duplicate${linked > 1 ? 's' : ''} into existing entries`); return; }
@@ -4152,6 +4177,7 @@ Rules: include only completed transactions — skip OTPs, offers, ads, due/bill 
     if (items.some(x => x.app)) tagSameRecords(items);
     const add = items.filter(x => x.include && x.dup !== 'exact');
     const skipped = items.filter(x => !x.include);
+    coverItems(skipped);
     r.same = items.filter(x => x.dup === 'exact').length;
     r.merged = linkDuplicates(skipped);
     updateBalances(skipped.filter(x => x.match));
@@ -4350,7 +4376,7 @@ Rules: include only completed transactions — skip OTPs, offers, ads, due/bill 
   $('autoAdd').checked = !!state.settings.autoAddShared;
   $('autoAdd').addEventListener('change', e => { state.settings.autoAddShared = e.target.checked; save(); toast(e.target.checked ? 'Messages will be added automatically' : 'Messages will wait for your review'); });
   // bump when Kharcha learns a new kind of file, so the statement folder is looked at again
-  const PARSER_VERSION = 5;   // 4: FD advices · 5: broker ledgers and P&L reports
+  const PARSER_VERSION = 6;   // 4: FD advices · 5: broker ledgers and P&L reports · 6: statement periods
   if (NATIVE) native({ type: 'ready', parser: PARSER_VERSION });
   if (loadProblem) toast('⚠︎ Kharcha couldn’t read its saved data, so nothing will be saved until it is restored. Settings › Data › Automatic backups.', 10000);
   const autoMail = () => {
