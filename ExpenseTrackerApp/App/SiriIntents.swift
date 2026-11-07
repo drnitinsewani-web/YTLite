@@ -1,5 +1,6 @@
 import AppIntents
 import Foundation
+import UIKit
 
 /// "Hey Siri, add expense in Kharcha" — asks how much and what for, then queues it for the app.
 @available(iOS 16.0, *)
@@ -28,6 +29,43 @@ struct AddExpenseIntent: AppIntent {
             return .result(dialog: "Couldn't save it. Open Kharcha once and try again.")
         }
         return .result(dialog: "Added \(KharchaData.money(amount)) for \(note) to Kharcha.")
+    }
+}
+
+/// "Hey Siri, add this transaction to Kharcha" — the copied bank message plus a spoken comment.
+/// If the transaction is already in Kharcha (from a statement, SMS…), the comment is added to it.
+@available(iOS 16.0, *)
+struct AddTransactionWithCommentIntent: AppIntent {
+    static var title: LocalizedStringResource = "Add Transaction with Comment"
+    static var description = IntentDescription("Adds the copied bank message to Kharcha with your comment.")
+    static var openAppWhenRun: Bool = false
+
+    @Parameter(title: "Comment", requestValueDialog: "What's the comment?")
+    var comment: String
+
+    @Parameter(title: "Message")
+    var message: String?
+
+    static var parameterSummary: some ParameterSummary {
+        Summary("Add \(\.$message) to Kharcha with comment \(\.$comment)")
+    }
+
+    func perform() async throws -> some IntentResult & ProvidesDialog {
+        var text = (message ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        if text.isEmpty {
+            let copied: String = await MainActor.run { UIPasteboard.general.string ?? "" }
+            text = copied.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        if text.isEmpty {
+            return .result(dialog: "Copy the bank message first (touch and hold it in Messages, then Copy), and ask me again.")
+        }
+        let note = comment.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let data = try? JSONSerialization.data(withJSONObject: ["text": text, "comment": note]),
+              let json = String(data: data, encoding: .utf8),
+              SharedInbox.append("kharcha:msg:" + json) else {
+            return .result(dialog: "Couldn't save it. Open Kharcha once and try again.")
+        }
+        return .result(dialog: IntentDialog(stringLiteral: "Done. Saved to Kharcha with the comment \u{201C}\(note)\u{201D}. It's added when you open the app."))
     }
 }
 
@@ -104,6 +142,12 @@ struct KharchaShortcuts: AppShortcutsProvider {
                               "Send bank message to \(.applicationName)",
                               "Send copied message to \(.applicationName)",
                               "Add copied message to \(.applicationName)"])
+        AppShortcut(intent: AddTransactionWithCommentIntent(),
+                    phrases: ["Add this transaction to \(.applicationName)",
+                              "Add this to \(.applicationName)",
+                              "Add copied transaction to \(.applicationName)",
+                              "Add transaction with comment to \(.applicationName)",
+                              "Is transaction ko \(.applicationName) mein add karo"])
         AppShortcut(intent: AddExpenseIntent(),
                     phrases: ["Add expense in \(.applicationName)",
                               "Add expense to \(.applicationName)",
