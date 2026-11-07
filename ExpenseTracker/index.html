@@ -745,6 +745,22 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
   let reviewOnly = false;
   const reviewMin = () => { const v = state.settings.reviewMin; return v == null ? 1000 : v; };
   const needsReview = x => reviewMin() > 0 && x.amount > reviewMin();
+  // Comment rules: a comment saved on one transaction is reused for transactions from the same
+  // payer/merchant with the same amount and type (now and in future imports).
+  const commentKey = e => { const k = merchantKey(e.note || e.desc || ''); return k.length >= 3 ? `${k}|${e.type}|${Number(e.amount).toFixed(2)}` : ''; };
+  function applyCommentRule(e) {
+    const rules = state.settings.commentRules || {};
+    const k = commentKey(e);
+    if (!k || !rules[k] || e.comment) return false;
+    e.comment = rules[k]; delete e.unread; return true;
+  }
+  function learnComment(e) {
+    const k = commentKey(e); if (!k || !e.comment) return 0;
+    state.settings.commentRules = { ...(state.settings.commentRules || {}), [k]: e.comment };
+    let n = 0;
+    state.expenses.forEach(x => { if (x !== e && !x.comment && commentKey(x) === k) { x.comment = e.comment; delete x.unread; n++; } });
+    return n;
+  }
   function renderAmtBar() {
     const custom = minAmt && !AMT_PRESETS.includes(minAmt);
     const toReview = inPeriod().filter(e => e.unread).length;
@@ -1141,10 +1157,13 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     $('catChips').innerHTML = state.categories.map((c, i) => c.kind !== 'credit' ? chip(c, i) : '').join('');
     $('incChips').innerHTML = state.categories.map((c, i) => c.kind === 'credit' ? chip(c, i) : '').join('');
     const rules = Object.entries(state.rules);
-    $('ruleCount').textContent = rules.length ? `(${rules.length})` : '';
-    $('ruleChips').innerHTML = rules.length
+    const crules = Object.entries(state.settings.commentRules || {});
+    $('ruleCount').textContent = rules.length + crules.length ? `(${rules.length + crules.length})` : '';
+    $('ruleChips').innerHTML = rules.length + crules.length
       ? rules.sort((a, b) => a[0].localeCompare(b[0])).map(([k, v]) =>
-          `<span class="chip">${esc(k)} <small>→</small> ${esc(catOf(v).emoji)} ${esc(v)}<span class="x" data-rule="${esc(k)}" role="button" aria-label="Forget">✕</span></span>`).join('')
+          `<span class="chip">${esc(k)} <small>→</small> ${esc(catOf(v).emoji)} ${esc(v)}<span class="x" data-rule="${esc(k)}" role="button" aria-label="Forget">✕</span></span>`).join('') +
+        crules.map(([k, v]) => { const [m, t, a] = k.split('|');
+          return `<span class="chip">💬 ${esc(m)} <small>${t === 'credit' ? '+' : ''}${esc(fmt(+a))} →</small> ${esc(v)}<span class="x" data-crule="${esc(k)}" role="button" aria-label="Forget">✕</span></span>`; }).join('')
       : '<span class="sub" style="margin:0">None yet.</span>';
   }
 
@@ -1221,6 +1240,10 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
       if (e.unread) {
         if (data.comment) { delete e.unread; msg = 'Reviewed ✓'; }
         else msg = 'Saved · still to review until you add a comment';
+      }
+      if (data.comment) {
+        const n = learnComment(e);
+        if (n) msg += ` · same comment added to ${n} matching transaction${n > 1 ? 's' : ''}`;
       }
       toast(msg);
     } else {
@@ -1824,6 +1847,8 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
       ...(x.balance != null ? { balance: x.balance } : {}),
       ...(needsReview(x) ? { unread: true } : {})
     }));
+    const autoCommented = add.filter(applyCommentRule).length;
+    if (autoCommented) label = (label || `Imported ${add.length} transactions`) + ` · ${autoCommented} commented automatically`;
     updateBalances(items);
     if (created.length) label = (label || `Imported ${add.length} transactions`) + ` · added account${created.length > 1 ? 's' : ''} ` + created.map(a => acctLabel(a)).join(', ');
     state.expenses.push(...add);
@@ -1968,6 +1993,8 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     state.categories.splice(+x.dataset.del, 1); save(); renderSettings();
   }));
   $('ruleChips').addEventListener('click', e => {
+    const c = e.target.closest('[data-crule]');
+    if (c) { const r = { ...(state.settings.commentRules || {}) }; delete r[c.dataset.crule]; state.settings.commentRules = r; save(); renderSettings(); return; }
     const x = e.target.closest('[data-rule]'); if (!x) return;
     delete state.rules[x.dataset.rule]; save(); renderSettings();
   });
