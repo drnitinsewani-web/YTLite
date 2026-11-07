@@ -404,7 +404,7 @@
           <option value="wallet">Wallet / UPI</option><option value="cash">Cash</option>
         </select>
       </div>
-      <div class="sub">Several numbers (e.g. account and debit card) can be separated with commas.</div>
+      <div class="sub">Several numbers (e.g. account and debit card) can be separated with commas. Accounts found in imported statements, SMS and emails are added here automatically. Tap one to rename it.</div>
       <button class="btn ghost" id="addAcct">Add account</button>
     </div>
     <div class="card">
@@ -707,6 +707,47 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     if (longNumbers) { const re = /\b\d{9,18}\b/g; let m; while ((m = re.exec(t))) found.push({ at: m.index + 1e6, d: m[0] }); }
     return found.sort((a, b) => a.at - b.at).map(f => f.d);
   }
+  const BANKS = [
+    [/\bhdfc\b/i, 'HDFC Bank'], [/\bicici\b/i, 'ICICI Bank'], [/\bsbi card\b/i, 'SBI Card'],
+    [/\b(sbi|state bank of india)\b/i, 'SBI'], [/\baxis\b/i, 'Axis Bank'], [/\bkotak\b/i, 'Kotak Bank'],
+    [/\bindian bank\b/i, 'Indian Bank'], [/\bindian overseas\b|\biob\b/i, 'Indian Overseas Bank'],
+    [/\bcanara\b/i, 'Canara Bank'], [/\bunion bank\b/i, 'Union Bank'], [/\bidfc\b/i, 'IDFC First Bank'],
+    [/\byes bank\b/i, 'Yes Bank'], [/\bindusind\b/i, 'IndusInd Bank'], [/\bfederal bank\b/i, 'Federal Bank'],
+    [/\b(pnb|punjab national)\b/i, 'PNB'], [/\bbank of baroda\b|\bbob\b/i, 'Bank of Baroda'],
+    [/\bbank of india\b/i, 'Bank of India'], [/\bcentral bank\b/i, 'Central Bank'], [/\bidbi\b/i, 'IDBI Bank'],
+    [/\bau (small finance )?bank\b/i, 'AU Bank'], [/\brbl\b/i, 'RBL Bank'], [/\bbandhan\b/i, 'Bandhan Bank'],
+    [/\bdbs\b/i, 'DBS Bank'], [/\bstandard chartered\b/i, 'Standard Chartered'], [/\bhsbc\b/i, 'HSBC'],
+    [/\bciti(bank)?\b/i, 'Citibank'], [/\bamerican express\b|\bamex\b/i, 'Amex'],
+    [/\bpaytm payments bank\b/i, 'Paytm Payments Bank'], [/\bairtel payments bank\b/i, 'Airtel Payments Bank'],
+    [/\bonecard\b/i, 'OneCard'], [/\bjupiter\b/i, 'Jupiter'],
+    [/\bchase\b/i, 'Chase'], [/\bbank of america\b/i, 'Bank of America'], [/\bwells fargo\b/i, 'Wells Fargo']
+  ];
+  // first bank named in the text (earliest position wins)
+  function bankFromText(t) {
+    let best = null;
+    BANKS.forEach(([re, name]) => { const i = String(t || '').search(re); if (i >= 0 && (!best || i < best.i)) best = { i, name }; });
+    return best ? best.name : '';
+  }
+  // Accounts found in imports but not yet in Settings are created automatically.
+  function ensureAccounts(items) {
+    const created = [];
+    items.forEach(x => {
+      if (x.account || !x.acctDigits) return;
+      const d = x.acctDigits;
+      let a = (state.accounts || []).find(y => y.digits.some(z => z.endsWith(d) || d.endsWith(z)));
+      if (!a) {
+        const kind = x.acctKind || 'bank';
+        const base = x.acctBank || (kind === 'card' ? 'Card' : 'Bank account');
+        a = { id: uid(), name: kind === 'card' && !/card/i.test(base) ? base + ' Card' : base,
+              emoji: kind === 'card' ? '💳' : '🏦', kind, digits: [d] };
+        state.accounts = (state.accounts || []).concat(a);
+        created.push(a);
+      }
+      x.account = a.id;
+    });
+    return created;
+  }
+  const newAcctLabel = x => `${x.acctKind === 'card' ? '💳' : '🏦'} ${x.acctBank || (x.acctKind === 'card' ? 'Card' : 'Bank account')} ••${x.acctDigits}`;
   function matchAccount(text, longNumbers) {
     const cands = acctDigitsIn(text, longNumbers);
     for (const c of cands) for (const a of state.accounts || []) for (const d of a.digits || []) {
@@ -934,7 +975,7 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     $('autoAdd').checked = !!state.settings.autoAddShared;
     const accts = state.accounts || [];
     $('acctChips').innerHTML = accts.length ? accts.map(a =>
-      `<span class="chip">${esc(a.emoji || '🏦')} ${esc(a.name)} <small>••${esc(a.digits.join(', ••'))}</small><span class="x" data-delacct="${esc(a.id)}" role="button" aria-label="Remove">✕</span></span>`).join('')
+      `<span class="chip" data-editacct="${esc(a.id)}" role="button">${esc(a.emoji || '🏦')} ${esc(a.name)} <small>••${esc(a.digits.join(', ••'))}</small><span class="x" data-delacct="${esc(a.id)}" role="button" aria-label="Remove">✕</span></span>`).join('')
       : '<span class="sub" style="margin:0">No accounts yet.</span>';
     const chip = (c, i) => `<span class="chip">${esc(c.emoji)} ${esc(c.name)}<span class="x" data-del="${i}" role="button" aria-label="Remove">✕</span></span>`;
     $('catChips').innerHTML = state.categories.map((c, i) => c.kind !== 'credit' ? chip(c, i) : '').join('');
@@ -1208,7 +1249,7 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
         if (!(amount > 0)) return;
         const ref = refOf(date, type, amount, desc);
         items.push({ date, desc, type, amount, ref, payment: 'Bank', category: classify(desc, type), touched: false,
-          account: imp.stmtAcct.id, acctDigits: imp.stmtAcct.digits });
+          account: imp.stmtAcct.id, acctDigits: imp.stmtAcct.digits, acctBank: imp.stmtAcct.bank, acctKind: imp.stmtAcct.kind });
       };
       if (map.debit >= 0 || map.credit >= 0) {
         const d = Math.abs(parseAmount(cell(r, map.debit))) || 0;
@@ -1270,7 +1311,7 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
         <div class="d"><div class="desc">${esc(x.desc || '(no description)')}</div>
           <div class="meta">${new Date(x.date + 'T00:00').toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' })}${x.dup === 'exact' ? '<span class="tag warn">already imported</span>' : x.dup ? '<span class="tag warn">possible duplicate</span>' : ''}${
             acctById(finalAcct(x)) ? `<span class="tag">${esc(acctLabel(acctById(finalAcct(x))))}</span>`
-            : x.acctDigits && !imp.acctOverride ? `<span class="tag warn">A/c ••${esc(x.acctDigits)} not in Accounts</span>` : ''}</div></div>
+            : x.acctDigits && !imp.acctOverride ? `<span class="tag">New account: ${esc(newAcctLabel(x))}</span>` : ''}</div></div>
         <div class="amt ${x.type === 'credit' ? 'credit' : ''}">${x.type === 'credit' ? '+' : '−'}${fmt(x.amount)}</div>
         <select aria-label="Category">${opts[x.type].map(c => `<option ${c.name === x.category ? 'selected' : ''} value="${esc(c.name)}">${esc(c.emoji)} ${esc(c.name)}</option>`).join('')}</select>
       </div>`).join('');
@@ -1301,9 +1342,22 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     const det = detectColumns(rows);
     imp.rows = rows; imp.name = file.name; imp.filter = 'all'; imp.mode = 'file'; imp.acctOverride = '';
     imp.header = det ? det.header : 0;
-    imp.stmtAcct = matchAccount(rows.slice(0, Math.max(1, imp.header)).map(r => r.join(' ')).join(' \n ') + ' ' + file.name.replace(/[_\-.]/g, ' '), true);
     imp.map = det ? det.map : { date: -1, desc: -1, debit: -1, credit: -1, amount: -1, type: -1 };
     imp.dateFmt = imp.map.date >= 0 ? guessDateFmt(rows, imp.map.date) : 'dmy';
+    const headText = rows.slice(0, Math.max(1, imp.header)).map(r => r.join(' ')).join(' \n ') + ' ' + file.name.replace(/[_\-.]/g, ' ');
+    imp.stmtAcct = matchAccount(headText, true);
+    // only trust a bare long number for a new account when it is the only one in the header
+    if (!imp.stmtAcct.id && !acctDigitsIn(headText, false).length) {
+      const longs = [...new Set(headText.match(/\b\d{9,18}\b/g) || [])];
+      if (longs.length !== 1) imp.stmtAcct.digits = '';
+    }
+    imp.stmtAcct.bank = bankFromText(headText);
+    if (!imp.stmtAcct.bank) {   // fall back to the footer / legend rows (not the narrations: they name other banks)
+      const tail = rows.slice(imp.header + 1).filter(r => imp.map.date < 0 || !parseDate(r[imp.map.date], imp.dateFmt))
+        .map(r => r.join(' ')).join(' ');
+      imp.stmtAcct.bank = bankFromText(tail);
+    }
+    imp.stmtAcct.kind = /credit card|card statement|card account/i.test(headText) ? 'card' : 'bank';
     if (imp.map.amount >= 0 && imp.map.type < 0) {
       const anyNeg = rows.slice(imp.header + 1).some(r => parseAmount(r[imp.map.amount]) < 0);
       imp.sign = anyNeg ? 'neg-debit' : 'pos-debit';
@@ -1400,7 +1454,9 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     if (type === 'credit' && /credit ?card|card (ending|no\.?|number|x+|\*)|towards (your )?\w*\s*card/i.test(t) &&
         /payment|received|thank/i.test(t) && catsFor('credit').some(c => c.name === 'Transfer')) cat = 'Transfer';
     const acct = matchAccount(t);
+    const acctKind = /credit ?card|card (no\.?|number|ending|x+|\*)|\bcard x+\d|\bcc\s*\d*x+/i.test(t) ? 'card' : 'bank';
     return { date, desc, type, amount, payment, category: cat, touched: false, account: acct.id, acctDigits: acct.digits,
+      acctBank: bankFromText(t) || bank, acctKind,
       ref: rrn ? `sms|${rrn}|${type}|${amount.toFixed(2)}` : `sms|${date}|${type}|${amount.toFixed(2)}|${(party || t).toLowerCase()}` };
   }
   function parseSmsBatch(text) {
@@ -1483,10 +1539,12 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
   });
   function addItems(items, label) {
     const now = Date.now();
+    const created = ensureAccounts(items);
     const add = items.map((x, i) => ({
       id: uid(), createdAt: now + i, type: x.type, amount: x.amount, category: x.category,
-      date: x.date, note: x.desc, payment: x.payment || 'Bank', ref: x.ref, account: finalAcct(x)
+      date: x.date, note: x.desc, payment: x.payment || 'Bank', ref: x.ref, account: x.account || ''
     }));
+    if (created.length) label = (label || `Imported ${add.length} transactions`) + ` · added account${created.length > 1 ? 's' : ''} ` + created.map(a => acctLabel(a)).join(', ');
     state.expenses.push(...add);
     save();
     const latest = add.reduce((m, x) => x.date > m ? x.date : m, '');
@@ -1495,7 +1553,13 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     view = 'list'; syncNav(); render();
     toast(label || `Imported ${add.length} transactions`);
   }
-  $('impGo').addEventListener('click', () => addItems(imp.items.filter(x => x.include)));
+  $('impGo').addEventListener('click', () => {
+    const items = imp.items.filter(x => x.include);
+    items.forEach(x => {
+      if (imp.acctOverride) { x.account = finalAcct(x); x.acctDigits = ''; }   // user chose an account (or none)
+    });
+    addItems(items);
+  });
   $('impCancel').addEventListener('click', closeAll);
   const pickStatement = () => $('importFile').click();
   $('importBtn').addEventListener('click', pickStatement);
@@ -1532,7 +1596,20 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     save(); render(); toast(n ? `Account added · ${n} existing entr${n > 1 ? 'ies' : 'y'} matched` : 'Account added');
   });
   $('acctChips').addEventListener('click', e => {
-    const x = e.target.closest('[data-delacct]'); if (!x) return;
+    const x = e.target.closest('[data-delacct]');
+    if (!x) {
+      const c = e.target.closest('[data-editacct]'); if (!c) return;
+      const a = acctById(c.dataset.editacct); if (!a) return;
+      const name = prompt('Account name', a.name);
+      if (name === null) return;
+      const digits = prompt('Last digits (separate several with commas)', a.digits.join(', '));
+      if (digits === null) return;
+      const list = digits.split(/[^0-9]+/).filter(d => d.length >= 3).map(d => d.slice(-6));
+      if (name.trim()) a.name = name.trim();
+      if (list.length) a.digits = list;
+      save(); render(); toast('Account updated');
+      return;
+    }
     const a = acctById(x.dataset.delacct);
     if (!a || !confirm(`Remove "${a.name}"? Its transactions stay, without an account.`)) return;
     state.accounts = state.accounts.filter(y => y.id !== a.id);
@@ -1757,6 +1834,7 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     const it = mailBrowse.items[+b.dataset.madd];
     returnToMail = true;
     closeAll();
+    if (!it.x.account && it.x.acctDigits) { ensureAccounts([it.x]); save(); }
     openSheet(null, { ...it.x, note: it.x.desc, ref: 'mail|' + it.e.id });
   });
   $('mailFilter').addEventListener('input', renderMailList);

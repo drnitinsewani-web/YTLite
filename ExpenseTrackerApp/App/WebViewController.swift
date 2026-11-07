@@ -131,6 +131,20 @@ final class WebViewController: UIViewController, WKScriptMessageHandler, WKUIDel
         present(alert, orElse: { completionHandler(false) })
     }
 
+    func webView(_ webView: WKWebView, runJavaScriptTextInputPanelWithPrompt prompt: String, defaultText: String?,
+                 initiatedByFrame frame: WKFrameInfo, completionHandler: @escaping (String?) -> Void) {
+        let alert = UIAlertController(title: nil, message: prompt, preferredStyle: .alert)
+        alert.addTextField { field in
+            field.text = defaultText
+            field.clearButtonMode = .whileEditing
+        }
+        alert.addAction(UIAlertAction(title: "Cancel", style: .cancel) { _ in completionHandler(nil) })
+        alert.addAction(UIAlertAction(title: "OK", style: .default) { [weak alert] _ in
+            completionHandler(alert?.textFields?.first?.text ?? "")
+        })
+        present(alert, orElse: { completionHandler(nil) })
+    }
+
     private func present(_ alert: UIAlertController, orElse fallback: @escaping () -> Void) {
         let presenter = topPresenter()
         if presenter is UIAlertController { fallback(); return }
