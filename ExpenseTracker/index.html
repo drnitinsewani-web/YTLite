@@ -2583,6 +2583,7 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
       const who = others.length ? payerName(payerKey(e)) : '';
       if (!data.comment) delete e.comment;
       if (!ownGroup) delete e.group;
+      if (e.bankAmt && (Math.abs(data.amount - e.amount) >= 0.005 || data.type !== e.type)) delete e.bankAmt;
       if (data.category !== editingOrigCat) {
         data.userCat = true;   // tidyTransfers leaves it alone
         if (e.autoXfer && data.category !== 'Transfer' && data.comment && data.comment === e.autoXfer.c) delete data.comment;   // "Self transfer" no longer true
@@ -2602,7 +2603,8 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
         pendingTidy = true;
         extra += ` · ${others.length} other entr${others.length > 1 ? 'ies' : 'y'} from ${who} moved too`;
         const ba = acctById(e.account);
-        if (ba && ba.business && e.type === 'credit' && editingOrigCat === ba.business.incomeCat && counted(e) && !isStdIncome(data.category)) {
+        if (ba && ba.business && e.type === 'credit' && editingOrigCat === ba.business.incomeCat && counted(e) && !isStdIncome(data.category) &&
+            !state.expenses.some(x => x.account === ba.id && x.type === 'credit' && x.category === editingOrigCat && !x.userCat)) {
           ba.business.incomeCat = data.category;
           extra += ` · ${acctLabel(ba)}'s collections now go to ${data.category}`;
         }
@@ -3064,35 +3066,43 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
   // bank-statement row, the other an app-statement entry with that reference, same direction, within
   // 2 days, the bank's amount smaller (equal amounts merge the usual way).
   const isAppRef = r => /^(upi|phonepe|gpay)\|/.test(r || '');
+  // the bank's own record of a payment: a statement row, or the bank's SMS / email alert
+  const isBankSide = e => refsOf(e).some(r => isBankRef(r) || /^(sms|mail)\|/.test(r));
+  const appOnly = e => refsOf(e).some(isAppRef) && !isBankSide(e);
+  const bankOnly = e => isBankSide(e) && !refsOf(e).some(isAppRef);
+  // the same payment: its amount, or (once merged with the app's entry) the bank's part of it
+  const amtIs = (e, a) => Math.abs(e.amount - a) < 0.005 || (e.bankAmt != null && Math.abs(e.bankAmt - a) < 0.005);
   const utrPair = (x, e) => {
     if (x.type !== e.type || dayDiff(e.date, x.date) > 2 || e.autoXfer || x.autoXfer || e.bankAmt || x.bankAmt) return false;
-    const xb = refsOf(x).some(isBankRef), eb = refsOf(e).some(isBankRef);
-    if (xb === eb) return false;
-    const app = xb ? e : x, bank = xb ? x : e;
-    return bank.amount < app.amount - 0.005 && refsOf(app).some(isAppRef) && !!(app.utrSure && app.utr && utrsOf(bank).includes(app.utr));
+    const app = appOnly(x) && bankOnly(e) ? x : appOnly(e) && bankOnly(x) ? e : null; if (!app) return false;
+    const bank = app === x ? e : x;
+    return bank.amount < app.amount - 0.005 && !!(app.utrSure && app.utr && utrsOf(bank).includes(app.utr));
   };
   const appLabel = k => ({ phonepe: 'PhonePe', gpay: 'Google Pay', paytm: 'Paytm' })[k] || 'The app';
   // Pairs imported before Kharcha knew this: merged into the entry recorded first, at the bank's amount.
   function mergeUtrPairs() {
-    const byUtr = new Map();
-    state.expenses.forEach(e => { if (e.utrSure && e.utr && !refsOf(e).some(isBankRef)) byUtr.set(e.utr + '|' + e.type, e); });
+    const byUtr = new Map();   // utr|type → the app's entries with that UPI reference
+    state.expenses.forEach(e => { if (e.utrSure && e.utr && appOnly(e) && !e.bankAmt) { const k = e.utr + '|' + e.type; byUtr.set(k, (byUtr.get(k) || []).concat(e)); } });
     if (!byUtr.size) return 0;
     const gone = new Set(); let n = 0;
     state.expenses.forEach(b => {
-      if (gone.has(b.id) || !refsOf(b).some(isBankRef)) return;
-      const a = utrsOf(b).map(u => byUtr.get(u + '|' + b.type)).find(x => x && x !== b && !gone.has(x.id) && utrPair(x, b) &&
+      if (gone.has(b.id) || !bankOnly(b)) return;
+      const a = utrsOf(b).flatMap(u => byUtr.get(u + '|' + b.type) || []).find(x => x !== b && !gone.has(x.id) && utrPair(x, b) &&
         !(x.account && b.account && x.account !== b.account));
       if (!a) return;
+      const appAmt = a.amount, bankAmt = b.amount, appCleared = !a.unread && needsReview(a);   // the whole payment was reviewed already
       const keep = (a.createdAt || 0) <= (b.createdAt || 0) ? a : b, drop = keep === a ? b : a;
-      keep.amount = a.amount; keep.bankAmt = b.amount;
+      keep.amount = appAmt; keep.bankAmt = bankAmt;
       keep.refs = [...new Set([...(keep.refs || []), ...refsOf(drop)])].filter(r => r !== keep.ref);
       if (keep.balance == null && b.balance != null) keep.balance = b.balance;
       if (!keep.account && drop.account) keep.account = drop.account;
       keep.utr = a.utr; keep.utrSure = true; if (a.app) keep.app = a.app;
-      if (!keep.comment && drop.comment) keep.comment = drop.comment;
+      if (drop.comment && !String(keep.comment || '').includes(drop.comment)) keep.comment = keep.comment ? `${keep.comment} · ${drop.comment}` : drop.comment;   // both notes kept
       if (!keep.userCat && (drop.userCat || (/^Other/.test(keep.category) && !/^Other/.test(drop.category)))) { keep.category = drop.category; if (drop.userCat) keep.userCat = true; }
       if (keep.group === undefined && drop.group !== undefined) keep.group = drop.group;
-      if (keep.comment || !drop.unread) delete keep.unread;
+      if (keep.comment) delete keep.unread;
+      else if (keep.unread || drop.unread || (!appCleared && needsReview(keep))) keep.unread = true;
+      else delete keep.unread;
       gone.add(drop.id); n++;
     });
     if (n) state.expenses = state.expenses.filter(e => !gone.has(e.id));
@@ -3101,27 +3111,28 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
   const utrsOf = e => [...new Set([e.utr, ...(String(e.note || e.desc || '') + ' ' + [e.ref, ...(e.refs || [])].join(' ')).match(/\b\d{12}\b/g) || []].filter(Boolean))];
   function markDups(items) {
     const refs = new Set(state.expenses.flatMap(refsOf));
-    const byUtr = new Map();
-    state.expenses.forEach(e => utrsOf(e).forEach(u => byUtr.set(u + '|' + e.type, e)));
+    const byUtr = new Map();   // every entry per UPI reference (an SMS and the app's entry can share one)
+    state.expenses.forEach(e => utrsOf(e).forEach(u => { const k = u + '|' + e.type; byUtr.set(k, (byUtr.get(k) || []).concat(e)); }));
+    const withUtr = x => utrsOf(x).flatMap(u => byUtr.get(u + '|' + x.type) || []);
     const used = new Set();
     items.forEach(x => {
       x.match = null;
       if (refs.has(x.ref)) { x.dup = 'exact'; x.include = false; return; }
       // same UPI reference number, same direction and amount: the same payment seen from another source
-      const viaUtr = utrsOf(x).map(u => byUtr.get(u + '|' + x.type)).find(e => e && !used.has(e.id) && Math.abs(e.amount - x.amount) < 0.005);
+      const viaUtr = withUtr(x).find(e => !used.has(e.id) && amtIs(e, x.amount));
       if (viaUtr) { x.dup = 'utr'; x.match = viaUtr.id; used.add(viaUtr.id); x.include = false; return; }
       // an account number the app doesn't know yet (x.acctDigits) is a different account from every existing one
       const otherAcct = e => x.account ? (e.account && e.account !== x.account)
         : (x.acctDigits && e.account && !((acctById(e.account) || {}).digits || []).some(z => z.endsWith(x.acctDigits) || x.acctDigits.endsWith(z)));
       // the same UPI payment where PhonePe/GPay/SMS shows another amount than the bank statement (an
       // offer or reward paid part of it): the reference the app printed is in the bank's narration
-      const viaUtrAmt = utrsOf(x).map(u => byUtr.get(u + '|' + x.type)).find(e => e && !used.has(e.id) && utrPair(x, e) && !otherAcct(e));
+      const viaUtrAmt = withUtr(x).find(e => !used.has(e.id) && utrPair(x, e) && !otherAcct(e));
       if (viaUtrAmt) { x.dup = 'utr'; x.otherAmt = viaUtrAmt.amount; x.match = viaUtrAmt.id; used.add(viaUtrAmt.id); x.include = false; return; }
       // both carry a UPI reference and they differ: certainly two different payments
       // (only references both sources printed as the UPI reference — PhonePe/GPay statements, SMS
       // "RRN/UTR/Ref" — count; a stray 12-digit number in a narration might be something else)
       const otherRef = e => x.utrSure && e.utrSure && x.utr && e.utr && x.utr !== e.utr;
-      const sameAmt = state.expenses.filter(e => !used.has(e.id) && e.type === x.type && Math.abs(e.amount - x.amount) < 0.005 && !otherAcct(e));
+      const sameAmt = state.expenses.filter(e => !used.has(e.id) && e.type === x.type && amtIs(e, x.amount) && !otherAcct(e));
       const hasBal = v => v != null && !isNaN(v);
       let m = hasBal(x.balance) && sameAmt.find(e => hasBal(e.balance) && Math.abs(e.balance - x.balance) < 0.011 && dayDiff(e.date, x.date) <= 4);
       if (m) x.dup = 'balance';
@@ -3140,9 +3151,10 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     items.forEach(x => {
       if (x.include || !x.match || x.dup === 'exact') return;
       const e = state.expenses.find(y => y.id === x.match); if (!e) return;
-      if (Math.abs(e.amount - x.amount) >= 0.005) {   // part paid from the app's wallet: the app's amount is the payment, the bank's its part
-        const xb = isBankRef(x.ref);
-        e.bankAmt = xb ? x.amount : e.amount; e.amount = xb ? e.amount : x.amount;
+      if (!amtIs(e, x.amount)) {   // part paid from the app's wallet: the app's amount is the payment, the bank's its part
+        const xApp = appOnly(x);
+        e.bankAmt = xApp ? e.amount : x.amount; e.amount = xApp ? x.amount : e.amount;
+        if (xApp && !e.comment && !e.unread && needsReview(e)) e.unread = true;   // the whole payment is over the review threshold
       }
       if (x.ref && !refsOf(e).includes(x.ref)) e.refs = (e.refs || []).concat(x.ref);
       if (x.balance != null && e.balance == null) e.balance = x.balance;
@@ -3151,6 +3163,7 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
       if (x.app && !e.app) e.app = x.app;   // e.g. a bank-statement entry paid through PhonePe
       n++;
     });
+    if (n) mergeUtrPairs();   // a bank row just joined to its SMS can now meet the app's entry (also when nothing else is new)
     return n;
   }
   // Latest known balance per account (from statement rows and SMS/email alerts).
