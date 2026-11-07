@@ -747,7 +747,13 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
   const needsReview = x => reviewMin() > 0 && x.amount > reviewMin();
   // Comment rules: a comment saved on one transaction is reused for transactions from the same
   // payer/merchant with the same amount and type (now and in future imports).
-  const commentKey = e => { const k = merchantKey(e.note || e.desc || ''); return k.length >= 3 ? `${k}|${e.type}|${Number(e.amount).toFixed(2)}` : ''; };
+  // Round figures (whole rupees, multiples of ₹100: 500, 1,000, 10,000…) are usually one-off transfers
+  // with different purposes, so their comments are never copied or turned into rules.
+  const isRound = amt => Math.abs(amt - Math.round(amt)) < 0.005 && Math.round(amt) % 100 === 0;
+  const commentKey = e => {
+    if (isRound(Number(e.amount))) return '';
+    const k = merchantKey(e.note || e.desc || ''); return k.length >= 3 ? `${k}|${e.type}|${Number(e.amount).toFixed(2)}` : '';
+  };
   function applyCommentRule(e) {
     const rules = state.settings.commentRules || {};
     const k = commentKey(e);
@@ -1157,7 +1163,7 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     $('catChips').innerHTML = state.categories.map((c, i) => c.kind !== 'credit' ? chip(c, i) : '').join('');
     $('incChips').innerHTML = state.categories.map((c, i) => c.kind === 'credit' ? chip(c, i) : '').join('');
     const rules = Object.entries(state.rules);
-    const crules = Object.entries(state.settings.commentRules || {});
+    const crules = Object.entries(state.settings.commentRules || {}).filter(([k]) => !isRound(+k.split('|')[2]));
     $('ruleCount').textContent = rules.length + crules.length ? `(${rules.length + crules.length})` : '';
     $('ruleChips').innerHTML = rules.length + crules.length
       ? rules.sort((a, b) => a[0].localeCompare(b[0])).map(([k, v]) =>
@@ -1244,6 +1250,7 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
       if (data.comment) {
         const n = learnComment(e);
         if (n) msg += ` · same comment added to ${n} matching transaction${n > 1 ? 's' : ''}`;
+        else if (isRound(e.amount)) msg += ' · round amount, so the comment isn’t copied to others';
       }
       toast(msg);
     } else {
