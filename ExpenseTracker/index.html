@@ -134,6 +134,9 @@
     max-width: 640px; margin: 0 auto; overscroll-behavior: contain;
   }
   .sheet.open { transform: none; }
+  #catSheet { z-index: 13; }   /* opens on top of a transaction being edited */
+  .chip.add { border-style: dashed; color: var(--accent); }
+  #fCats.editing .chip[data-cat] { outline: 2px dashed var(--accent); outline-offset: -2px; }
   .sheet.tall { height: 92vh; display: flex; flex-direction: column; padding-bottom: 0; }
   .sheet .grab { width: 40px; height: 5px; border-radius: 9px; background: var(--border); margin: 0 auto 8px; flex: none; }
   .amount-input { font-size: 32px; font-weight: 700; text-align: center; padding: 14px; }
@@ -1923,11 +1926,15 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
 
   // ---------- add / edit ----------
   // formGroup: null = follow the category's group, otherwise the chosen group ('' = none)
-  let formGroup = null;
+  let formGroup = null, catEditMode = false;
   function renderFormCats() {
     $('fType').querySelectorAll('button').forEach(b => b.classList.toggle('sel', b.dataset.type === formType));
+    $('fCats').classList.toggle('editing', catEditMode);
     $('fCats').innerHTML = catsFor(formType).map(c =>
-      `<button type="button" class="chip ${c.name === selectedCat ? 'sel' : ''}" data-cat="${esc(c.name)}">${esc(c.emoji)} ${esc(c.name)}</button>`).join('');
+      `<button type="button" class="chip ${c.name === selectedCat && !catEditMode ? 'sel' : ''}" data-cat="${esc(c.name)}">${catEditMode ? '✏️ ' : ''}${esc(c.emoji)} ${esc(c.name)}</button>`).join('') +
+      (catEditMode ? `<button type="button" class="chip sel" data-catedit="done">✓ Done</button>`
+        : `<button type="button" class="chip add" data-catnew="1">＋ New</button><button type="button" class="chip add" data-catedit="1">✏️ Edit</button>`) +
+      (catEditMode ? `<span class="sub" style="margin:0;align-self:center">Tap a category to rename, change or delete it</span>` : '');
     const groups = allGroups();
     $('fGroupWrap').classList.toggle('hidden', !groups.length);
     if (!groups.length) return;
@@ -1961,6 +1968,7 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     $('fDate').value = src && src.date ? src.date : (monthKey(current) === monthKey(today) ? isoDate(today) : isoDate(current));
     selectedCat = src && src.category ? src.category : (catsFor(formType)[0] || {}).name;
     formGroup = exp && exp.group !== undefined ? exp.group : null;
+    catEditMode = false;
     $('fDelete').classList.toggle('hidden', !exp);
     let lastAcct = ''; try { lastAcct = localStorage.getItem(KEY + ':acct') || ''; } catch (e) {}
     const defAcct = src ? (src.account || '') : (acctFilter || (acctById(lastAcct) ? lastAcct : ''));
@@ -2038,7 +2046,10 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     if (returnToMail) { returnToMail = false; openMailSheet(); }
   });
   $('fCats').addEventListener('click', e => {
+    if (e.target.closest('[data-catnew]')) { openCatSheet(-1, true); return; }
+    if (e.target.closest('[data-catedit]')) { catEditMode = !catEditMode; renderFormCats(); return; }
     const b = e.target.closest('[data-cat]'); if (!b) return;
+    if (catEditMode) { openCatSheet(state.categories.findIndex(c => c.name === b.dataset.cat), true); return; }
     selectedCat = b.dataset.cat; renderFormCats();
   });
   $('fGroup').addEventListener('click', e => {
@@ -3114,10 +3125,10 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
   });
   // ---------- category editor ----------
   const FIXED_CATS = new Set(['Transfer', 'Other', 'Other Income']);   // names used in Kharcha's own logic
-  let catEditing = -1;
-  function openCatSheet(i) {
-    catEditing = i;
-    const c = i >= 0 ? state.categories[i] : { emoji: '', name: '', kind: 'debit' };
+  let catEditing = -1, catFromForm = false;
+  function openCatSheet(i, fromForm = false) {
+    catEditing = i; catFromForm = fromForm;
+    const c = i >= 0 ? state.categories[i] : { emoji: '', name: '', kind: fromForm ? formType : 'debit' };
     $('catTitle').textContent = i >= 0 ? 'Edit category' : 'New category';
     $('catEmoji').value = c.emoji || ''; $('catEmoji').placeholder = '🏷️';
     $('catName').value = c.name; $('catName').disabled = FIXED_CATS.has(c.name);
@@ -3147,7 +3158,15 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
   document.querySelectorAll('#catChips, #incChips').forEach(el => el.addEventListener('click', e => {
     const x = e.target.closest('[data-editcat]'); if (x) openCatSheet(+x.dataset.editcat);
   }));
-  $('catCancel').addEventListener('click', closeAll);
+  // back to the transaction it was opened from, or close everything
+  function closeCatSheet(selectName) {
+    if (!catFromForm) { closeAll(); return; }
+    $('catSheet').classList.remove('open'); catFromForm = false;
+    if (selectName !== undefined && catsFor(formType).some(c => c.name === selectName)) selectedCat = selectName;
+    if (!catsFor(formType).some(c => c.name === selectedCat)) selectedCat = (catsFor(formType)[0] || {}).name;
+    catEditMode = false; renderFormCats();
+  }
+  $('catCancel').addEventListener('click', () => closeCatSheet());
   $('catGroupPick').addEventListener('click', e => { const b = e.target.closest('[data-pickgroup]'); if (b) $('catGroup').value = b.dataset.pickgroup; });
   // rename every use of a category: transactions, learned rules, earlier renames
   function renameCategory(from, to) {
@@ -3174,15 +3193,21 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
       const stranded = lost && state.expenses.filter(e => e.category === old.name && e.type === lost).length;
       if (stranded) { toast(`${stranded} ${lost === 'credit' ? 'income' : 'expense'} entr${stranded === 1 ? 'y uses' : 'ies use'} it — choose “Both” or move them first`, 4000); return; }
       if ((catsFor('debit').length <= 1 && old.kind !== 'credit' && kind === 'credit') || (catsFor('credit').length <= 1 && old.kind !== 'debit' && kind === 'debit')) { toast('Keep at least one expense and one income category'); return; }
-      if (name !== old.name) renameCategory(old.name, name);
+      if (name !== old.name) {
+        renameCategory(old.name, name);
+        if (editingOrigCat === old.name) editingOrigCat = name;   // the open transaction isn't "changed by you" by a rename
+        if (selectedCat === old.name) selectedCat = name;
+      }
       const { exclude: _x, group: _g, ...rest } = old;
       state.categories[catEditing] = { ...rest, emoji, name, kind, ...(exclude ? { exclude: true } : {}), ...(group ? { group } : {}) };
     } else {
       state.categories.push({ emoji, name, kind, ...(exclude ? { exclude: true } : {}), ...(group ? { group } : {}) });
     }
     tidyTransfers();   // review marks follow the "not counted" setting
-    save(); closeAll(); renderSettings(); render();
-    toast(old ? (old.name !== name ? `Renamed to ${emoji} ${name}` : 'Category saved') : `Added ${emoji} ${name}`);
+    const fromForm = catFromForm;
+    save(); renderSettings(); render();
+    if (fromForm) closeCatSheet(old ? (selectedCat === name ? name : undefined) : name); else closeAll();
+    toast(old ? (old.name !== name ? `Renamed to ${emoji} ${name}` : 'Category saved') : `Added ${emoji} ${name}${fromForm ? ' · selected' : ''}`);
   });
   $('catDelete').addEventListener('click', () => {
     const c = state.categories[catEditing]; if (!c) return;
@@ -3205,7 +3230,10 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     state.settings.catAlias = JSON.parse(JSON.stringify(al));
     state.categories.splice(catEditing, 1);
     tidyTransfers();
-    save(); closeAll(); renderSettings(); render();
+    const fromForm = catFromForm;
+    if (editingOrigCat === c.name) editingOrigCat = to;
+    save(); renderSettings(); render();
+    if (fromForm) closeCatSheet(selectedCat === c.name ? to : undefined); else closeAll();
     toast(n ? `Deleted · ${n} moved to ${to}` : 'Category deleted');
   });
   $('payeeChips').addEventListener('click', e => {
