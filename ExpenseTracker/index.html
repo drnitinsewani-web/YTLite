@@ -562,6 +562,7 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
         <div><label>Credit / Deposit</label><select data-map="credit"></select></div>
         <div><label>Single amount column</label><select data-map="amount"></select></div>
         <div><label>Dr/Cr type column</label><select data-map="type"></select></div>
+        <div><label>Closing balance</label><select data-map="balance"></select></div>
         <div><label>Date format</label>
           <select id="impDateFmt"><option value="dmy">Day / Month / Year</option><option value="mdy">Month / Day / Year</option></select></div>
         <div><label>Single amount: debits are</label>
@@ -764,7 +765,7 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     if (acctFilter && !acctById(acctFilter)) acctFilter = '';
     $('acctBar').classList.toggle('hidden', !accts.length);
     $('acctBar').innerHTML = !accts.length ? '' : [`<button class="chip ${!acctFilter ? 'sel' : ''}" data-acct="">All accounts</button>`]
-      .concat(accts.map(a => `<button class="chip ${acctFilter === a.id ? 'sel' : ''}" data-acct="${esc(a.id)}">${esc(acctLabel(a))}</button>`)).join('');
+      .concat(accts.map(a => `<button class="chip ${acctFilter === a.id ? 'sel' : ''}" data-acct="${esc(a.id)}">${esc(acctLabel(a))}${a.bal ? ` <small>${esc(fmt(a.bal.amount))}</small>` : ''}</button>`)).join('');
     const a = acctById(acctFilter);
     $('spentLabel').textContent = a ? `Spent this month · ${a.name}` : 'Spent this month';
   }
@@ -868,7 +869,10 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     const spent = spentOf(items), income = incomeOf(items);
     $('monthTotal').textContent = fmt(spent);
     renderBudget(spent);
-    $('incomeText').innerHTML = income ? `Income <b style="color:var(--income)">${fmt(income)}</b> · Net ${fmt(income - spent)}` : '';
+    const fa = acctById(acctFilter);
+    $('incomeText').innerHTML = [income ? `Income <b style="color:var(--income)">${fmt(income)}</b> · Net ${fmt(income - spent)}` : '',
+      fa && fa.bal ? `Balance <b>${fmt(fa.bal.amount)}</b> on ${new Date(fa.bal.date + 'T00:00').toLocaleDateString(undefined, { day: 'numeric', month: 'short' })}` : ''
+    ].filter(Boolean).join('<br>');
 
     const q = $('search').value.trim().toLowerCase();
     const shown = items
@@ -975,7 +979,7 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     $('autoAdd').checked = !!state.settings.autoAddShared;
     const accts = state.accounts || [];
     $('acctChips').innerHTML = accts.length ? accts.map(a =>
-      `<span class="chip" data-editacct="${esc(a.id)}" role="button">${esc(a.emoji || '🏦')} ${esc(a.name)} <small>••${esc(a.digits.join(', ••'))}</small><span class="x" data-delacct="${esc(a.id)}" role="button" aria-label="Remove">✕</span></span>`).join('')
+      `<span class="chip" data-editacct="${esc(a.id)}" role="button">${esc(a.emoji || '🏦')} ${esc(a.name)} <small>••${esc(a.digits.join(', ••'))}${a.bal ? ' · ' + esc(fmt(a.bal.amount)) + ' (' + esc(new Date(a.bal.date + 'T00:00').toLocaleDateString(undefined, { day: 'numeric', month: 'short' })) + ')' : ''}</small><span class="x" data-delacct="${esc(a.id)}" role="button" aria-label="Remove">✕</span></span>`).join('')
       : '<span class="sub" style="margin:0">No accounts yet.</span>';
     const chip = (c, i) => `<span class="chip">${esc(c.emoji)} ${esc(c.name)}<span class="x" data-del="${i}" role="button" aria-label="Remove">✕</span></span>`;
     $('catChips').innerHTML = state.categories.map((c, i) => c.kind !== 'credit' ? chip(c, i) : '').join('');
@@ -1149,7 +1153,8 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
       const credit = find([/deposit|credit|\bcr\b|paid in|money in|inflow/], [type, date, desc, debit]);
       const amount = find([/^amount|amount$|\bamt\b|^value$/], [type, date, desc, debit, credit]);
       if (date >= 0 && (debit >= 0 && credit >= 0 || amount >= 0)) {
-        return { header: i, map: { date, desc, debit, credit, amount: (debit >= 0 && credit >= 0) ? -1 : amount, type } };
+        const balance = h.findIndex((x, j) => x && ![type, date, desc, debit, credit, amount].includes(j) && /balance|\bbal\b/.test(x));
+        return { header: i, map: { date, desc, debit, credit, amount: (debit >= 0 && credit >= 0) ? -1 : amount, type, balance } };
       }
     }
     // no header row found: guess from the data itself
@@ -1160,7 +1165,7 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     const nums = r.map((c, j) => j !== date && !isNaN(parseAmount(c)) ? j : -1).filter(j => j >= 0);
     const desc = r.findIndex((c, j) => j !== date && typeof c === 'string' && /[a-z]{3}/i.test(c));
     if (!nums.length) return null;
-    return { header: first - 1, map: { date, desc, debit: -1, credit: -1, amount: nums[0], type: -1 } };
+    return { header: first - 1, map: { date, desc, debit: -1, credit: -1, amount: nums[0], type: -1, balance: -1 } };
   }
 
   const MONTHS = ['jan','feb','mar','apr','may','jun','jul','aug','sep','oct','nov','dec'];
@@ -1224,31 +1229,73 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
   }
   // exact: same statement row / same SMS imported before. maybe: same date, type and amount already recorded
   // (e.g. added from SMS, now arriving in the statement). Both start unticked.
+  // exact:   same statement row / SMS / email imported before (reference match)
+  // balance: same amount, type and account, and the balance after it is identical (dates may differ by
+  //          a few days, e.g. SMS date vs statement value date) — the same transaction for sure
+  // maybe:   same date, type and amount, no balance to tell them apart
+  // Two entries whose balances differ are never duplicates (e.g. two ₹344.99 charges on one day).
+  const dayDiff = (a, b) => Math.abs(new Date(a + 'T00:00') - new Date(b + 'T00:00')) / 864e5;
+  const refsOf = e => [e.ref, ...(e.refs || [])].filter(Boolean);
   function markDups(items) {
-    const refs = new Set(state.expenses.map(e => e.ref).filter(Boolean));
-    const soft = {};
-    state.expenses.forEach(e => { const k = `${e.date}|${e.type}|${e.amount.toFixed(2)}`; soft[k] = (soft[k] || 0) + 1; });
+    const refs = new Set(state.expenses.flatMap(refsOf));
+    const used = new Set();
     items.forEach(x => {
-      const k = `${x.date}|${x.type}|${x.amount.toFixed(2)}`;
-      x.dup = refs.has(x.ref) ? 'exact' : soft[k] > 0 ? 'maybe' : false;
-      if (x.dup) soft[k] = Math.max(0, (soft[k] || 0) - 1);
+      x.match = null;
+      if (refs.has(x.ref)) { x.dup = 'exact'; x.include = false; return; }
+      const sameAmt = state.expenses.filter(e => !used.has(e.id) && e.type === x.type && Math.abs(e.amount - x.amount) < 0.005 &&
+        (!x.account || !e.account || e.account === x.account));
+      const hasBal = v => v != null && !isNaN(v);
+      let m = hasBal(x.balance) && sameAmt.find(e => hasBal(e.balance) && Math.abs(e.balance - x.balance) < 0.011 && dayDiff(e.date, x.date) <= 4);
+      if (m) x.dup = 'balance';
+      else {
+        m = sameAmt.find(e => e.date === x.date && !(hasBal(x.balance) && hasBal(e.balance)));
+        x.dup = m ? 'maybe' : false;
+      }
+      if (m) { used.add(m.id); x.match = m.id; }
       x.include = !x.dup;
+    });
+  }
+  // Duplicates that were left unticked are merged into the entry they match: it gains the new
+  // reference (so re-imports are recognised), the balance and the account if it had none.
+  function linkDuplicates(items) {
+    let n = 0;
+    items.forEach(x => {
+      if (x.include || !x.match || x.dup === 'exact') return;
+      const e = state.expenses.find(y => y.id === x.match); if (!e) return;
+      if (x.ref && !refsOf(e).includes(x.ref)) e.refs = (e.refs || []).concat(x.ref);
+      if (x.balance != null && e.balance == null) e.balance = x.balance;
+      if (!e.account && x.account) e.account = x.account;
+      n++;
+    });
+    return n;
+  }
+  // Latest known balance per account (from statement rows and SMS/email alerts).
+  function updateBalances(items) {
+    items.forEach(x => {
+      const a = acctById(x.account);
+      if (!a || x.balance == null || a.kind === 'card') return;
+      const cur = a.bal;
+      const newer = !cur || x.date > cur.date || (x.date === cur.date && (x.seq || 0) >= (cur.seq || 0));
+      if (newer) a.bal = { amount: x.balance, date: x.date, seq: x.seq || 0 };
     });
   }
   function buildItems() {
     const { map } = imp;
     const cell = (r, j) => j >= 0 ? r[j] : '';
     const items = [];
+    let seq = 0;
     imp.rows.slice(imp.header + 1).forEach(r => {
       if (!Array.isArray(r)) return;
       const date = parseDate(cell(r, map.date), imp.dateFmt);
       if (!date) return;
       const desc = String(cell(r, map.desc) || '').replace(/\s+/g, ' ').trim();
+      const balRaw = map.balance >= 0 ? parseAmount(cell(r, map.balance)) : NaN;
+      const balance = isNaN(balRaw) ? null : Math.round(balRaw * 100) / 100;
       const push = (type, amount) => {
         amount = Math.round(Math.abs(amount) * 100) / 100;
         if (!(amount > 0)) return;
         const ref = refOf(date, type, amount, desc);
-        items.push({ date, desc, type, amount, ref, payment: 'Bank', category: classify(desc, type), touched: false,
+        items.push({ date, desc, type, amount, ref, payment: 'Bank', category: classify(desc, type), touched: false, balance, seq: seq++,
           account: imp.stmtAcct.id, acctDigits: imp.stmtAcct.digits, acctBank: imp.stmtAcct.bank, acctKind: imp.stmtAcct.kind });
       };
       if (map.debit >= 0 || map.credit >= 0) {
@@ -1268,9 +1315,28 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
         push(type, a);
       }
     });
-    items.sort((a, b) => b.date.localeCompare(a.date));
+    imp.balanceCheck = checkRunningBalance(items);
+    items.sort((a, b) => b.date.localeCompare(a.date) || b.seq - a.seq);
     markDups(items);
     imp.items = items;
+  }
+  // Each row's balance should equal the previous balance − debit + credit. Statements may be oldest- or
+  // newest-first, so try both orders and keep the better one. Returns { rows, bad } or null without balances.
+  function checkRunningBalance(items) {
+    const rows = items.filter(x => x.balance != null).sort((a, b) => a.seq - b.seq);
+    if (rows.length < 2) return null;
+    const signed = x => x.type === 'credit' ? x.amount : -x.amount;
+    const count = list => {
+      const bad = [];
+      for (let i = 1; i < list.length; i++) if (Math.abs(list[i - 1].balance + signed(list[i]) - list[i].balance) > 0.011) bad.push(list[i]);
+      return bad;
+    };
+    const fwd = count(rows), rev = count(rows.slice().reverse());
+    const newestFirst = rev.length < fwd.length;
+    const bad = newestFirst ? rev : fwd;
+    items.forEach(x => x.balanceGap = bad.includes(x));
+    if (newestFirst) items.forEach(x => { x.seq = -x.seq; });   // higher seq = later, whatever the file order
+    return { rows: rows.length, bad: bad.length };
   }
 
   const finalAcct = x => imp.acctOverride === '__none' ? '' : (imp.acctOverride || x.account || '');
@@ -1291,7 +1357,11 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     const dups = it.filter(x => x.dup).length;
     const other = it.filter(x => x.category === 'Other' || x.category === 'Other Income').length;
     $('impInfo').innerHTML = it.length
-      ? `${esc(imp.name)}<br>${deb.length} debits <b>${fmt(sum(deb))}</b> · ${cre.length} credits <b style="color:var(--income)">${fmt(sum(cre))}</b>${dups ? `<br>${dups} already recorded (unticked)` : ''}`
+      ? `${esc(imp.name)}<br>${deb.length} debits <b>${fmt(sum(deb))}</b> · ${cre.length} credits <b style="color:var(--income)">${fmt(sum(cre))}</b>${(() => { const ex = it.filter(x => x.dup === 'exact').length, mg = dups - ex;
+          return [ex ? `${ex} already imported` : '', mg ? `${mg} match existing entries (will be merged)` : ''].filter(Boolean).map(t => '<br>' + t).join(''); })()}${
+        imp.mode === 'file' && imp.balanceCheck ? (imp.balanceCheck.bad
+          ? `<br><span style="color:var(--warn)">⚠︎ ${imp.balanceCheck.bad} row${imp.balanceCheck.bad > 1 ? 's don’t' : ' doesn’t'} match the running balance — rows may be missing or repeated</span>`
+          : `<br><span style="color:var(--income)">✓ Balances add up (${imp.balanceCheck.rows} rows)</span>`) : ''}`
       : `${esc(imp.name)}<br>No transactions found. Check the columns below.`;
     if (it.length && state.settings.selfName) $('impInfo').innerHTML += `<br><span style="font-size:12px">Payments to/from <b>${esc(state.settings.selfName)}</b> → Transfer</span>`;
     if (!it.length && imp.mode !== 'sms') $('impMap').open = true;
@@ -1309,7 +1379,8 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
       <div class="irow ${x.include ? '' : 'off'}" data-i="${i}">
         <input type="checkbox" ${x.include ? 'checked' : ''} aria-label="Include">
         <div class="d"><div class="desc">${esc(x.desc || '(no description)')}</div>
-          <div class="meta">${new Date(x.date + 'T00:00').toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' })}${x.dup === 'exact' ? '<span class="tag warn">already imported</span>' : x.dup ? '<span class="tag warn">possible duplicate</span>' : ''}${
+          <div class="meta">${new Date(x.date + 'T00:00').toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' })}${x.dup === 'exact' ? '<span class="tag warn">already imported</span>' : x.dup === 'balance' ? '<span class="tag warn">same as existing entry · balance matches</span>' : x.dup ? '<span class="tag warn">possible duplicate</span>' : ''}${
+            x.balanceGap ? '<span class="tag warn">balance doesn’t add up here</span>' : ''}${
             acctById(finalAcct(x)) ? `<span class="tag">${esc(acctLabel(acctById(finalAcct(x))))}</span>`
             : x.acctDigits && !imp.acctOverride ? `<span class="tag">New account: ${esc(newAcctLabel(x))}</span>` : ''}</div></div>
         <div class="amt ${x.type === 'credit' ? 'credit' : ''}">${x.type === 'credit' ? '+' : '−'}${fmt(x.amount)}</div>
@@ -1342,7 +1413,7 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     const det = detectColumns(rows);
     imp.rows = rows; imp.name = file.name; imp.filter = 'all'; imp.mode = 'file'; imp.acctOverride = '';
     imp.header = det ? det.header : 0;
-    imp.map = det ? det.map : { date: -1, desc: -1, debit: -1, credit: -1, amount: -1, type: -1 };
+    imp.map = det ? det.map : { date: -1, desc: -1, debit: -1, credit: -1, amount: -1, type: -1, balance: -1 };
     imp.dateFmt = imp.map.date >= 0 ? guessDateFmt(rows, imp.map.date) : 'dmy';
     const headText = rows.slice(0, Math.max(1, imp.header)).map(r => r.join(' ')).join(' \n ') + ' ' + file.name.replace(/[_\-.]/g, ' ');
     imp.stmtAcct = matchAccount(headText, true);
@@ -1446,6 +1517,10 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     const date = smsDate(t, opts.fallbackDate);
     const party = smsParty(t, type) || narrationParty(raw);
     const bank = bankName(t);
+    const acctKind = /credit ?card|card (no\.?|number|ending|x+|\*)|\bcard x+\d|\bcc\s*\d*x+/i.test(t) ? 'card' : 'bank';
+    const balM = acctKind === 'card' ? null :
+      t.match(/\b(?:avl\.?|avail(?:able)?|a\/c|clear|closing|total)?\s*bal(?:ance)?\.?(?:\s+(?:is|of))?\s*[:\-]?\s*(?:rs\.?|inr|₹)\s*([\d,]+(?:\.\d{1,2})?)/i);
+    const smsBalance = balM ? parseFloat(balM[1].replace(/,/g, '')) : null;
     const rrn = (t.match(/\b(?:rrn|ref(?:erence)?(?:\s*no)?|utr|upi ref(?: no)?|txn id)[\s.:#-]*([A-Za-z0-9]{6,})/i) || [])[1] || '';
     const payment = /\bupi\b|vpa|@/i.test(t) ? 'UPI' : /\batm\b|cash withdrawal|withdrawn/i.test(t) ? 'Cash' : /\bcard\b/i.test(t) ? 'Card' : 'Bank';
     const desc = party ? `${type === 'credit' ? 'From' : 'To'} ${party}${bank ? ' · ' + bank : ''}` : t.slice(0, 120);
@@ -1454,9 +1529,8 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     if (type === 'credit' && /credit ?card|card (ending|no\.?|number|x+|\*)|towards (your )?\w*\s*card/i.test(t) &&
         /payment|received|thank/i.test(t) && catsFor('credit').some(c => c.name === 'Transfer')) cat = 'Transfer';
     const acct = matchAccount(t);
-    const acctKind = /credit ?card|card (no\.?|number|ending|x+|\*)|\bcard x+\d|\bcc\s*\d*x+/i.test(t) ? 'card' : 'bank';
     return { date, desc, type, amount, payment, category: cat, touched: false, account: acct.id, acctDigits: acct.digits,
-      acctBank: bankFromText(t) || bank, acctKind,
+      acctBank: bankFromText(t) || bank, acctKind, balance: smsBalance, seq: 0,
       ref: rrn ? `sms|${rrn}|${type}|${amount.toFixed(2)}` : `sms|${date}|${type}|${amount.toFixed(2)}|${(party || t).toLowerCase()}` };
   }
   function parseSmsBatch(text) {
@@ -1542,8 +1616,10 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     const created = ensureAccounts(items);
     const add = items.map((x, i) => ({
       id: uid(), createdAt: now + i, type: x.type, amount: x.amount, category: x.category,
-      date: x.date, note: x.desc, payment: x.payment || 'Bank', ref: x.ref, account: x.account || ''
+      date: x.date, note: x.desc, payment: x.payment || 'Bank', ref: x.ref, account: x.account || '',
+      ...(x.balance != null ? { balance: x.balance } : {})
     }));
+    updateBalances(items);
     if (created.length) label = (label || `Imported ${add.length} transactions`) + ` · added account${created.length > 1 ? 's' : ''} ` + created.map(a => acctLabel(a)).join(', ');
     state.expenses.push(...add);
     save();
@@ -1558,6 +1634,12 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     items.forEach(x => {
       if (imp.acctOverride) { x.account = finalAcct(x); x.acctDigits = ''; }   // user chose an account (or none)
     });
+    const skipped = imp.items.filter(x => !x.include);
+    skipped.forEach(x => { if (imp.acctOverride) x.account = finalAcct(x); });
+    const linked = linkDuplicates(skipped);
+    updateBalances(skipped.filter(x => x.match));
+    if (linked && !items.length) { save(); closeAll(); render(); toast(`Merged ${linked} duplicate${linked > 1 ? 's' : ''} into existing entries`); return; }
+    if (linked) { addItems(items, `Imported ${items.length} transactions · merged ${linked} duplicate${linked > 1 ? 's' : ''}`); return; }
     addItems(items);
   });
   $('impCancel').addEventListener('click', closeAll);
@@ -1676,7 +1758,9 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
       const valid = data.expenses.filter(x => x && typeof x.amount === 'number' && /^\d{4}-\d{2}-\d{2}$/.test(x.date))
         .map(x => ({ id: String(x.id || uid()), createdAt: +x.createdAt || Date.now(), type: x.type === 'credit' ? 'credit' : 'debit',
           amount: x.amount, category: String(x.category || 'Other'), date: x.date, note: String(x.note || ''),
-          payment: String(x.payment || ''), ...(x.ref ? { ref: String(x.ref) } : {}), ...(x.account ? { account: String(x.account) } : {}) }));
+          payment: String(x.payment || ''), ...(x.ref ? { ref: String(x.ref) } : {}), ...(x.account ? { account: String(x.account) } : {}),
+          ...(typeof x.balance === 'number' ? { balance: x.balance } : {}),
+          ...(Array.isArray(x.refs) ? { refs: x.refs.map(String) } : {}) }));
       if (!confirm(`Replace current data with ${valid.length} transactions from backup?`)) return;
       state = migrate({ ...data, expenses: valid });
       save(); $('currency').innerHTML = ''; render(); toast('Restored');
@@ -1872,6 +1956,8 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     if (!items.length) { toast('No transaction found in the shared message'); return; }
     if (state.settings.autoAddShared) {
       markDups(items);
+      const merged = linkDuplicates(items);
+      if (merged) { updateBalances(items.filter(x => x.match)); save(); }
       const fresh = items.filter(x => !x.dup);
       const skipped = items.length - fresh.length;
       if (!fresh.length) { toast(`Skipped ${skipped} message${skipped > 1 ? 's' : ''} already recorded`); return; }
