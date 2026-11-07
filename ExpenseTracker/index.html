@@ -541,6 +541,11 @@
       <div class="sub" style="margin-top:10px">Tap a category to rename it, change its emoji or type, put it in a group (e.g. <b>Hospital</b> or <b>Personal</b>), or delete it.</div>
       <button class="btn ghost" id="addCat">＋ New category</button>
     </div>
+    <div class="card" id="exclCard">
+      <h2>🚫 Not counted in spending or income</h2>
+      <div class="sub" style="margin-top:4px">Tap a category to leave it out of your totals, or tap again to count it again (e.g. Income Tax, Transfer, Investment, Loan). Its entries stay in the list, faded, and are never marked to review.</div>
+      <div class="chips" id="exclChips" style="margin-top:10px"></div>
+    </div>
     <div class="card native-only">
       <h2>📂 Statement folder</h2>
       <div class="sub" id="folderStatus">No folder chosen.</div>
@@ -2208,6 +2213,11 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     if (view !== 'list') { view = 'list'; syncNav(); }
     render(); window.scrollTo(0, 0);
   });
+  document.addEventListener('click', e => {
+    if (!e.target.closest('[data-gotoexcl]')) return;
+    view = 'settings'; syncNav(); render();
+    setTimeout(() => $('exclCard').scrollIntoView({ behavior: 'smooth', block: 'start' }), 60);
+  });
   function renderList() {
     renderNeeds();
     const items = inPeriod();
@@ -2379,8 +2389,9 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
       ex[k] = ex[k] || { out: 0, in: 0 };
       ex[k][e.type === 'credit' ? 'in' : 'out'] += e.amount;
     });
-    $('notCounted').innerHTML = Object.keys(ex).length ? 'Not counted: ' + Object.entries(ex).map(([c, v]) =>
-      `${c === '\u0000refund' ? '↩️ Refunded' : `${esc(catOf(c).emoji)} ${esc(c)}`} ${v.out ? fmt(v.out) + ' out' : ''}${v.out && v.in ? ', ' : ''}${v.in ? fmt(v.in) + ' in' : ''}`).join(' · ') : '';
+    $('notCounted').innerHTML = (Object.keys(ex).length ? 'Not counted: ' + Object.entries(ex).map(([c, v]) =>
+      `${c === '\u0000refund' ? '↩️ Refunded' : `${esc(catOf(c).emoji)} ${esc(c)}`} ${v.out ? fmt(v.out) + ' out' : ''}${v.out && v.in ? ', ' : ''}${v.in ? fmt(v.in) + ' in' : ''}`).join(' · ') + ' · ' : '') +
+      `<span data-gotoexcl="1" role="button" style="cursor:pointer;color:var(--accent)">Choose what isn't counted ›</span>`;
     renderRecurring();
     renderGroups(items);
     $('catBars').innerHTML = debits.length ? barsHtml(debits, '') : `<div class="sub">Nothing spent ${periodWord()}.</div>`;
@@ -2428,6 +2439,7 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     const chip = (c, i) => `<button type="button" class="chip" data-editcat="${i}">${esc(c.emoji)} ${esc(c.name)}${c.kind === 'both' ? ' <small>±</small>' : ''}${c.group ? ` <small>· ${esc(c.group)}</small>` : ''}${c.exclude ? ' <small>not counted</small>' : ''} <small>${used[c.name] || 0}</small></button>`;
     $('catChips').innerHTML = state.categories.map((c, i) => c.kind !== 'credit' ? chip(c, i) : '').join('');
     $('incChips').innerHTML = state.categories.map((c, i) => c.kind === 'credit' ? chip(c, i) : '').join('');
+    $('exclChips').innerHTML = state.categories.map((c, i) => `<button type="button" class="chip ${c.exclude ? 'sel' : ''}" data-exclcat="${i}" aria-pressed="${!!c.exclude}">${c.exclude ? '🚫 ' : ''}${esc(c.emoji)} ${esc(c.name)} <small>${used[c.name] || 0}</small></button>`).join('');
     const pn = Object.entries(state.settings.payeeNames || {}).sort((a, b) => a[1].localeCompare(b[1]));
     $('payeeChips').innerHTML = pn.length ? pn.map(([k, v]) => `<span class="chip" data-payee="${esc(k)}" role="button">👤 ${esc(v)} <small>${esc(/^ACCT /.test(k) ? '••' + k.slice(5) : k.toLowerCase())}</small><span class="x" role="button" aria-label="Forget">✕</span></span>`).join('')
       : '<span class="sub" style="margin:0">None yet.</span>';
@@ -4085,6 +4097,15 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     save(); renderSettings(); render();
     if (fromForm) closeCatSheet(old ? (selectedCat === name ? name : undefined) : name); else closeAll();
     toast(old ? (old.name !== name ? `Renamed to ${emoji} ${name}` : 'Category saved') : `Added ${emoji} ${name}${fromForm ? ' · selected' : ''}`);
+  });
+  $('exclChips').addEventListener('click', e => {
+    const b = e.target.closest('[data-exclcat]'); if (!b) return;
+    const c = state.categories[+b.dataset.exclcat]; if (!c) return;
+    if (c.exclude) delete c.exclude; else c.exclude = true;
+    tidyTransfers();   // review marks follow the "not counted" setting
+    save(); render();
+    const its = inPeriod().filter(x => x.category === c.name), amt = its.reduce((t, x) => t + x.amount, 0);
+    toast(c.exclude ? `${c.emoji} ${c.name} is not counted any more${its.length ? ` · ${fmt(amt)} left out ${periodWord()}` : ''}` : `${c.emoji} ${c.name} counts again${its.length ? ` · ${fmt(amt)} ${periodWord()}` : ''}`, 4000);
   });
   $('catDelete').addEventListener('click', () => {
     const c = state.categories[catEditing]; if (!c) return;
