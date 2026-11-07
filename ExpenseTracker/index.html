@@ -337,10 +337,12 @@
     </div>
     <div class="filters hidden" id="acctBar" style="margin:-2px 0 8px"></div>
     <div class="searchrow">
-      <input class="search" id="search" type="search" placeholder="Search notes or categories">
+      <input class="search" id="search" type="search" placeholder="Search, or >1000 / <500">
       <button class="iconbtn" id="smsTop" aria-label="Add from bank SMS" title="Add from bank SMS" style="height:auto">💬</button>
       <button class="iconbtn" id="importTop" aria-label="Import bank statement" title="Import bank statement" style="height:auto">📥</button>
     </div>
+    <div class="filters" id="amtBar" style="margin:-4px 0 4px"></div>
+    <div class="sub" id="filterSummary" style="margin:0 4px 6px"></div>
     <div id="list"></div>
   </section>
 
@@ -704,6 +706,27 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
   const catsFor = type => state.categories.filter(c => c.kind === type || c.kind === 'both');
   const counted = e => !catOf(e.category).exclude;
   let acctFilter = '';
+  // Amount filter (remembered per device) and amount terms in search: ">1000", ">=5000", "<500", "swiggy >300"
+  let minAmt = 0;
+  try { minAmt = Math.max(0, parseFloat(localStorage.getItem('expense-tracker-v1:minAmt')) || 0); } catch (e) {}
+  function parseQuery(q) {
+    return q.replace(/([<>]=?)\s+/g, '$1').split(/\s+/).filter(Boolean).map(w => {
+      const m = w.match(/^([<>]=?)\s*₹?\s*([\d,]+(?:\.\d+)?)$/);
+      return m ? { op: m[1], v: parseFloat(m[2].replace(/,/g, '')) } : { word: w };
+    });
+  }
+  const AMT_PRESETS = [0, 1000, 5000, 10000];
+  function renderAmtBar() {
+    const custom = minAmt && !AMT_PRESETS.includes(minAmt);
+    $('amtBar').innerHTML = AMT_PRESETS.map(v =>
+      `<button class="chip ${minAmt === v ? 'sel' : ''}" data-min="${v}">${v ? 'Over ' + fmt(v).replace(/\.00$/, '') : 'All amounts'}</button>`).join('') +
+      `<button class="chip ${custom ? 'sel' : ''}" data-min="custom">${custom ? 'Over ' + fmt(minAmt).replace(/\.00$/, '') : 'Custom…'}</button>`;
+  }
+  function setMinAmt(v) {
+    minAmt = Math.max(0, v || 0);
+    try { localStorage.setItem('expense-tracker-v1:minAmt', String(minAmt)); } catch (e) {}
+    renderList();
+  }
   const inMonth = mk => state.expenses.filter(e => e.date.slice(0, 7) === mk && (!acctFilter || e.account === acctFilter));
 
   // ---------- accounts ----------
@@ -889,11 +912,23 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
 
     const q = $('search').value.trim().toLowerCase();
     const shown = items
-      .filter(e => !q || e.note.toLowerCase().includes(q) || e.category.toLowerCase().includes(q))
+      .filter(e => {
+        if (minAmt && e.amount <= minAmt) return false;
+        if (!q) return true;
+        return parseQuery(q).every(t => t.op
+          ? (t.op === '>' ? e.amount > t.v : t.op === '>=' ? e.amount >= t.v : t.op === '<' ? e.amount < t.v : e.amount <= t.v)
+          : (e.note.toLowerCase().includes(t.word) || e.category.toLowerCase().includes(t.word)));
+      })
       .sort((a, b) => b.date.localeCompare(a.date) || b.createdAt - a.createdAt);
 
+    renderAmtBar();
+    const filtering = minAmt || q;
+    const fd = shown.filter(e => e.type === 'debit' && counted(e)), fc = shown.filter(e => e.type === 'credit' && counted(e));
+    $('filterSummary').innerHTML = filtering && shown.length
+      ? `${shown.length} transaction${shown.length > 1 ? 's' : ''}${minAmt ? ` over ${fmt(minAmt).replace(/\.00$/, '')}` : ''} · spent <b>${fmt(sum(fd))}</b>${fc.length ? ` · received <b style="color:var(--income)">${fmt(sum(fc))}</b>` : ''}`
+      : '';
     if (!shown.length) {
-      $('list').innerHTML = `<div class="empty"><div>🪙</div>${q ? 'No matches' : 'Nothing this month.<br>Tap <b>+</b> to add, or <b>📥</b> to import a bank statement.'}</div>`;
+      $('list').innerHTML = `<div class="empty"><div>🪙</div>${filtering ? 'No transactions match this filter' : 'Nothing this month.<br>Tap <b>+</b> to add, or <b>📥</b> to import a bank statement.'}</div>`;
       return;
     }
     const groups = {};
@@ -1745,6 +1780,12 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
   $('prevM').addEventListener('click', () => { current = new Date(current.getFullYear(), current.getMonth() - 1, 1); render(); });
   $('nextM').addEventListener('click', () => { current = new Date(current.getFullYear(), current.getMonth() + 1, 1); render(); });
   $('search').addEventListener('input', renderList);
+  $('amtBar').addEventListener('click', e => {
+    const b = e.target.closest('[data-min]'); if (!b) return;
+    if (b.dataset.min !== 'custom') { setMinAmt(+b.dataset.min); return; }
+    const v = prompt('Show transactions over this amount', minAmt || '');
+    if (v !== null) setMinAmt(parseFloat(String(v).replace(/[^0-9.]/g, '')) || 0);
+  });
   $('balList').addEventListener('click', e => {
     if (e.target.closest('[data-pastebal]')) { openSmsSheet(''); return; }
     const b = e.target.closest('[data-setenq]'); if (!b) return;
