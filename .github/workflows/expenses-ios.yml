@@ -69,6 +69,16 @@ jobs:
           mkdir -p "$RUNNER_TEMP/keys"
           printf '%s\n' "$ASC_KEY" > "$RUNNER_TEMP/keys/AuthKey.p8"
 
+      - name: Remove development certificates left by earlier CI builds
+        if: env.HAS_ASC_KEY == 'true'
+        continue-on-error: true
+        env:
+          ASC_KEY_ID: ${{ secrets.APP_STORE_CONNECT_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
+        run: |
+          python3 -m pip install --quiet --break-system-packages pyjwt cryptography 2>/dev/null || python3 -m pip install --quiet --user pyjwt cryptography
+          python3 scripts/cleanup_ci_certs.py "$RUNNER_TEMP/keys/AuthKey.p8" "$ASC_KEY_ID" "$ASC_ISSUER_ID"
+
       - name: Archive (signed)
         if: env.HAS_ASC_KEY == 'true'
         env:
