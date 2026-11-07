@@ -510,12 +510,8 @@
       <div class="chips" id="catChips" style="margin-top:12px"></div>
       <h2 style="margin-top:16px">Income categories</h2>
       <div class="chips" id="incChips" style="margin-top:12px"></div>
-      <div class="row2" style="grid-template-columns: 56px 1fr 96px; margin-top:16px">
-        <input id="newCatEmoji" placeholder="🏷️" maxlength="4" aria-label="Emoji">
-        <input id="newCatName" placeholder="New category" aria-label="Category name">
-        <select id="newCatKind" aria-label="Category type" style="padding:8px"><option value="debit">Expense</option><option value="credit">Income</option></select>
-      </div>
-      <button class="btn ghost" id="addCat">Add category</button>
+      <div class="sub" style="margin-top:10px">Tap a category to rename it, change its emoji or type, or delete it.</div>
+      <button class="btn ghost" id="addCat">＋ New category</button>
     </div>
     <div class="card native-only">
       <h2>☁️ iCloud sync</h2>
@@ -619,6 +615,27 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
 </script>
 
 <!-- Paste SMS sheet -->
+<div class="sheet" id="catSheet">
+  <div class="grab"></div>
+  <h2 style="text-align:center" id="catTitle">Edit category</h2>
+  <div class="row2" style="grid-template-columns: 64px 1fr; margin-top:6px">
+    <input id="catEmoji" maxlength="8" aria-label="Emoji" style="text-align:center;font-size:22px">
+    <input id="catName" maxlength="30" placeholder="Category name" aria-label="Category name">
+  </div>
+  <div class="sub hidden" id="catFixed" style="margin-top:6px">This built-in category's name is used by Kharcha's automatic rules, so only its emoji can change.</div>
+  <label for="catKind">Used for</label>
+  <select id="catKind"><option value="debit">Expenses</option><option value="credit">Income</option><option value="both">Both</option></select>
+  <label class="mchk"><input type="checkbox" id="catExclude"><span>Not real spending or income (like Transfer, Investment): faded, left out of totals and never marked to review</span></label>
+  <div class="sub" id="catUse" style="margin-top:10px"></div>
+  <button type="button" class="btn primary" id="catSave">Save</button>
+  <div id="catDelWrap">
+    <label for="catMoveTo" id="catMoveLbl">When deleting, move its transactions to</label>
+    <select id="catMoveTo"></select>
+    <button type="button" class="btn danger" id="catDelete">Delete category</button>
+  </div>
+  <button type="button" class="btn ghost" id="catCancel">Cancel</button>
+</div>
+
 <div class="sheet" id="smsSheet">
   <div class="grab"></div>
   <h2 style="text-align:center">Add from bank SMS</h2>
@@ -1249,13 +1266,19 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     }
     return '';
   }
+  // Built-in rule names follow renames ("Food" → "Eating out"); a deleted category maps to its replacement.
+  function catAlias(name) {
+    const al = state.settings.catAlias || {};
+    for (let i = 0; i < 10 && al[name] && al[name] !== name; i++) name = al[name];
+    return name;
+  }
   function classify(desc, type) {
     const allowed = new Set(catsFor(type).map(c => c.name));
     const learned = state.rules[merchantKey(desc)];
     if (learned && allowed.has(learned)) return learned;
     if (allowed.has('Transfer') && isSelf(desc)) return 'Transfer';
     const d = ' ' + String(desc).toLowerCase().replace(/[_/|*]+/g, ' ') + ' ';
-    for (const [cat, re] of AUTO_RULES) if (allowed.has(cat) && re.test(d)) return cat;
+    for (const [cat, re] of AUTO_RULES) { const nm = catAlias(cat); if (allowed.has(nm) && re.test(d)) return nm; }
     const fallback = type === 'credit' ? 'Other Income' : 'Other';
     return allowed.has(fallback) ? fallback : (catsFor(type)[0] || {}).name || fallback;
   }
@@ -1499,7 +1522,8 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     $('acctChips').innerHTML = accts.length ? accts.map(a =>
       `<span class="chip" data-editacct="${esc(a.id)}" role="button">${esc(a.emoji || '🏦')} ${esc(acctName(a))}${a.nick && a.nick !== a.name ? ` <small>${esc(a.name)}</small>` : ''} <small>••${esc(a.digits.join(', ••'))}${a.bal ? ' · ' + esc(fmt(a.bal.amount)) + ' (' + esc(new Date(a.bal.date + 'T00:00').toLocaleDateString(undefined, { day: 'numeric', month: 'short' })) + ')' : ''}</small><span class="x" data-delacct="${esc(a.id)}" role="button" aria-label="Remove">✕</span></span>`).join('')
       : '<span class="sub" style="margin:0">No accounts yet.</span>';
-    const chip = (c, i) => `<span class="chip">${esc(c.emoji)} ${esc(c.name)}<span class="x" data-del="${i}" role="button" aria-label="Remove">✕</span></span>`;
+    const used = {}; state.expenses.forEach(e => { used[e.category] = (used[e.category] || 0) + 1; });
+    const chip = (c, i) => `<button type="button" class="chip" data-editcat="${i}">${esc(c.emoji)} ${esc(c.name)}${c.kind === 'both' ? ' <small>±</small>' : ''}${c.exclude ? ' <small>not counted</small>' : ''} <small>${used[c.name] || 0}</small></button>`;
     $('catChips').innerHTML = state.categories.map((c, i) => c.kind !== 'credit' ? chip(c, i) : '').join('');
     $('incChips').innerHTML = state.categories.map((c, i) => c.kind === 'credit' ? chip(c, i) : '').join('');
     const rules = Object.entries(state.rules);
@@ -1519,7 +1543,7 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
   function showBg() { $('sheetBg').style.display = 'block'; }
   function closeAll() {
     imp.tagOnImport = null;
-    $('sheet').classList.remove('open'); $('impSheet').classList.remove('open'); $('smsSheet').classList.remove('open'); $('mailSheet').classList.remove('open');
+    $('sheet').classList.remove('open'); $('impSheet').classList.remove('open'); $('smsSheet').classList.remove('open'); $('mailSheet').classList.remove('open'); $('catSheet').classList.remove('open');
     $('sheetBg').style.display = 'none';
     document.activeElement && document.activeElement.blur();
   }
@@ -2575,21 +2599,93 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
   });
   $('budget').addEventListener('change', e => { state.settings.budget = Math.max(0, parseFloat(e.target.value) || 0); save(); toast('Budget saved'); });
   $('selfName').addEventListener('change', e => { state.settings.selfName = e.target.value.trim(); selfRe = selfPatterns(); save(); toast('Saved'); });
-  $('addCat').addEventListener('click', () => {
-    const name = $('newCatName').value.trim();
-    if (!name) { toast('Type a category name'); return; }
-    if (state.categories.some(c => c.name.toLowerCase() === name.toLowerCase())) { toast('Category exists'); return; }
-    state.categories.push({ emoji: $('newCatEmoji').value.trim() || '🏷️', name, kind: $('newCatKind').value });
-    $('newCatName').value = ''; $('newCatEmoji').value = '';
-    save(); renderSettings(); toast('Category added');
-  });
+  // ---------- category editor ----------
+  const FIXED_CATS = new Set(['Transfer', 'Other', 'Other Income']);   // names used in Kharcha's own logic
+  let catEditing = -1;
+  function openCatSheet(i) {
+    catEditing = i;
+    const c = i >= 0 ? state.categories[i] : { emoji: '', name: '', kind: 'debit' };
+    $('catTitle').textContent = i >= 0 ? 'Edit category' : 'New category';
+    $('catEmoji').value = c.emoji || ''; $('catEmoji').placeholder = '🏷️';
+    $('catName').value = c.name; $('catName').disabled = FIXED_CATS.has(c.name);
+    $('catFixed').classList.toggle('hidden', !FIXED_CATS.has(c.name));
+    $('catKind').value = c.kind; $('catKind').disabled = FIXED_CATS.has(c.name);
+    $('catExclude').checked = !!c.exclude;
+    const n = i >= 0 ? state.expenses.filter(e => e.category === c.name).length : 0;
+    const r = i >= 0 ? Object.values(state.rules).filter(v => v === c.name).length : 0;
+    $('catUse').textContent = i >= 0 ? `Used by ${n} transaction${n === 1 ? '' : 's'}${r ? ` and ${r} learned rule${r === 1 ? '' : 's'}` : ''}. Renaming updates all of them.` : '';
+    $('catDelWrap').classList.toggle('hidden', i < 0 || FIXED_CATS.has(c.name));
+    if (i >= 0) {
+      const opts = state.categories.filter(x => x !== c && (c.kind === 'both' || x.kind === c.kind || x.kind === 'both'));
+      const def = c.kind === 'credit' ? 'Other Income' : 'Other';
+      $('catMoveTo').innerHTML = opts.map(x => `<option value="${esc(x.name)}" ${x.name === def ? 'selected' : ''}>${esc(x.emoji)} ${esc(x.name)}</option>`).join('');
+      $('catMoveTo').classList.toggle('hidden', !n); $('catMoveLbl').classList.toggle('hidden', !n);
+    }
+    showBg();
+    requestAnimationFrame(() => $('catSheet').classList.add('open'));
+    if (i < 0) setTimeout(() => $('catName').focus(), 260);
+  }
+  $('addCat').addEventListener('click', () => openCatSheet(-1));
   document.querySelectorAll('#catChips, #incChips').forEach(el => el.addEventListener('click', e => {
-    const x = e.target.closest('[data-del]'); if (!x) return;
-    const c = state.categories[+x.dataset.del];
-    if (catsFor(c.kind === 'credit' ? 'credit' : 'debit').length <= 1) { toast('Keep at least one category'); return; }
-    if (!confirm(`Remove "${c.name}"? Existing transactions keep their category.`)) return;
-    state.categories.splice(+x.dataset.del, 1); save(); renderSettings();
+    const x = e.target.closest('[data-editcat]'); if (x) openCatSheet(+x.dataset.editcat);
   }));
+  $('catCancel').addEventListener('click', closeAll);
+  // rename every use of a category: transactions, learned rules, earlier renames
+  function renameCategory(from, to) {
+    state.expenses.forEach(e => { if (e.category === from) e.category = to; });
+    Object.keys(state.rules).forEach(k => { if (state.rules[k] === from) state.rules[k] = to; });
+    const al = { ...(state.settings.catAlias || {}) };
+    Object.keys(al).forEach(k => { if (al[k] === from) al[k] = to; });
+    al[from] = to; delete al[to];
+    state.settings.catAlias = al;
+  }
+  $('catSave').addEventListener('click', () => {
+    const old = catEditing >= 0 ? state.categories[catEditing] : null;
+    const name = $('catName').value.replace(/\s+/g, ' ').trim();
+    const emoji = $('catEmoji').value.trim() || '🏷️';
+    const kind = $('catKind').value, exclude = $('catExclude').checked;
+    if (!name) { toast('Type a category name'); return; }
+    if (state.categories.some(c => c !== old && c.name.toLowerCase() === name.toLowerCase())) { toast(`“${name}” already exists`); return; }
+    if (old) {
+      // narrowing Expenses/Income must not strand transactions of the other type
+      const lost = kind === 'both' ? '' : kind === 'debit' ? 'credit' : 'debit';
+      const stranded = lost && state.expenses.filter(e => e.category === old.name && e.type === lost).length;
+      if (stranded) { toast(`${stranded} ${lost === 'credit' ? 'income' : 'expense'} entr${stranded === 1 ? 'y uses' : 'ies use'} it — choose “Both” or move them first`, 4000); return; }
+      if ((catsFor('debit').length <= 1 && old.kind !== 'credit' && kind === 'credit') || (catsFor('credit').length <= 1 && old.kind !== 'debit' && kind === 'debit')) { toast('Keep at least one expense and one income category'); return; }
+      if (name !== old.name) renameCategory(old.name, name);
+      const { exclude: _x, ...rest } = old;
+      state.categories[catEditing] = { ...rest, emoji, name, kind, ...(exclude ? { exclude: true } : {}) };
+    } else {
+      state.categories.push({ emoji, name, kind, ...(exclude ? { exclude: true } : {}) });
+    }
+    tidyTransfers();   // review marks follow the "not counted" setting
+    save(); closeAll(); renderSettings(); render();
+    toast(old ? (old.name !== name ? `Renamed to ${emoji} ${name}` : 'Category saved') : `Added ${emoji} ${name}`);
+  });
+  $('catDelete').addEventListener('click', () => {
+    const c = state.categories[catEditing]; if (!c) return;
+    const others = t => state.categories.filter(x => x !== c && (x.kind === t || x.kind === 'both'));
+    if ((c.kind !== 'credit' && !others('debit').length) || (c.kind !== 'debit' && !others('credit').length)) { toast('Keep at least one expense and one income category'); return; }
+    const n = state.expenses.filter(e => e.category === c.name).length;
+    const to = $('catMoveTo').value;
+    if (n && !to) { toast('Choose where its transactions go'); return; }
+    if (!confirm(n ? `Delete ${c.emoji} ${c.name} and move its ${n} transaction${n === 1 ? '' : 's'} to ${to}?` : `Delete ${c.emoji} ${c.name}?`)) return;
+    // entries of a type the target can't hold fall back to Other / Other Income
+    const target = state.categories.find(x => x.name === to);
+    state.expenses.forEach(e => {
+      if (e.category !== c.name) return;
+      e.category = target && (target.kind === 'both' || target.kind === e.type) ? to : (e.type === 'credit' ? 'Other Income' : 'Other');
+    });
+    Object.keys(state.rules).forEach(k => { if (state.rules[k] === c.name) { if (to) state.rules[k] = to; else delete state.rules[k]; } });
+    const al = { ...(state.settings.catAlias || {}) };
+    Object.keys(al).forEach(k => { if (al[k] === c.name) al[k] = to || undefined; });
+    if (to) al[c.name] = to;
+    state.settings.catAlias = JSON.parse(JSON.stringify(al));
+    state.categories.splice(catEditing, 1);
+    tidyTransfers();
+    save(); closeAll(); renderSettings(); render();
+    toast(n ? `Deleted · ${n} moved to ${to}` : 'Category deleted');
+  });
   $('ruleChips').addEventListener('click', e => {
     const c = e.target.closest('[data-crule]');
     if (c) { const r = { ...(state.settings.commentRules || {}) }; delete r[c.dataset.crule]; state.settings.commentRules = r; save(); renderSettings(); return; }
