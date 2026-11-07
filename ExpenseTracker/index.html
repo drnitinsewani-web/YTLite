@@ -178,6 +178,15 @@
   .irow.off { opacity: .45; }
   .tag { display: inline-block; font-size: 11px; padding: 1px 6px; border-radius: 6px; background: var(--surface-2); color: var(--muted); margin-left: 4px; }
   .tag.warn { color: var(--warn); }
+  .tag.sug { color: var(--accent); background: color-mix(in srgb, var(--accent) 12%, transparent); cursor: pointer; }
+  .tag.sug.on { color: #fff; background: var(--accent); }
+  .sugs { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+  .sugs .chip { font-size: 13px; text-align: left; }
+  .sugs .chip small { display: block; color: var(--muted); font-size: 11px; font-weight: 400; }
+  .sug-hint { font-size: 12px; color: var(--accent); margin-top: 2px; }
+  .rec { display: flex; justify-content: space-between; gap: 10px; padding: 9px 0; border-top: 1px solid var(--border); font-size: 14px; }
+  .rec:first-child { border-top: 0; }
+  .rec small { color: var(--muted); display: block; font-size: 12px; }
 
   /* ================= Liquid glass theme ================= */
   :root {
@@ -391,6 +400,11 @@
       <div id="catBars"></div>
       <div class="sub" id="notCounted"></div>
     </div>
+    <div class="card hidden" id="recCard">
+      <h2>🔁 Repeating payments</h2>
+      <div class="sub" id="recNote" style="margin-bottom:6px"></div>
+      <div id="recList"></div>
+    </div>
     <div class="card" id="incCard">
       <h2>Income by category</h2>
       <div id="incBars"></div>
@@ -545,6 +559,7 @@
   <div class="review-banner hidden" id="fReviewBanner">To review — add a comment and Save to mark it as reviewed.</div>
   <label for="fComment">Comment</label>
   <input id="fComment" type="text" placeholder="What was this for?" maxlength="300">
+  <div class="sugs hidden" id="fSuggest"></div>
   <div id="fMatch" class="hidden" style="margin-top:8px;font-size:14px;line-height:1.35">
     <label class="mchk" id="fMatchAmtRow"><input type="checkbox" id="fMatchAmt"><span>Also apply to <b id="fMatchAmtN">0</b> with the same payer &amp; amount</span></label>
     <label class="mchk" id="fMatchAnyRow"><input type="checkbox" id="fMatchAny"><span>Also apply to <b id="fMatchAnyN">0</b> from the same payer, any amount</span></label>
@@ -749,7 +764,9 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     return defaultState();
   }
   let state = load();
+  let dataStamp = 0;
   function saveLocal() {
+    dataStamp++;
     const json = JSON.stringify(state);
     if (NATIVE) native({ type: 'save', data: json });
     try { localStorage.setItem(KEY, json); }
@@ -886,6 +903,119 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     $('fMatchAny').checked = false;
     $('fMatchFuture').checked = !round;
   }
+  // ---------- learning from past entries: suggestions and repeating payments ----------
+  let payerIdx = { stamp: -1, n: -1, map: null };
+  function payerIndex() {
+    if (payerIdx.stamp === dataStamp && payerIdx.n === state.expenses.length) return payerIdx.map;
+    const map = new Map();
+    state.expenses.forEach(x => { const k = payerKey(x); if (!k) return; const w = k.split(' ')[0]; if (!map.has(w)) map.set(w, []); map.get(w).push(x); });
+    payerIdx = { stamp: dataStamp, n: state.expenses.length, map };
+    return map;
+  }
+  const pastLike = e => {
+    const k = payerKey(e); if (!k) return [];
+    return (payerIndex().get(k.split(' ')[0]) || []).filter(x => x !== e && (!e.id || x.id !== e.id) && x.type === e.type && samePayer(payerKey(x), k));
+  };
+  const addDaysIso = (d, n) => { const t = new Date(d + 'T00:00'); t.setDate(t.getDate() + n); return isoDate(t); };
+  const ordinal = n => n + (n % 10 === 1 && n !== 11 ? 'st' : n % 10 === 2 && n !== 12 ? 'nd' : n % 10 === 3 && n !== 13 ? 'rd' : 'th');
+  // Monthly / weekly rhythm in a payer's history (needs 3+ payments, mostly regular gaps)
+  function recurrence(list) {
+    const ds = [...new Set(list.map(x => x.date))].sort();
+    if (ds.length < 3) return null;
+    const gaps = ds.slice(1).map((d, i) => dayDiff(d, ds[i])).slice(-5);
+    const need = Math.max(2, gaps.length - 1);
+    const every = gaps.filter(g => g >= 26 && g <= 35).length >= need ? 'month' : gaps.filter(g => g >= 6 && g <= 8).length >= need ? 'week' : '';
+    if (!every) return null;
+    const last = ds[ds.length - 1];
+    let next;
+    if (every === 'week') next = addDaysIso(last, 7);
+    else { const t = new Date(last + 'T00:00'); next = isoDate(new Date(t.getFullYear(), t.getMonth() + 1, Math.min(t.getDate(), 28))); }
+    return { every, last, next, day: +last.slice(8) };
+  }
+  const amtRange = a => { const lo = Math.min(...a), hi = Math.max(...a); return hi - lo < 1 ? fmt(lo) : `${fmt(lo)}–${fmt(hi)}`; };
+  // What a transaction probably is, from your earlier entries with the same payer (best first).
+  function suggestFor(e) {
+    if (!e || !(e.amount > 0)) return [];
+    let past = pastLike(e), basis = 'payer';
+    if (!past.length && !isRound(e.amount)) {   // no payer name (e.g. "Paid to ******9880"): same exact amount, commented before
+      past = state.expenses.filter(x => x !== e && (!e.id || x.id !== e.id) && x.type === e.type && x.comment && Math.abs(x.amount - e.amount) < 0.005);
+      basis = 'amount';
+      if (past.length < 2) return [];
+    }
+    if (!past.length) return [];
+    const rec = basis === 'payer' ? recurrence(past.concat(e.date ? [e] : [])) : null;
+    const day = +String(e.date || '').slice(8) || 0;
+    const groups = new Map();
+    past.forEach(x => {
+      const c = String(x.comment || '').trim();
+      if (!c && /^Other/.test(x.category)) return;
+      const key = c ? c.toLowerCase() : '#' + x.category;
+      let w = 1;
+      const r = Math.abs(x.amount - e.amount) / Math.max(e.amount, 1);
+      w += r < 0.005 ? 3 : r < 0.1 ? 1.5 : r < 0.3 ? 0.5 : 0;
+      if (day) { const dd = Math.abs(+x.date.slice(8) - day); if (Math.min(dd, 31 - dd) <= 3) w += 0.7; }
+      if (e.date && dayDiff(x.date, e.date) <= 120) w += 0.5;
+      const g = groups.get(key) || { comment: c, cats: {}, n: 0, w: 0, amts: [], last: '' };
+      g.n++; g.w += w; g.cats[x.category] = (g.cats[x.category] || 0) + 1; g.amts.push(x.amount);
+      if (x.date > g.last) { g.last = x.date; if (c) g.comment = c; }
+      groups.set(key, g);
+    });
+    return [...groups.values()].map(g => {
+      const category = Object.entries(g.cats).sort((a, b) => b[1] - a[1])[0][0];
+      const why = [basis === 'amount' ? `same amount ${g.n}×` : `${g.n}× before`, amtRange(g.amts),
+        rec ? (rec.every === 'month' ? `monthly, ~${ordinal(rec.day)}` : 'weekly') : ''].filter(Boolean).join(' · ');
+      return { comment: g.comment, category, n: g.n, score: g.w, why, rec };
+    }).filter(sg => catsFor(e.type).some(c => c.name === sg.category)).sort((a, b) => b.score - a.score).slice(0, 3);
+  }
+  const strongSug = sg => sg && (sg.n >= 2 || sg.score >= 4);
+  // Payers you pay (or who pay you) on a regular rhythm, still active
+  function recurringList() {
+    const today = isoDate(new Date()), since = addDaysIso(today, -400);
+    const seen = new Set(), out = [];
+    payerIndex().forEach(list => list.forEach(x => {
+      const k = payerKey(x), id = k + '|' + x.type;
+      if (seen.has(id) || x.date < since) return;
+      const grp = list.filter(y => y.type === x.type && y.date >= since && samePayer(payerKey(y), k));
+      grp.forEach(y => seen.add(payerKey(y) + '|' + y.type));
+      if (grp.every(y => y.category === 'Transfer')) return;
+      const rec = recurrence(grp); if (!rec) return;
+      if (dayDiff(rec.last, today) > (rec.every === 'month' ? 45 : 14)) return;   // stopped
+      const recent = grp.sort((a, b) => b.date.localeCompare(a.date)).slice(0, 3);
+      const amt = recent.map(y => y.amount).sort((a, b) => a - b)[1] ?? recent[0].amount;
+      out.push({ name: payerName(k), key: k, type: x.type, amt, rec, comment: (recent.find(y => y.comment) || {}).comment || '', count: grp.length, category: recent[0].category });
+    }));
+    return out.sort((a, b) => a.rec.next.localeCompare(b.rec.next));
+  }
+  function renderRecurring() {
+    const list = recurringList().slice(0, 15);
+    $('recCard').classList.toggle('hidden', !list.length);
+    if (!list.length) return;
+    const today = isoDate(new Date());
+    const monthly = list.filter(r => r.type === 'debit' && r.rec.every === 'month').reduce((t, r) => t + r.amt, 0);
+    $('recNote').textContent = `Learned from your history${monthly ? ` · about ${fmt(monthly)} goes out every month on these` : ''}. Tap one to see all its payments.`;
+    const short = d => new Date(d + 'T00:00').toLocaleDateString(undefined, { day: 'numeric', month: 'short' });
+    $('recList').innerHTML = list.map(r => {
+      const late = r.rec.next < addDaysIso(today, -4), soon = !late && r.rec.next <= addDaysIso(today, 5);
+      return `<div class="rec" data-rec="${esc(r.key)}" role="button">
+        <div>${esc(catOf(r.category).emoji || '')} ${esc(r.name)}<small>${r.rec.every === 'month' ? `Monthly, ~${ordinal(+r.rec.next.slice(8))}` : 'Weekly'} · ${r.count} payments${r.comment ? ' · ' + esc(r.comment) : ''}</small></div>
+        <div style="text-align:right;white-space:nowrap"><span class="amt ${r.type}">${r.type === 'credit' ? '+' : '−'}${fmt(r.amt)}</span>
+          <small style="${late ? 'color:var(--warn)' : soon ? 'color:var(--accent)' : ''}">${late ? `expected ${short(r.rec.next)} — not seen` : `next ~${short(r.rec.next)}`}</small></div>
+      </div>`;
+    }).join('');
+  }
+  // Suggestion chips in the edit sheet
+  let formSugs = [];
+  document.addEventListener('click', e => {
+    const r = e.target.closest('[data-rec]'); if (!r) return;
+    payerFilter = r.dataset.rec; view = 'list'; syncNav(); render(); window.scrollTo(0, 0);
+  });
+  function renderFormSuggest(e) {
+    formSugs = e && !e.comment ? suggestFor(e) : [];
+    $('fSuggest').classList.toggle('hidden', !formSugs.length);
+    $('fSuggest').innerHTML = formSugs.length ? `<span class="sub" style="width:100%;margin:0">💡 From your past entries — tap to use:</span>` +
+      formSugs.map((sg, i) => `<button type="button" class="chip" data-sug="${i}">${esc(catOf(sg.category).emoji || '')} ${esc(sg.comment || sg.category)}${sg.comment ? ` · ${esc(sg.category)}` : ''}<small>${esc(sg.why)}</small></button>`).join('') : '';
+  }
+
   // Apply the saved comment as chosen in the edit sheet; returns how many other entries changed.
   function learnComment(e) {
     if (!e.comment || !payerKey(e)) return 0;
@@ -1178,7 +1308,7 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
             <div class="emoji">${esc(c.emoji)}</div>
             <div class="info"><div class="cat">${esc(c.name)}</div>
               <div class="note">${esc([e.note, !acctFilter && acctById(e.account) ? acctLabel(acctById(e.account)) : e.payment].filter(Boolean).join(' · '))}</div>
-              ${e.comment ? `<div class="comment">💬 ${esc(e.comment)}</div>` : ''}</div>
+              ${e.comment ? `<div class="comment">💬 ${esc(e.comment)}</div>` : e.unread ? (sg => strongSug(sg) && sg.comment ? `<div class="sug-hint">💡 ${esc(sg.comment)}?</div>` : '')(suggestFor(e)[0]) : ''}</div>
             ${amtHtml(e)}</div>`;
         }).join('')}</div>`;
     }).join('');
@@ -1270,6 +1400,7 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     });
     $('notCounted').innerHTML = Object.keys(ex).length ? 'Not counted: ' + Object.entries(ex).map(([c, v]) =>
       `${esc(catOf(c).emoji)} ${esc(c)} ${v.out ? fmt(v.out) + ' out' : ''}${v.out && v.in ? ', ' : ''}${v.in ? fmt(v.in) + ' in' : ''}`).join(' · ') : '';
+    renderRecurring();
     $('catBars').innerHTML = debits.length ? barsHtml(debits, '') : `<div class="sub">Nothing spent ${periodWord()}.</div>`;
     $('incCard').classList.toggle('hidden', !credits.length);
     $('incBars').innerHTML = barsHtml(credits, 'inc');
@@ -1353,6 +1484,7 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     $('fNote').value = src ? src.note || '' : '';
     $('fComment').value = exp ? exp.comment || '' : '';
     renderMatchOptions(exp || null);
+    renderFormSuggest(exp || (pre ? { ...pre, note: pre.note || pre.desc } : null));
     const hk = exp && payerKey(exp), hn = hk ? state.expenses.filter(e => samePayer(payerKey(e), hk)).length : 0;
     $('fHistory').classList.toggle('hidden', !(hn > 1) || payerFilter === hk);
     if (hn > 1) { $('fHistory').textContent = `🕘 All transactions with ${payerName(hk)} (${hn})`; $('fHistory').dataset.key = hk; }
@@ -1433,6 +1565,14 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     if (!confirm('Delete this transaction?')) return;
     state.expenses = state.expenses.filter(e => e.id !== editingId);
     save(); closeAll(); render(); toast('Deleted');
+  });
+  $('fSuggest').addEventListener('click', e => {
+    const b = e.target.closest('[data-sug]'); if (!b) return;
+    const sg = formSugs[+b.dataset.sug]; if (!sg) return;
+    if (sg.comment) $('fComment').value = sg.comment;
+    selectedCat = sg.category; renderFormCats();
+    $('fSuggest').querySelectorAll('[data-sug]').forEach(x => x.classList.toggle('sel', x === b));
+    if (sg.comment) $('fComment').dispatchEvent(new Event('input'));
   });
   $('fHistory').addEventListener('click', () => {
     payerFilter = $('fHistory').dataset.key || '';
@@ -1893,6 +2033,12 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     imp.pass = pass;
     const opts = {};
     ['debit', 'credit'].forEach(t => opts[t] = catsFor(t));
+    it.forEach(x => {
+      if (x._sug !== undefined) return;
+      const sgs = x.comment ? [] : suggestFor(x);
+      if (strongSug(sgs[0]) && !x.touched && /^Other/.test(x.category)) { x.category = sgs[0].category; x.sugCat = sgs[0].why; }
+      x._sug = sgs.find(sg => sg.comment) || null;
+    });
     const rows = it.map((x, i) => !pass(x) ? '' : `
       <div class="irow ${x.include ? '' : 'off'}" data-i="${i}">
         <input type="checkbox" ${x.include ? 'checked' : ''} aria-label="Include">
@@ -1901,7 +2047,9 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
             x.balanceGap ? '<span class="tag warn">balance doesn’t add up here</span>' : ''}${
             acctById(finalAcct(x)) ? `<span class="tag">${esc(acctLabel(acctById(finalAcct(x))))}</span>`
             : x.acctDigits && !imp.acctOverride ? `<span class="tag">New account: ${esc(newAcctLabel(x))}</span>`
-            : x.walletName && !imp.acctOverride ? `<span class="tag">New account: 👛 ${esc(x.walletName)}</span>` : ''}</div></div>
+            : x.walletName && !imp.acctOverride ? `<span class="tag">New account: 👛 ${esc(x.walletName)}</span>` : ''}${
+            x._sug && x._sug.comment ? `<span class="tag sug ${x.comment === x._sug.comment ? 'on' : ''}" data-sug="${i}" role="button">💡 ${esc(x._sug.comment)}${x.comment === x._sug.comment ? ' ✓' : '?'}</span>`
+            : x.comment ? `<span class="tag">💬 ${esc(x.comment)}</span>` : x.sugCat ? `<span class="tag">💡 ${esc(x.sugCat)}</span>` : ''}</div></div>
         <div class="amt ${x.type === 'credit' ? 'credit' : 'debit'}">${x.type === 'credit' ? '+' : '−'}${fmt(x.amount)}</div>
         <select aria-label="Category">${opts[x.type].map(c => `<option ${c.name === x.category ? 'selected' : ''} value="${esc(c.name)}">${esc(c.emoji)} ${esc(c.name)}</option>`).join('')}</select>
       </div>`).join('');
@@ -2182,6 +2330,18 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     const b = e.target.closest('[data-f]'); if (!b) return;
     imp.filter = b.dataset.f; renderImport(); $('impList').scrollTop = 0;
   });
+  $('impList').addEventListener('click', e => {
+    const t = e.target.closest('[data-sug]'); if (!t) return;
+    e.preventDefault();
+    const x = imp.items[+t.dataset.sug]; if (!x || !x._sug) return;
+    if (x.comment === x._sug.comment) { x.comment = ''; }
+    else {
+      x.comment = x._sug.comment; x.category = x._sug.category; x.touched = true;
+      // same payer & amount elsewhere in this file gets the same answer
+      imp.items.forEach(y => { if (y !== x && !y.comment && y._sug && y._sug.comment === x._sug.comment && y.type === x.type && Math.abs(y.amount - x.amount) < 0.005 && payerKey(y) === payerKey(x)) { y.comment = x.comment; y.category = x.category; y.touched = true; } });
+    }
+    renderImport();
+  });
   $('impList').addEventListener('change', e => {
     const row = e.target.closest('.irow'); if (!row) return;
     const x = imp.items[+row.dataset.i];
@@ -2206,7 +2366,7 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
       date: x.date, note: x.desc, payment: x.payment || 'Bank', ref: x.ref, account: x.account || '',
       ...(x.balance != null ? { balance: x.balance } : {}),
       ...(x.utr ? { utr: x.utr } : {}),
-      ...(needsReview(x) ? { unread: true } : {})
+      ...(x.comment ? { comment: x.comment } : needsReview(x) ? { unread: true } : {})
     }));
     const autoCommented = add.filter(applyCommentRule).length;
     if (autoCommented) label = (label || `Imported ${add.length} transactions`) + ` · ${autoCommented} commented automatically`;
