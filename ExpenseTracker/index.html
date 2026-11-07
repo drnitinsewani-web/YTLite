@@ -457,6 +457,9 @@
       <label style="margin-top:16px">Learned rules <span id="ruleCount"></span></label>
       <div class="sub" style="margin:0 0 8px">When you change a category for an imported transaction, the merchant is remembered for future imports.</div>
       <div class="chips" id="ruleChips"></div>
+      <label style="margin-top:16px">Payee names</label>
+      <div class="sub" style="margin:0 0 8px">Open a transaction and tap <b>✏️ Name this account</b> to show a person's name instead of an account number.</div>
+      <div class="chips" id="payeeChips"></div>
     </div>
     <div class="card">
       <h2>Accounts &amp; cards</h2>
@@ -585,6 +588,7 @@
   <div id="fAcctWrap"><label for="fAcct">Account</label><select id="fAcct"></select></div>
   <label for="fNote">Note</label>
   <input id="fNote" type="text" placeholder="e.g. Lunch with team" maxlength="200">
+  <button type="button" class="btn ghost hidden" id="fPayee"></button>
   <button type="button" class="btn ghost hidden" id="fHistory"></button>
   <button type="submit" class="btn primary">Save</button>
   <button type="button" class="btn danger hidden" id="fDelete">Delete</button>
@@ -871,7 +875,31 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
   try { const g = localStorage.getItem('expense-tracker-v1:group'); if (g !== null) groupFilter = g; } catch (e) {}
   // "All transactions with this person/merchant" view (all dates), opened from a transaction.
   let payerFilter = '';
-  const payerName = k => k.toLowerCase().replace(/\b\w/g, c => c.toUpperCase());
+  // Names you gave payees (settings.payeeNames: payee key → name), e.g. "ACCT 1090" → "CA Sharma".
+  // A payee known only by a masked number that is one of YOUR accounts is named after that account.
+  function payeeAlias(k) {
+    if (!k) return '';
+    const names = state.settings.payeeNames || {};
+    if (names[k]) return names[k];
+    const near = Object.keys(names).find(x => samePayer(x, k));   // banks shorten names differently
+    if (near) return names[near];
+    const m = k.match(/^ACCT (\d+)$/);
+    if (m) {
+      const mine = (state.accounts || []).filter(a => (a.digits || []).some(z => z.endsWith(m[1]) || m[1].endsWith(z)));
+      if (mine.length === 1) return `${acctName(mine[0])} ••${mine[0].digits[0]} (yours)`;
+    }
+    return '';
+  }
+  const payerName = k => payeeAlias(k) || k.toLowerCase().replace(/\b\w/g, c => c.toUpperCase()).replace(/^Acct /, 'A/c ••');
+  // A transaction's description with the payee's name in place of the account number:
+  // "To Bank Account XXXXXXXXXX1090 · UTR …" → "To CA Sharma · UTR …"
+  function noteText(e) {
+    const note = e.note || e.desc || '';
+    const name = payeeAlias(payerKey(e));
+    if (!name) return note;
+    const m = note.match(/^(To|From|Paid to|Received from)\s+([^·]+?)(\s+·.*)?$/i);
+    return m ? `${m[1]} ${name}${m[3] || ''}` : `${name} · ${note}`;
+  }
   // Same payer even when one bank shortens the name (UPI: "UPSTOX SEC" vs NEFT: "UPSTOX SECURITIES",
   // "NIDAAN DIA" vs "NIDAAN DIAGNOSTICS"): first words equal, later words prefixes of each other.
   function samePayer(a, b) {
@@ -1007,7 +1035,7 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     $('fMatchAmtN').textContent = same; $('fMatchAnyN').textContent = any;
     $('fMatchAmtRow').classList.toggle('hidden', !same);
     $('fMatchAnyRow').classList.toggle('hidden', any <= same);
-    $('fMatchWho').textContent = k.toLowerCase().replace(/\b\w/g, c => c.toUpperCase());
+    $('fMatchWho').textContent = payerName(k);
     const round = isRound(e.amount);
     $('fMatchAmt').checked = !!same && !round;
     $('fMatchAny').checked = false;
@@ -1442,6 +1470,7 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
           : (e.note.toLowerCase().includes(t.word) || e.category.toLowerCase().includes(t.word) || String(e.comment || '').toLowerCase().includes(t.word)
              || appWordMatch(app ?? (app = appCached(e)), t.word)
              || groupOf(e).toLowerCase().includes(t.word)
+             || payeeAlias(payerKey(e)).toLowerCase().includes(t.word)
              || (acctById(e.account) && `${acctById(e.account).nick || ''} ${acctById(e.account).name}`.toLowerCase().includes(t.word))));
       })
       .sort((a, b) => b.date.localeCompare(a.date) || b.createdAt - a.createdAt);
@@ -1471,7 +1500,7 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
           return `<div class="item ${e.unread ? 'unread' : ''}" data-id="${e.id}">
             <div class="emoji">${esc(c.emoji)}</div>
             <div class="info"><div class="cat">${esc(c.name)}${badgeFor(appCached(e))}</div>
-              <div class="note">${esc([e.note, !acctFilter && acctById(e.account) ? acctLabel(acctById(e.account)) : e.payment].filter(Boolean).join(' · '))}</div>
+              <div class="note">${esc([noteText(e), !acctFilter && acctById(e.account) ? acctLabel(acctById(e.account)) : e.payment].filter(Boolean).join(' · '))}</div>
               ${e.comment ? `<div class="comment">💬 ${esc(e.comment)}</div>` : e.unread ? (sg => strongSug(sg) && sg.comment ? `<div class="sug-hint">💡 ${esc(sg.comment)}?</div>` : '')(suggestFor(e)[0]) : ''}</div>
             ${amtHtml(e)}</div>`;
         }).join('')}</div>`;
@@ -1611,6 +1640,9 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     const chip = (c, i) => `<button type="button" class="chip" data-editcat="${i}">${esc(c.emoji)} ${esc(c.name)}${c.kind === 'both' ? ' <small>±</small>' : ''}${c.group ? ` <small>· ${esc(c.group)}</small>` : ''}${c.exclude ? ' <small>not counted</small>' : ''} <small>${used[c.name] || 0}</small></button>`;
     $('catChips').innerHTML = state.categories.map((c, i) => c.kind !== 'credit' ? chip(c, i) : '').join('');
     $('incChips').innerHTML = state.categories.map((c, i) => c.kind === 'credit' ? chip(c, i) : '').join('');
+    const pn = Object.entries(state.settings.payeeNames || {}).sort((a, b) => a[1].localeCompare(b[1]));
+    $('payeeChips').innerHTML = pn.length ? pn.map(([k, v]) => `<span class="chip" data-payee="${esc(k)}" role="button">👤 ${esc(v)} <small>${esc(/^ACCT /.test(k) ? '••' + k.slice(5) : k.toLowerCase())}</small><span class="x" role="button" aria-label="Forget">✕</span></span>`).join('')
+      : '<span class="sub" style="margin:0">None yet.</span>';
     const rules = Object.entries(state.rules);
     const crules = Object.entries(state.settings.commentRules || {})
       .filter(([k, v]) => typeof v === 'object' || !isRound(+k.split('|')[2]))
@@ -1662,6 +1694,7 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     $('fComment').value = exp ? exp.comment || '' : '';
     renderMatchOptions(exp || null);
     renderFormSuggest(exp || (pre ? { ...pre, note: pre.note || pre.desc } : null));
+    renderPayeeBtn(exp);
     const hk = exp && payerKey(exp), hn = hk ? state.expenses.filter(e => samePayer(payerKey(e), hk)).length : 0;
     $('fHistory').classList.toggle('hidden', !(hn > 1) || payerFilter === hk);
     if (hn > 1) { $('fHistory').textContent = `🕘 All transactions with ${payerName(hk)} (${hn})`; $('fHistory').dataset.key = hk; }
@@ -1760,6 +1793,29 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     selectedCat = sg.category; renderFormCats();
     $('fSuggest').querySelectorAll('[data-sug]').forEach(x => x.classList.toggle('sel', x === b));
     if (sg.comment) $('fComment').dispatchEvent(new Event('input'));
+  });
+  let payeeKeyEditing = '';
+  function renderPayeeBtn(e) {
+    payeeKeyEditing = e ? payerKey(e) : '';
+    $('fPayee').classList.toggle('hidden', !payeeKeyEditing);
+    if (!payeeKeyEditing) return;
+    const own = (state.settings.payeeNames || {})[payeeKeyEditing];
+    $('fPayee').textContent = own ? `✏️ Payee: ${own} — rename` : /^ACCT /.test(payeeKeyEditing)
+      ? `✏️ Name this account (${payerName(payeeKeyEditing)})` : `✏️ Give ${payerName(payeeKeyEditing)} a name`;
+  }
+  $('fPayee').addEventListener('click', () => {
+    const k = payeeKeyEditing; if (!k) return;
+    const names = { ...(state.settings.payeeNames || {}) };
+    const label = /^ACCT /.test(k) ? `account ${payerName(k)}` : payerName(k);
+    const v = prompt(`Who is ${label}? (e.g. CA Sharma, Maid, Dad). Shown instead of the account number in every transaction with them. Leave empty to remove.`, names[k] || '');
+    if (v === null) return;
+    const name = v.replace(/\s+/g, ' ').trim().slice(0, 40);
+    if (name) names[k] = name; else delete names[k];
+    state.settings.payeeNames = names;
+    const n = state.expenses.filter(x => samePayer(payerKey(x), k)).length;
+    save(); render(); renderPayeeBtn(state.expenses.find(x => x.id === editingId));
+    $('fHistory').textContent = `🕘 All transactions with ${payerName(k)} (${n})`;
+    toast(name ? `${n} transaction${n === 1 ? '' : 's'} now show “${name}”` : 'Name removed');
   });
   $('fHistory').addEventListener('click', () => {
     payerFilter = $('fHistory').dataset.key || '';
@@ -2284,7 +2340,7 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     const rows = it.map((x, i) => !pass(x) ? '' : `
       <div class="irow ${x.include ? '' : 'off'}" data-i="${i}">
         <input type="checkbox" ${x.include ? 'checked' : ''} aria-label="Include">
-        <div class="d"><div class="desc">${esc(x.desc || '(no description)')}${badgeFor(appOf(x, imp.acctOverride ? finalAcct(x) : x.account))}</div>
+        <div class="d"><div class="desc">${esc(noteText(x) || '(no description)')}${badgeFor(appOf(x, imp.acctOverride ? finalAcct(x) : x.account))}</div>
           <div class="meta">${new Date(x.date + 'T00:00').toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' })}${x.dup === 'exact' ? '<span class="tag warn">already imported</span>' : x.dup === 'balance' ? '<span class="tag warn">same as existing entry · balance matches</span>' : x.dup === 'utr' ? '<span class="tag warn">same payment already in Kharcha · UTR matches</span>' : x.dup ? '<span class="tag warn">possible duplicate</span>' : ''}${
             x.balanceGap ? '<span class="tag warn">balance doesn’t add up here</span>' : ''}${
             acctById(finalAcct(x)) ? `<span class="tag">${esc(acctLabel(acctById(finalAcct(x))))}</span>`
@@ -2864,6 +2920,18 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     save(); closeAll(); renderSettings(); render();
     toast(n ? `Deleted · ${n} moved to ${to}` : 'Category deleted');
   });
+  $('payeeChips').addEventListener('click', e => {
+    const x = e.target.closest('[data-payee]'); if (!x) return;
+    const names = { ...(state.settings.payeeNames || {}) };
+    const k = x.dataset.payee;
+    if (e.target.closest('.x')) { if (!confirm(`Forget the name “${names[k]}”?`)) return; delete names[k]; }
+    else {
+      const v = prompt(`Name for ${/^ACCT /.test(k) ? 'account ' + k.replace(/^ACCT /, '••') : k}`, names[k]);
+      if (v === null) return;
+      if (v.trim()) names[k] = v.replace(/\s+/g, ' ').trim().slice(0, 40); else delete names[k];
+    }
+    state.settings.payeeNames = names; save(); renderSettings(); render();
+  });
   $('ruleChips').addEventListener('click', e => {
     const c = e.target.closest('[data-crule]');
     if (c) { const r = { ...(state.settings.commentRules || {}) }; delete r[c.dataset.crule]; state.settings.commentRules = r; save(); renderSettings(); return; }
@@ -2881,9 +2949,9 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
   }
   $('exportCsv').addEventListener('click', () => {
     const q = v => `"${String(v).replace(/"/g, '""')}"`;
-    const rows = [['Date', 'Type', 'Category', 'Group', 'Amount', 'Currency', 'Payment', 'Account', 'Note', 'Comment']]
+    const rows = [['Date', 'Type', 'Category', 'Group', 'Amount', 'Currency', 'Payment', 'Account', 'Payee', 'Note', 'Comment']]
       .concat([...state.expenses].sort((a, b) => a.date.localeCompare(b.date))
-        .map(e => [e.date, e.type === 'credit' ? 'Credit' : 'Debit', e.category, groupOf(e), e.amount, state.settings.currency, e.payment || '', (acctById(e.account) || {}).name || '', e.note, e.comment || '']));
+        .map(e => [e.date, e.type === 'credit' ? 'Credit' : 'Debit', e.category, groupOf(e), e.amount, state.settings.currency, e.payment || '', (acctById(e.account) || {}).name || '', payeeAlias(payerKey(e)), e.note, e.comment || '']));
     download(`transactions-${isoDate(new Date())}.csv`, rows.map(r => r.map(q).join(',')).join('\n'), 'text/csv');
   });
   $('backup').addEventListener('click', () =>
@@ -3301,7 +3369,7 @@ Rules: include only completed transactions — skip OTPs, offers, ads, due/bill 
     const rows = state.expenses.filter(e => e.date >= cutoff).sort((a, b) => b.date.localeCompare(a.date)).slice(0, 1500);
     const months = {};
     state.expenses.forEach(e => { const m = e.date.slice(0, 7); months[m] = months[m] || { out: 0, in: 0 }; if (counted(e)) months[m][e.type === 'credit' ? 'in' : 'out'] += e.amount; });
-    const data = rows.map(e => [e.date, e.type === 'credit' ? 'in' : 'out', e.amount, e.category + (groupOf(e) ? ' [' + groupOf(e) + ']' : ''), acctName(acctById(e.account)) || e.payment || '', String(e.note || '').slice(0, 60), String(e.comment || '').slice(0, 40)].join(' | ')).join('\n');
+    const data = rows.map(e => [e.date, e.type === 'credit' ? 'in' : 'out', e.amount, e.category + (groupOf(e) ? ' [' + groupOf(e) + ']' : ''), acctName(acctById(e.account)) || e.payment || '', noteText(e).slice(0, 60), String(e.comment || '').slice(0, 40)].join(' | ')).join('\n');
     const sys = `You are Kharcha, a helpful personal-finance assistant for an Indian user. Answer in short, plain sentences using ₹ amounts with Indian digit grouping. Base every number on the data; if the data doesn't cover it, say so. Categories "Transfer" (moves between own accounts) and "Investment" are not spending. Today is ${isoDate(new Date())}.`;
     const user = `Monthly totals (all data, excluding transfers): ${Object.keys(months).sort().map(m => `${m}: out ₹${Math.round(months[m].out)}, in ₹${Math.round(months[m].in)}`).join('; ')}\n\nEntries (date | in/out | amount | category [group] | account | description | user note), newest first${rows.length >= 1500 ? ', most recent 1500 only' : ''}:\n${data}\n\nQuestion: ${q}`;
     return aiRaw({ model: aiCfg().model || 'deepseek-chat', temperature: 0.2, max_tokens: 1500, messages: [{ role: 'system', content: sys }, { role: 'user', content: user }] });
