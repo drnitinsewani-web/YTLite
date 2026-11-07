@@ -415,6 +415,7 @@
     <div class="card hidden" id="invCard">
       <h2>📈 Investments by type</h2>
       <div id="invList"></div>
+      <div id="fdList"></div>
     </div>
     <div class="card hidden" id="grpCard">
       <h2>By group</h2>
@@ -775,7 +776,7 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
   function defaultState() {
     const lang = navigator.language || 'en-US';
     return {
-      v: STATE_VERSION, expenses: [], rules: {}, accounts: [],
+      v: STATE_VERSION, expenses: [], rules: {}, accounts: [], fds: [],
       categories: DEFAULT_CATS.map(({ since, ...c }) => c),
       settings: { currency: /-IN$/i.test(lang) ? 'INR' : 'USD', budget: 0, selfName: '' }
     };
@@ -810,6 +811,7 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
       if (min > 0) s.expenses.forEach(e => { if (e.ref && !e.comment && e.amount > min) e.unread = true; });
       s.settings.reviewBackfill = true;
     }
+    s.fds = Array.isArray(s.fds) ? s.fds : [];
     dropLabelRules(s);
     return s;
   }
@@ -1263,10 +1265,33 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     const r = e.target.closest('[data-rec]'); if (!r) return;
     payerFilter = r.dataset.rec; view = 'list'; syncNav(); render(); window.scrollTo(0, 0);
   });
+  function fdsHtml(fds) {
+    const today = isoDate(new Date());
+    const live = fds.filter(f => f.maturity >= today);
+    const p = sum(live.map(f => ({ amount: f.principal }))), m = sum(live.map(f => ({ amount: f.maturityAmount || f.principal })));
+    const short = d => new Date(d + 'T00:00').toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' });
+    return `<h2 style="margin-top:16px">🏦 Your fixed deposits</h2>` +
+      (live.length ? `<div class="sub" style="margin-bottom:6px">${live.length} active · ${fmt(p)} → ${fmt(m)} at maturity (+${fmt(m - p)} interest)</div>` : '') +
+      fds.map(f => {
+        const days = Math.round((new Date(f.maturity + 'T00:00') - new Date(today + 'T00:00')) / 864e5);
+        const when = days < 0 ? `<span style="color:var(--muted)">matured ${short(f.maturity)}</span>` : days <= 30 ? `<b style="color:var(--warn)">matures ${short(f.maturity)} (in ${days} day${days === 1 ? '' : 's'})</b>` : `matures ${short(f.maturity)}`;
+        return `<div class="rec"><div>${esc(f.bank || 'FD')} ••${esc(f.no.slice(-4))}<small>${esc([f.rate ? f.rate + '%' : '', f.period, f.plan, f.autoRenew ? 'auto-renews' : ''].filter(Boolean).join(' · '))}<br>${when}</small></div>
+          <div style="text-align:right;white-space:nowrap"><b>${fmt(f.principal)}</b><small>→ ${fmt(f.maturityAmount || f.principal)}</small>
+          <small><span class="x" data-forgetfd="${esc(f.no)}" role="button" style="cursor:pointer;text-decoration:underline">remove</span></small></div></div>`;
+      }).join('') + `<div class="sub" style="margin-top:6px">Add an FD by importing the bank's FD advice PDF (📥 Import, or drop it in your statement folder).</div>`;
+  }
+  document.addEventListener('click', e => {
+    const x = e.target.closest('[data-forgetfd]'); if (!x) return;
+    const f = (state.fds || []).find(y => y.no === x.dataset.forgetfd);
+    if (!f || !confirm(`Remove FD ••${f.no.slice(-4)} (${fmt(f.principal)}) from the list? Its bank entry stays.`)) return;
+    state.fds = state.fds.filter(y => y !== f); save(); render();
+  });
   function renderInvest(items) {
     const c = investCat(), its = items.filter(e => e.category === c);
-    $('invCard').classList.toggle('hidden', !its.length);
-    if (!its.length) return;
+    const fds = (state.fds || []).slice().sort((a, b) => a.maturity.localeCompare(b.maturity));
+    $('invCard').classList.toggle('hidden', !its.length && !fds.length);
+    $('fdList').innerHTML = fds.length ? fdsHtml(fds) : '';
+    if (!its.length) { $('invList').innerHTML = ''; return; }
     const by = new Map();
     its.forEach(e => { const [emo, name] = investType(e); const r = by.get(name) || { emo, name, out: 0, back: 0, n: 0 }; r[e.type === 'debit' ? 'out' : 'back'] += e.amount; r.n++; by.set(name, r); });
     const rows = [...by.values()].sort((a, b) => b.out - a.out);
@@ -1471,6 +1496,50 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
   const spentOf = arr => sum(arr.filter(e => e.type === 'debit' && counted(e)));
   // Investments (SIPs, stocks, gold…) are not spending; shown on their own, net of withdrawals
   const investCat = () => catAlias('Investment');
+  // ---------- fixed deposits (from the bank's FD advice / receipt PDF) ----------
+  // Only the deposit's terms are kept: number, bank, amounts, rate, dates. Not address, PAN or nominee.
+  const isFdAdvice = lines => { const t = lines.join(' '); return /fixed deposit|term deposit/i.test(t) && /principal amount/i.test(t) && /maturity (date|amount)/i.test(t); };
+  function parseFdAdvice(lines) {
+    const t = lines.join(' ').replace(/\s+/g, ' ');
+    const num = re => { const m = t.match(re); return m ? Math.round(parseFloat(m[1].replace(/,/g, '')) * 100) / 100 : NaN; };
+    const date = re => { const m = t.match(re); return m ? parseDate(m[1], 'dmy') : null; };
+    const fd = {
+      no: (t.match(/(?:Account|Deposit|FD)\s*(?:No|Number)\.?\s*:?\s*(\d{6,20})/i) || [])[1] || '',
+      bank: bankFromText(t) || '',
+      principal: num(/Principal Amount\s*:?\s*(?:INR|Rs\.?|₹)?\s*([\d,]+(?:\.\d+)?)/i),
+      rate: num(/Rate of Interest\s*:?\s*([\d.]+)\s*%/i),
+      start: date(/Date of Deposit\s*:?\s*(\d{1,2}[\/\-.]\d{1,2}[\/\-.]\d{2,4})/i) || date(/Value Date\s*:?\s*(\d{1,2}[\/\-.]\d{1,2}[\/\-.]\d{2,4})/i),
+      maturity: date(/Maturity Date\s*:?\s*(\d{1,2}[\/\-.]\d{1,2}[\/\-.]\d{2,4})/i),
+      maturityAmount: num(/Maturity Amount\s*:?\s*(?:INR|Rs\.?|₹)?\s*([\d,]+(?:\.\d+)?)/i),
+      period: ((t.match(/Period\s*:?\s*(\d+\s*(?:Months?|Years?|Days?)(?:\s*(?:and)?\s*\d+\s*Days?)?)/i) || [])[1] || '').replace(/\s+and\s+0\s+Days?/i, '').trim(),
+      plan: ((t.match(/Deposit Type\s*:?\s*([A-Za-z]+(?:\s+[A-Za-z]+)?\s+Plan)/i) || [])[1] || ''),
+      autoRenew: /Auto Renewal\s*:?\s*Yes/i.test(t)
+    };
+    return fd.no && fd.principal > 0 && fd.maturity ? fd : null;
+  }
+  // FD numbers appear in the bank's narration: "TRF TO FD no. 042813017494"
+  let fdMemo = { stamp: -1, n: -1, map: null };
+  function fdFor(e) {
+    if (!(state.fds || []).length || e.category !== investCat()) return null;
+    if (fdMemo.stamp !== dataStamp || fdMemo.n !== state.fds.length) fdMemo = { stamp: dataStamp, n: state.fds.length, map: new Map(state.fds.map(f => [f.no, f])) };
+    for (const d of String(e.note || '').match(/\d{6,20}/g) || []) {
+      const f = fdMemo.map.get(d) || state.fds.find(x => x.no.endsWith(d) && d.length >= 9);
+      if (f) return f;
+    }
+    return e.type === 'debit' ? state.fds.find(f => f.start === e.date && Math.abs(f.principal - e.amount) < 0.005 && /\bfd\b|deposit/i.test(e.note || '')) || null : null;
+  }
+  const fdLine = f => `🏦 FD ${f.rate ? f.rate + '% · ' : ''}matures ${new Date(f.maturity + 'T00:00').toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' })}${f.maturityAmount ? ' → ' + fmt(f.maturityAmount) : ''}`;
+  // Saves (or updates) an FD and files its "TRF TO FD" entry under Investment. Returns a message.
+  function saveFd(fd) {
+    const old = (state.fds || []).findIndex(f => f.no === fd.no);
+    state.fds = (state.fds || []).slice();
+    if (old >= 0) state.fds[old] = { ...state.fds[old], ...fd }; else state.fds.push(fd);
+    let linked = state.expenses.find(e => e.type === 'debit' && String(e.note || '').includes(fd.no));
+    if (!linked) linked = state.expenses.find(e => e.type === 'debit' && e.date === fd.start && Math.abs(e.amount - fd.principal) < 0.005 && /\bfd\b|deposit/i.test(e.note || ''));
+    if (linked && !linked.userCat && linked.category !== investCat() && catsFor('debit').some(c => c.name === investCat())) { linked.category = investCat(); delete linked.unread; }
+    save(); render();
+    return `🏦 FD ${fd.no.slice(-6)} ${old >= 0 ? 'updated' : 'saved'}: ${fmt(fd.principal)}${fd.rate ? ' at ' + fd.rate + '%' : ''} · matures ${new Date(fd.maturity + 'T00:00').toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' })}${fd.maturityAmount ? ' → ' + fmt(fd.maturityAmount) : ''}${linked ? ' · linked to its bank entry' : ''}`;
+  }
   // Kind of investment, from the description, payee name and comment
   const INVEST_TYPES = [
     ['🏦', 'Fixed deposits', /\bfd\b|fixed deposit|term deposit|\btdr?\b|\brd\b|recurring deposit|deposit a\/?c/i],
@@ -1672,6 +1741,7 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
             <div class="emoji">${esc(c.emoji)}</div>
             <div class="info"><div class="cat">${esc(c.name)}${badgeFor(appCached(e))}</div>
               <div class="note">${esc([noteText(e), !acctFilter && acctById(e.account) ? acctLabel(acctById(e.account)) : e.payment].filter(Boolean).join(' · '))}</div>
+              ${(f => f ? `<div class="comment">${esc(fdLine(f))}</div>` : '')(fdFor(e))}
               ${e.comment ? `<div class="comment">💬 ${esc(e.comment)}</div>` : e.unread ? (sg => strongSug(sg) && sg.comment ? `<div class="sug-hint">💡 ${esc(sg.comment)}?</div>` : '')(suggestFor(e)[0]) : ''}</div>
             ${amtHtml(e)}</div>`;
         }).join('')}</div>`;
@@ -2561,6 +2631,7 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
       let lines;
       try { lines = await readPdfLines(file); }
       catch (e) { if (!(e && e.message === 'Cancelled')) toast(e && e.message && e.message.length > 15 ? e.message : 'Could not read that PDF'); return; }
+      if (isFdAdvice(lines)) { const fd = parseFdAdvice(lines); toast(fd ? saveFd(fd) : 'This looks like an FD advice, but its amount or maturity date couldn’t be read', 6000); return; }
       const gp = isGPay(lines) ? parseGPay(lines) : [];
       if (gp.length) { previewStatement(gp, `Google Pay · ${file.name}`, 'No transactions found in this PDF'); return; }
       if (!isPhonePe(lines)) {
@@ -3391,6 +3462,7 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
       expenses: mergeList(base.expenses, local.expenses, remote.expenses, 'id'),
       accounts: mergeList(base.accounts, local.accounts, remote.accounts, 'id'),
       categories: mergeList(base.categories, local.categories, remote.categories, 'name'),
+      fds: mergeList(base.fds || [], local.fds || [], remote.fds || [], 'no'),
       rules: mergeObj(base.rules, local.rules, remote.rules),
       settings
     };
@@ -3645,6 +3717,7 @@ Rules: include only completed transactions — skip OTPs, offers, ads, due/bill 
         let lines;
         try { lines = await readPdfLines(file, { noPrompt: true }); }
         catch (e) { r.note = e.message === 'PASSWORD' ? 'password-protected: open it once with 📥 Import and enter the password; after that Kharcha remembers it' : 'couldn’t read this PDF'; return r; }
+        if (isFdAdvice(lines)) { const fd = parseFdAdvice(lines); r.kind = 'Fixed deposit'; if (fd) r.fd = saveFd(fd).replace(/^🏦 /, ''); else r.note = 'FD advice: amount or maturity date not readable'; return r; }
         const gp = isGPay(lines) ? parseGPay(lines) : [];
         if (gp.length) { r.kind = 'Google Pay'; return commitAuto(gp, r); }
         if (isPhonePe(lines)) { r.kind = 'PhonePe'; return commitAuto(parsePhonePe(lines), r); }
@@ -3694,8 +3767,9 @@ Rules: include only completed transactions — skip OTPs, offers, ads, due/bill 
     if (!done.length) return;
     save(); render(); renderFolder();
     const added = done.reduce((t, r) => t + r.added, 0), merged = done.reduce((t, r) => t + r.merged + r.same, 0);
+    const fds = done.filter(r => r.fd).length;
     const failed = done.filter(r => r.note).length;
-    toast(`📂 ${done.length} statement${done.length > 1 ? 's' : ''} from your folder: ${added} new transaction${added === 1 ? '' : 's'}${merged ? ` · ${merged} already in Kharcha` : ''}${failed ? ` · ${failed} need${failed === 1 ? 's' : ''} attention (Settings)` : ''}`, 5000);
+    toast(`📂 ${done.length} file${done.length > 1 ? 's' : ''} from your folder: ${added} new transaction${added === 1 ? '' : 's'}${merged ? ` · ${merged} already in Kharcha` : ''}${fds ? ` · ${fds} FD${fds > 1 ? 's' : ''} saved` : ''}${failed ? ` · ${failed} need${failed === 1 ? 's' : ''} attention (Settings)` : ''}`, 5000);
   }
   window.expensesFolderInfo = (name, msg) => { folderInfo.name = name; folderInfo.msg = msg || ''; renderFolder(); };
   window.expensesFolderFiles = (files, pending, error) => {
@@ -3720,7 +3794,7 @@ Rules: include only completed transactions — skip OTPs, offers, ads, due/bill 
     $('folderLog').innerHTML = log.length ? '<b>Recent</b><br>' + log.map(r => {
       const d = new Date(r.at).toLocaleDateString(undefined, { day: 'numeric', month: 'short' });
       return `${esc(d)} · ${esc(r.name)} — ` + (r.note ? `<span style="color:var(--warn)">${esc(r.note)}</span>`
-        : `${esc(r.kind || '')}: ${r.added} new${r.merged + r.same ? `, ${r.merged + r.same} already there` : ''}${r.warn ? ` · <span style="color:var(--warn)">${esc(r.warn)}</span>` : ''}`);
+        : r.fd ? esc(r.fd) : `${esc(r.kind || '')}: ${r.added} new${r.merged + r.same ? `, ${r.merged + r.same} already there` : ''}${r.warn ? ` · <span style="color:var(--warn)">${esc(r.warn)}</span>` : ''}`);
     }).join('<br>') : '';
   }
   $('folderPick').addEventListener('click', () => native({ type: 'folderPick' }));
