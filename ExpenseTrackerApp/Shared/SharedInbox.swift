@@ -3,10 +3,46 @@ import Foundation
 /// Texts shared into the Share Extension wait here (in the App Group container)
 /// until the main app opens and picks them up.
 enum SharedInbox {
+    private static var container: URL? {
+        guard let group = Bundle.main.object(forInfoDictionaryKey: "AppGroupID") as? String else { return nil }
+        return FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: group)
+    }
+
     private static var fileURL: URL? {
-        guard let group = Bundle.main.object(forInfoDictionaryKey: "AppGroupID") as? String,
-              let dir = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: group) else { return nil }
-        return dir.appendingPathComponent("shared-inbox.json")
+        container?.appendingPathComponent("shared-inbox.json")
+    }
+
+    /// Statement files (CSV / XLS / XLSX / PDF) shared into the extension.
+    private static var filesDir: URL? {
+        container?.appendingPathComponent("shared-files", isDirectory: true)
+    }
+
+    static func appendFile(from source: URL, name: String) -> Bool {
+        guard let dir = filesDir else { return false }
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let safeName = name.replacingOccurrences(of: "/", with: "-")
+        let dest = dir.appendingPathComponent(UUID().uuidString + "__" + safeName)
+        do {
+            try FileManager.default.copyItem(at: source, to: dest)
+            return true
+        } catch {
+            return false
+        }
+    }
+
+    static func takeFiles() -> [(name: String, data: Data)] {
+        guard let dir = filesDir,
+              let urls = try? FileManager.default.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil) else { return [] }
+        var out: [(name: String, data: Data)] = []
+        for url in urls.sorted(by: { $0.lastPathComponent < $1.lastPathComponent }) {
+            if let data = try? Data(contentsOf: url) {
+                let stored = url.lastPathComponent
+                let original = stored.components(separatedBy: "__").dropFirst().joined(separator: "__")
+                out.append((name: original.isEmpty ? stored : original, data: data))
+            }
+            try? FileManager.default.removeItem(at: url)
+        }
+        return out
     }
 
     private static func read(_ url: URL) -> [String] {

@@ -57,6 +57,23 @@ final class ShareViewController: UIViewController {
     }
 
     /// Gathers plain text from every shared item.
+    /// Statement file types: CSV/TSV, Excel (xls/xlsx), any spreadsheet, and PDF (reported as unsupported by the app).
+    private static let statementTypes: [UTType] = ([
+        .commaSeparatedText, .tabSeparatedText, .spreadsheet, .pdf,
+        UTType("com.microsoft.excel.xls"), UTType("org.openxmlformats.spreadsheetml.sheet")
+    ] as [UTType?]).compactMap { $0 }
+
+    private func statementType(of provider: NSItemProvider) -> UTType? {
+        for id in provider.registeredTypeIdentifiers {
+            guard let type = UTType(id) else { continue }
+            if Self.statementTypes.contains(where: { type.conforms(to: $0) }) { return type }
+        }
+        return nil
+    }
+
+    private var savedFiles = 0
+    private var failedFiles = 0
+
     private func collectText(_ completion: @escaping ([String]) -> Void) {
         let items = (extensionContext?.inputItems as? [NSExtensionItem]) ?? []
         let group = DispatchGroup()
@@ -70,9 +87,30 @@ final class ShareViewController: UIViewController {
         let textType = UTType.plainText.identifier
         let urlType = UTType.url.identifier
         for item in items {
-            add(item.attributedContentText?.string)
-            for provider in item.attachments ?? [] {
-                if provider.hasItemConformingToTypeIdentifier(textType) {
+            let attachments = item.attachments ?? []
+            if !attachments.contains(where: { statementType(of: $0) != nil }) {
+                add(item.attributedContentText?.string)
+            }
+            for provider in attachments {
+                if let fileType = statementType(of: provider) {
+                    group.enter()
+                    let suggested = provider.suggestedName
+                    _ = provider.loadFileRepresentation(forTypeIdentifier: fileType.identifier) { [weak self] url, _ in
+                        var ok = false
+                        if let url = url {
+                            let ext = url.pathExtension.isEmpty ? (fileType.preferredFilenameExtension ?? "dat") : url.pathExtension
+                            var name = url.lastPathComponent
+                            if let s = suggested, !s.isEmpty {
+                                name = s.lowercased().hasSuffix("." + ext.lowercased()) ? s : s + "." + ext
+                            }
+                            ok = SharedInbox.appendFile(from: url, name: name)
+                        }
+                        lock.lock()
+                        if ok { self?.savedFiles += 1 } else { self?.failedFiles += 1 }
+                        lock.unlock()
+                        group.leave()
+                    }
+                } else if provider.hasItemConformingToTypeIdentifier(textType) {
                     group.enter()
                     provider.loadItem(forTypeIdentifier: textType, options: nil) { value, _ in
                         if let s = value as? String { add(s) }
@@ -93,8 +131,17 @@ final class ShareViewController: UIViewController {
     }
 
     private func finish(with texts: [String]) {
+        if savedFiles > 0 && texts.isEmpty {
+            show(title: "Statement saved ✓",
+                 detail: "Open Kharcha to import \(savedFiles == 1 ? "it" : "them").", autoClose: true)
+            return
+        }
+        if failedFiles > 0 && texts.isEmpty {
+            show(title: "Couldn’t save the file", detail: "Try downloading the statement again, or import it from inside Kharcha (📥).", autoClose: false)
+            return
+        }
         guard !texts.isEmpty else {
-            show(title: "Nothing to save", detail: "Share the text of a bank SMS or UPI message.", autoClose: false)
+            show(title: "Nothing to save", detail: "Share a bank SMS or a CSV / Excel statement.", autoClose: false)
             return
         }
         let saved = SharedInbox.append(texts.joined(separator: "\n\n"))

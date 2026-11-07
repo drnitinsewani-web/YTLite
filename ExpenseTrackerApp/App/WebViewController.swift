@@ -50,6 +50,11 @@ final class WebViewController: UIViewController, WKScriptMessageHandler, WKUIDel
 
     private func deliverSharedTexts() {
         guard jsReady else { return }
+        // Statement files shared from Mail / Files / WhatsApp open the import screen
+        for file in SharedInbox.takeFiles() {
+            let js = "window.expensesReceiveFile && window.expensesReceiveFile(\(jsString(file.name)), \(jsString(file.data.base64EncodedString())))"
+            webView.evaluateJavaScript(js)
+        }
         let texts = SharedInbox.takeAll()
         guard !texts.isEmpty else { return }
         let joined = texts.joined(separator: "\n\n")

@@ -73,6 +73,7 @@ targets:
           NSExtensionAttributes:
             NSExtensionActivationRule:
               NSExtensionActivationSupportsText: true
+              NSExtensionActivationSupportsFileWithMaxCount: 3
     entitlements:
       path: Config/ExpensesShare.entitlements
       properties:

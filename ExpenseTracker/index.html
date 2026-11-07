@@ -1780,6 +1780,14 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     catch (e) { download('expenses-gmail-bridge.gs.txt', script, 'text/plain'); }
   });
 
+  // Statement file shared into the iOS app (Mail / Files / WhatsApp → Share → Kharcha).
+  window.expensesReceiveFile = (name, b64) => {
+    try {
+      const bin = atob(b64), bytes = new Uint8Array(bin.length);
+      for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+      startImport(new File([bytes], name || 'statement'));
+    } catch (e) { toast('Could not open the shared file'); }
+  };
   // Text from the Share Extension or the "Add Bank Message" Shortcuts action (iOS app).
   window.expensesReceiveShared = text => {
     const items = parseSmsBatch(text);
