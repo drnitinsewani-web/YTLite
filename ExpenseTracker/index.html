@@ -428,12 +428,13 @@
     </div>
     <div class="card">
       <h2>Accounts &amp; cards</h2>
-      <div class="sub">Add the last digits of each bank account or card. SMS, emails and statements are matched to the right one automatically (e.g. “A/c XX8810”, “Card *1279”).</div>
+      <div class="sub">Add the last digits of each bank account or card. SMS, emails and statements are matched to the right one automatically (e.g. “A/c XX8810”, “Card *1279”). <b>Tap an account to give it a short name</b> like “Salary” or “Joint”.</div>
       <div class="chips" id="acctChips" style="margin-top:12px"></div>
       <div class="row2" style="grid-template-columns: 56px 1fr; margin-top:14px">
         <input id="newAcctEmoji" placeholder="🏦" maxlength="4" aria-label="Emoji">
-        <input id="newAcctName" placeholder="Name, e.g. Axis Savings" aria-label="Account name">
+        <input id="newAcctName" placeholder="Bank name, e.g. Axis Bank" aria-label="Account name">
       </div>
+      <input id="newAcctNick" placeholder="Short name (optional), e.g. Salary" maxlength="24" aria-label="Short name" style="margin-top:10px">
       <div class="row2" style="margin-top:10px">
         <input id="newAcctDigits" inputmode="numeric" placeholder="Last digits, e.g. 8810" aria-label="Last digits">
         <select id="newAcctKind" aria-label="Account type">
@@ -913,7 +914,9 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
 
   // ---------- accounts ----------
   const acctById = id => (state.accounts || []).find(a => a.id === id);
-  const acctLabel = a => a ? `${a.emoji || '🏦'} ${a.name}${a.digits && a.digits[0] ? ' ••' + a.digits[0] : ''}` : '';
+  // Short name ("Salary", "Joint", "Dad") shown everywhere; the full bank name stays for bank detection.
+  const acctName = a => a ? (a.nick || a.name) : '';
+  const acctLabel = a => a ? `${a.emoji || '🏦'} ${acctName(a)}${a.digits && a.digits[0] ? ' ••' + a.digits[0] : ''}` : '';
   // masked numbers: XX8810, CC0xx1279, A/C X1234, *9226, ••1234, "ending 1234", "A/c no. 1234", "Account Number 6242…"
   const ACCT_RES = [
     /(?:^|[^a-z])x+(\d{3,})/gi,
@@ -991,7 +994,7 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
       .concat(accts.map(a => `<button class="chip ${acctFilter === a.id ? 'sel' : ''}" data-acct="${esc(a.id)}">${esc(acctLabel(a))}${a.bal ? ` <small>${esc(fmt(a.bal.amount))}</small>` : ''}</button>`)).join('');
     const a = acctById(acctFilter);
     const pw = period === 'fy' ? `Spent in ${periodRange().label}` : 'Spent this month';
-    $('spentLabel').textContent = a ? `${pw} · ${a.name}` : pw;
+    $('spentLabel').textContent = a ? `${pw} · ${acctName(a)}` : pw;
   }
   const sum = arr => arr.reduce((a, e) => a + e.amount, 0);
   const spentOf = arr => sum(arr.filter(e => e.type === 'debit' && counted(e)));
@@ -1125,7 +1128,8 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
         if (!q) return true;
         return parseQuery(q).every(t => t.op
           ? (t.op === '>' ? e.amount > t.v : t.op === '>=' ? e.amount >= t.v : t.op === '<' ? e.amount < t.v : e.amount <= t.v)
-          : (e.note.toLowerCase().includes(t.word) || e.category.toLowerCase().includes(t.word) || String(e.comment || '').toLowerCase().includes(t.word)));
+          : (e.note.toLowerCase().includes(t.word) || e.category.toLowerCase().includes(t.word) || String(e.comment || '').toLowerCase().includes(t.word)
+             || (acctById(e.account) && `${acctById(e.account).nick || ''} ${acctById(e.account).name}`.toLowerCase().includes(t.word))));
       })
       .sort((a, b) => b.date.localeCompare(a.date) || b.createdAt - a.createdAt);
 
@@ -1201,7 +1205,7 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
       const est = estimate(a), num = enquiryFor(a);
       if (est) { total += est.amount; known++; }
       return `<div class="balrow">
-        <div><div class="nm">${esc(a.emoji || '🏦')} ${esc(a.name)} <small style="color:var(--muted)">••${esc(a.digits[0] || '')}</small></div>
+        <div><div class="nm">${esc(a.emoji || '🏦')} ${esc(acctName(a))} <small style="color:var(--muted)">••${esc(a.digits[0] || '')}</small></div>
           <div class="when">${a.bal ? `Confirmed ${esc(fmt(a.bal.amount))} on ${short(a.bal.date)}` : 'No balance yet'}</div></div>
         <div><div class="v">${est ? esc(fmt(est.amount)) : '—'}</div>
           <div class="est">${est && est.n ? `estimated · ${est.n} entr${est.n > 1 ? 'ies' : 'y'} since` : est ? 'up to date' : ''}</div></div>
@@ -1286,7 +1290,7 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     $('autoAdd').checked = !!state.settings.autoAddShared;
     const accts = state.accounts || [];
     $('acctChips').innerHTML = accts.length ? accts.map(a =>
-      `<span class="chip" data-editacct="${esc(a.id)}" role="button">${esc(a.emoji || '🏦')} ${esc(a.name)} <small>••${esc(a.digits.join(', ••'))}${a.bal ? ' · ' + esc(fmt(a.bal.amount)) + ' (' + esc(new Date(a.bal.date + 'T00:00').toLocaleDateString(undefined, { day: 'numeric', month: 'short' })) + ')' : ''}</small><span class="x" data-delacct="${esc(a.id)}" role="button" aria-label="Remove">✕</span></span>`).join('')
+      `<span class="chip" data-editacct="${esc(a.id)}" role="button">${esc(a.emoji || '🏦')} ${esc(acctName(a))}${a.nick && a.nick !== a.name ? ` <small>${esc(a.name)}</small>` : ''} <small>••${esc(a.digits.join(', ••'))}${a.bal ? ' · ' + esc(fmt(a.bal.amount)) + ' (' + esc(new Date(a.bal.date + 'T00:00').toLocaleDateString(undefined, { day: 'numeric', month: 'short' })) + ')' : ''}</small><span class="x" data-delacct="${esc(a.id)}" role="button" aria-label="Remove">✕</span></span>`).join('')
       : '<span class="sub" style="margin:0">No accounts yet.</span>';
     const chip = (c, i) => `<span class="chip">${esc(c.emoji)} ${esc(c.name)}<span class="x" data-del="${i}" role="button" aria-label="Remove">✕</span></span>`;
     $('catChips').innerHTML = state.categories.map((c, i) => c.kind !== 'credit' ? chip(c, i) : '').join('');
@@ -2083,7 +2087,7 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     lastBalanceReplies.forEach(b => {
       const a = acctById(b.account); if (!a) return;
       if (!a.bal || b.date >= a.bal.date) a.bal = { amount: b.balance, date: b.date, seq: 1e9 };
-      done.push(`${a.name} ••${a.digits[0]} ${fmt(b.balance)}`);
+      done.push(`${acctName(a)} ••${a.digits[0]} ${fmt(b.balance)}`);
     });
     lastBalanceReplies = [];
     save(); render();
@@ -2231,7 +2235,7 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     if (e.target.closest('[data-pastebal]')) { openSmsSheet(''); return; }
     const b = e.target.closest('[data-setenq]'); if (!b) return;
     const a = acctById(b.dataset.setenq); if (!a) return;
-    const num = prompt(`Balance-enquiry (missed call) number for ${a.name}`, a.enquiry || '');
+    const num = prompt(`Balance-enquiry (missed call) number for ${acctName(a)}`, a.enquiry || '');
     if (num) { a.enquiry = num.replace(/[^0-9+]/g, ''); save(); renderBalances(); }
   });
   $('acctBar').addEventListener('click', e => {
@@ -2245,15 +2249,16 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     if (!name) { toast('Give the account a name'); return; }
     if (!digits.length) { toast('Enter at least the last 3–4 digits'); return; }
     const clash = (state.accounts || []).find(a => a.digits.some(d => digits.some(n => d.endsWith(n) || n.endsWith(d))));
-    if (clash) { toast(`Those digits already belong to ${clash.name}`); return; }
+    if (clash) { toast(`Those digits already belong to ${acctName(clash)}`); return; }
     const kind = $('newAcctKind').value;
     const emoji = $('newAcctEmoji').value.trim() || ({ bank: '🏦', card: '💳', wallet: '📱', cash: '👛' })[kind];
-    state.accounts = (state.accounts || []).concat({ id: uid(), name, emoji, kind, digits });
+    const nick = $('newAcctNick').value.trim().slice(0, 24);
+    state.accounts = (state.accounts || []).concat({ id: uid(), name, emoji, kind, digits, ...(nick ? { nick } : {}) });
     // attach existing imported entries that mention these digits
     let n = 0;
     const a = state.accounts[state.accounts.length - 1];
     state.expenses.forEach(e => { if (!e.account && e.ref && matchAccount(e.note).id === a.id) { e.account = a.id; n++; } });
-    ['newAcctName', 'newAcctDigits', 'newAcctEmoji'].forEach(id => $(id).value = '');
+    ['newAcctName', 'newAcctNick', 'newAcctDigits', 'newAcctEmoji'].forEach(id => $(id).value = '');
     save(); render(); toast(n ? `Account added · ${n} existing entr${n > 1 ? 'ies' : 'y'} matched` : 'Account added');
   });
   $('acctChips').addEventListener('click', e => {
@@ -2261,22 +2266,27 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     if (!x) {
       const c = e.target.closest('[data-editacct]'); if (!c) return;
       const a = acctById(c.dataset.editacct); if (!a) return;
-      const name = prompt('Account name', a.name);
-      if (name === null) return;
-      const digits = prompt('Last digits (separate several with commas)', a.digits.join(', '));
-      if (digits === null) return;
-      const list = digits.split(/[^0-9]+/).filter(d => d.length >= 3).map(d => d.slice(-6));
+      const done = () => { save(); render(); toast(`Saved · ${acctLabel(a)}`); };
+      const nick = prompt(`Short name for ${a.name} ••${a.digits.join('/')}\n(e.g. Salary, Joint, Savings, Dad) — shown everywhere instead of the bank name. Leave empty to show the bank name.`, a.nick || '');
+      if (nick === null) return;
+      a.nick = nick.trim().slice(0, 24);
+      if (!confirm('Also edit the bank name, account digits or balance-enquiry number?')) { done(); return; }
+      const name = prompt('Bank / full account name (used to recognise the bank)', a.name);
+      if (name === null) { done(); return; }
       if (name.trim()) a.name = name.trim();
+      const digits = prompt('Last digits (separate several with commas)', a.digits.join(', '));
+      if (digits === null) { done(); return; }
+      const list = digits.split(/[^0-9]+/).filter(d => d.length >= 2).map(d => d.slice(-6));
       if (list.length) a.digits = list;
       if (a.kind !== 'card') {
         const num = prompt('Balance-enquiry (missed call) number — leave empty for none', enquiryFor(a));
         if (num !== null) a.enquiry = num.replace(/[^0-9+]/g, '');
       }
-      save(); render(); toast('Account updated');
+      done();
       return;
     }
     const a = acctById(x.dataset.delacct);
-    if (!a || !confirm(`Remove "${a.name}"? Its transactions stay, without an account.`)) return;
+    if (!a || !confirm(`Remove "${acctName(a)}"? Its transactions stay, without an account.`)) return;
     state.accounts = state.accounts.filter(y => y.id !== a.id);
     state.expenses.forEach(e => { if (e.account === a.id) e.account = ''; });
     save(); render();
