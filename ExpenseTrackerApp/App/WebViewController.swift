@@ -91,6 +91,8 @@ final class WebViewController: UIViewController, WKScriptMessageHandler, WKUIDel
             let error = (body["data"] as? String).flatMap { CloudSync.shared.write($0) }
             let arg = error.map { jsString($0) } ?? "null"
             webView.evaluateJavaScript("window.expensesCloudPushed && window.expensesCloudPushed(\(arg), \(CloudSync.shared.lastWrite))")
+        case "ai":
+            callDeepSeek(id: (body["id"] as? String) ?? "", key: (body["key"] as? String) ?? "", payload: (body["body"] as? String) ?? "{}")
         case "export":
             let name = (body["name"] as? String) ?? "export.txt"
             let text = (body["text"] as? String) ?? ""
@@ -98,6 +100,25 @@ final class WebViewController: UIViewController, WKScriptMessageHandler, WKUIDel
         default:
             break
         }
+    }
+
+    // DeepSeek request made natively so the web page isn't limited by browser cross-site rules.
+    private func callDeepSeek(id: String, key: String, payload: String) {
+        guard let url = URL(string: "https://api.deepseek.com/chat/completions") else { return }
+        var req = URLRequest(url: url)
+        req.httpMethod = "POST"
+        req.timeoutInterval = 180
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.setValue("Bearer \(key)", forHTTPHeaderField: "Authorization")
+        req.httpBody = payload.data(using: .utf8)
+        URLSession.shared.dataTask(with: req) { [weak self] data, response, error in
+            let status = (response as? HTTPURLResponse)?.statusCode ?? 0
+            let text = data.flatMap { String(data: $0, encoding: .utf8) } ?? (error?.localizedDescription ?? "")
+            DispatchQueue.main.async {
+                guard let self = self else { return }
+                self.webView.evaluateJavaScript("window.expensesAiDone && window.expensesAiDone(\(self.jsString(id)), \(status), \(self.jsString(text)))")
+            }
+        }.resume()
     }
 
     private func export(name: String, text: String) {

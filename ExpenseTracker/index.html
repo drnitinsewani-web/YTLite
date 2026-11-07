@@ -371,6 +371,13 @@
       <div id="balList"></div>
       <div class="sub" id="balNote"></div>
     </div>
+    <div class="card hidden" id="askCard">
+      <h2>🤖 Ask DeepSeek</h2>
+      <div class="sub">Questions about your money, answered from your entries. E.g. “Where did my money go in October?”, “How much to Upstox this year?”, “Biggest food spends?”</div>
+      <textarea id="askText" rows="2" placeholder="Ask anything about your spending…" style="margin-top:10px"></textarea>
+      <button class="btn primary" id="askGo">Ask</button>
+      <div id="askOut" class="sub" style="margin-top:10px;line-height:1.5;color:var(--text)"></div>
+    </div>
     <div class="stats">
       <div class="card stat"><div class="total-label">Spent</div><div class="v" id="sTotal"></div></div>
       <div class="card stat"><div class="total-label">Income</div><div class="v" id="sIncome" style="color:var(--income)"></div></div>
@@ -444,6 +451,18 @@
       </div>
       <div class="sub">Several numbers (e.g. account and debit card) can be separated with commas. Accounts found in imported statements, SMS and emails are added here automatically. Tap one to rename it.</div>
       <button class="btn ghost" id="addAcct">Add account</button>
+    </div>
+    <div class="card">
+      <h2>🤖 DeepSeek AI (optional)</h2>
+      <div class="sub" id="aiStatus">Not set up.</div>
+      <label for="aiKey">DeepSeek API key</label>
+      <input id="aiKey" type="password" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="sk-…">
+      <label for="aiModel">Model for questions</label>
+      <select id="aiModel"><option value="deepseek-chat">deepseek-chat (fast, cheapest)</option><option value="deepseek-reasoner">deepseek-reasoner (thinks longer)</option></select>
+      <button class="btn primary" id="aiSave">Save &amp; test</button>
+      <button class="btn ghost" id="aiCat">🏷️ Categorise “Other” entries with DeepSeek</button>
+      <button class="btn ghost" id="aiRemove">Remove key</button>
+      <div class="sub">Kharcha uses DeepSeek only when its own rules can't: messages it doesn't recognise, statements in unknown formats (any bank's CSV, Excel or PDF), uncategorised entries, and questions in <b>Summary → Ask</b>. Get a key at <b>platform.deepseek.com → API keys</b> (pay-as-you-go; a request costs well under ₹1). The text being read is sent to DeepSeek (servers in China); your key stays on your devices.</div>
     </div>
     <div class="card">
       <h2>Email (Gmail)</h2>
@@ -1000,9 +1019,9 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
   const spentOf = arr => sum(arr.filter(e => e.type === 'debit' && counted(e)));
   const incomeOf = arr => sum(arr.filter(e => e.type === 'credit' && counted(e)));
 
-  function toast(msg) {
+  function toast(msg, ms = 2200) {
     const t = $('toast'); t.textContent = msg; t.classList.add('show');
-    clearTimeout(toast._t); toast._t = setTimeout(() => t.classList.remove('show'), 2200);
+    clearTimeout(toast._t); toast._t = setTimeout(() => t.classList.remove('show'), ms);
   }
 
   // ---------- classification ----------
@@ -1864,7 +1883,9 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
       filters.push([k, `${label} ${it.filter(x => acctKeyOf(x) === k).length}`]);
     });
     $('impFilters').innerHTML = filters.map(([k, l]) => `<button class="chip ${imp.filter === k ? 'sel' : ''}" data-f="${esc(k)}">${esc(l)}</button>`).join('') +
-      `<button class="chip" data-tick="1">✓ Tick shown</button><button class="chip" data-tick="0">✕ Untick shown</button>`;
+      `<button class="chip" data-tick="1">✓ Tick shown</button><button class="chip" data-tick="0">✕ Untick shown</button>` +
+      (aiOn() && other ? `<button class="chip" data-ai="cat">🤖 Categorise ${other}</button>` : '') +
+      (aiOn() && imp.mode === 'file' && imp.rows.length ? `<button class="chip" data-ai="read">🤖 Read with DeepSeek</button>` : '');
 
     const pass = x => imp.filter === 'all' || (imp.filter === 'dup' ? x.dup : imp.filter === 'other'
       ? (x.category === 'Other' || x.category === 'Other Income')
@@ -1908,7 +1929,10 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
       let lines;
       try { lines = await readPdfLines(file); }
       catch (e) { if (!(e && e.message === 'Cancelled')) toast(e && e.message && e.message.length > 15 ? e.message : 'Could not read that PDF'); return; }
-      if (!isPhonePe(lines)) { toast('This PDF isn’t a PhonePe statement. For bank statements, download the CSV or Excel version from net banking.'); return; }
+      if (!isPhonePe(lines)) {
+        if (aiOn()) { aiReadLines(lines, file.name, lines.slice(0, 12).join('\n')); return; }
+        toast('This PDF isn’t a PhonePe statement. Download the CSV/Excel version from net banking, or add a DeepSeek key in Settings to read any PDF.', 6000); return;
+      }
       const items = parsePhonePe(lines);
       $('toast').classList.remove('show');
       if (!openItemsPreview(items, `PhonePe · ${file.name}`, true)) toast(items.length ? 'Everything in this statement is already in Kharcha' : 'No transactions found in this PDF');
@@ -1926,6 +1950,7 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
       return;
     }
     const det = detectColumns(rows);
+    if (!det && aiOn() && rows.length) { aiReadLines(rowsToLines(rows), file.name, rowsContext(rows)); return; }
     imp.rows = rows; imp.name = file.name; imp.filter = 'all'; imp.mode = 'file'; imp.acctOverride = '';
     imp.header = det ? det.header : 0;
     imp.map = det ? det.map : { date: -1, desc: -1, debit: -1, credit: -1, amount: -1, type: -1, balance: -1 };
@@ -2134,7 +2159,7 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
   $('smsGo').addEventListener('click', () => {
     const t = $('smsText').value.trim();
     if (!t) { toast('Paste a bank SMS first'); return; }
-    if (!openSmsPreview(t)) toast('No transaction or balance found. Is this a bank message?');
+    if (!openSmsPreview(t)) { if (aiOn()) { closeAll(); aiReadLines([t], 'the pasted text'); } else toast('No transaction or balance found. Is this a bank message?'); }
     else if (!$('impSheet').classList.contains('open')) closeAll();
   });
 
@@ -2145,6 +2170,13 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     buildItems(); renderImport();
   });
   $('impFilters').addEventListener('click', e => {
+    const ai = e.target.closest('[data-ai]');
+    if (ai && ai.dataset.ai === 'cat') {
+      aiCategorise(imp.items.filter(x => !x.touched && (x.category === 'Other' || x.category === 'Other Income')),
+        n => { save(); renderImport(); toast(n ? `🤖 Categorised ${n} — check and change any that look wrong` : 'DeepSeek could not tell these apart', 3500); });
+      return;
+    }
+    if (ai && ai.dataset.ai === 'read') { const rows = imp.rows, name = imp.name; closeAll(); aiReadLines(rowsToLines(rows), name, rowsContext(rows)); return; }
     const t = e.target.closest('[data-tick]');
     if (t) { imp.items.forEach(x => { if (imp.pass && imp.pass(x)) x.include = t.dataset.tick === '1'; }); renderImport(); return; }
     const b = e.target.closest('[data-f]'); if (!b) return;
@@ -2354,7 +2386,7 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     download(`transactions-${isoDate(new Date())}.csv`, rows.map(r => r.map(q).join(',')).join('\n'), 'text/csv');
   });
   $('backup').addEventListener('click', () =>
-    download(`expenses-backup-${isoDate(new Date())}.json`, JSON.stringify(state, null, 2), 'application/json'));
+    download(`expenses-backup-${isoDate(new Date())}.json`, JSON.stringify({ ...state, settings: { ...state.settings, ai: undefined } }, null, 2), 'application/json'));
   $('restoreBtn').addEventListener('click', () => $('restoreFile').click());
   $('restoreFile').addEventListener('change', async e => {
     const f = e.target.files[0]; if (!f) return;
@@ -2626,6 +2658,176 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     $('cloudNow').addEventListener('click', () => { cloudInfo.error = ''; $('cloudStatus').textContent = 'Syncing…'; native({ type: 'cloudPull' }); });
   }
 
+  // ---------- DeepSeek (optional helper for what the built-in rules can't do) ----------
+  const AI_URL = 'https://api.deepseek.com/chat/completions';
+  const aiCfg = () => state.settings.ai || {};
+  const aiOn = () => !!aiCfg().key;
+  const aiPending = {};
+  window.expensesAiDone = (id, status, text) => { const f = aiPending[id]; if (f) { delete aiPending[id]; f(status, text); } };
+  async function aiRaw(body) {
+    const key = aiCfg().key;
+    if (!key) throw new Error('Add your DeepSeek API key in Settings first');
+    let status = 0, text = '';
+    if (NATIVE) {   // the iOS app makes the request itself (no browser restrictions)
+      const id = uid();
+      [status, text] = await new Promise(res => {
+        aiPending[id] = (st, tx) => res([st, tx]);
+        native({ type: 'ai', id, key, body: JSON.stringify(body) });
+        setTimeout(() => window.expensesAiDone(id, 0, 'timed out'), 200000);
+      });
+    } else {
+      try {
+        const r = await fetch(AI_URL, { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + key }, body: JSON.stringify(body) });
+        status = r.status; text = await r.text();
+      } catch (e) { throw new Error(navigator.onLine ? 'Could not reach DeepSeek from this browser. Use the Kharcha iPhone app, or try again.' : 'You are offline'); }
+    }
+    if (status === 0) throw new Error('Could not reach DeepSeek: ' + String(text).slice(0, 80));
+    if (status === 401) throw new Error('DeepSeek rejected the API key. Check it in Settings.');
+    if (status === 402) throw new Error('Your DeepSeek balance is empty. Top up at platform.deepseek.com.');
+    if (status === 429) throw new Error('DeepSeek is busy. Try again in a minute.');
+    if (status !== 200) throw new Error(`DeepSeek error ${status}: ${String(text).slice(0, 100)}`);
+    const j = JSON.parse(text);
+    return String(((j.choices || [])[0] || {}).message?.content || '');
+  }
+  async function aiJson(system, user) {
+    const out = await aiRaw({ model: 'deepseek-chat', temperature: 0, max_tokens: 8000, response_format: { type: 'json_object' },
+      messages: [{ role: 'system', content: system }, { role: 'user', content: user }] });
+    try { return JSON.parse(out.trim().replace(/^```(?:json)?\s*|\s*```$/g, '')); }
+    catch (e) { throw new Error('DeepSeek sent an incomplete answer. Try again.'); }
+  }
+  const aiCatList = () => `Debit categories: ${catsFor('debit').map(c => c.name).join(', ')}. Credit categories: ${catsFor('credit').map(c => c.name).join(', ')}.`;
+  const AI_EXTRACT = () => `You extract money transactions from Indian bank / UPI / card SMS, emails and account statements for the owner of the account.
+Reply with JSON only: {"transactions":[{"date":"YYYY-MM-DD","type":"debit" or "credit","amount":number,"party":"merchant or person, short","account":"last digits of the owner's account or card, or empty","bank":"bank name or empty","utr":"12-digit UPI reference or empty","balance":number or null,"category":"..."}]}
+Rules: include only completed transactions — skip OTPs, offers, ads, due/bill reminders, failed or declined payments, requests and mandates. "type" is from the owner's side (money out = debit, money in = credit). Amount in rupees, positive. If the year is missing assume the most recent past date; today is ${isoDate(new Date())}. balance = closing/available balance after the transaction if shown. category must be one of — ${aiCatList()} If nothing qualifies return {"transactions":[]}.`;
+  function aiItems(list) {
+    const out = [];
+    (Array.isArray(list) ? list : []).forEach(t => {
+      if (!t || typeof t !== 'object') return;
+      const type = /^c/i.test(String(t.type)) ? 'credit' : 'debit';
+      const amount = Math.round(Math.abs(parseFloat(String(t.amount).replace(/[^\d.\-]/g, ''))) * 100) / 100;
+      const date = parseDate(t.date, 'dmy');
+      if (!date || !(amount > 0) || date > isoDate(new Date(Date.now() + 864e5))) return;
+      const party = String(t.party || '').replace(/\s+/g, ' ').trim().slice(0, 60);
+      const bank = String(t.bank || '').trim().slice(0, 30);
+      const digits = String(t.account || '').replace(/\D/g, '');
+      const acct = digits.length >= 2 ? phonePeAccount(digits) : { account: '', acctDigits: '' };
+      const utr = /^\d{12}$/.test(String(t.utr || '').trim()) ? String(t.utr).trim() : '';
+      let category = classify(party || bank, type);
+      if ((category === 'Other' || category === 'Other Income') && catsFor(type).some(c => c.name === t.category)) category = t.category;
+      const bal = parseFloat(t.balance);
+      out.push({ date, desc: (party ? `${type === 'credit' ? 'From' : 'To'} ${party}` : 'Transaction') + (bank ? ' · ' + bank : ''),
+        type, amount, payment: utr ? 'UPI' : 'Bank', category, touched: false, utr, ai: true,
+        account: acct.account, acctDigits: acct.account ? '' : acct.acctDigits, acctBank: bank, acctKind: 'bank',
+        balance: isFinite(bal) ? bal : undefined, seq: 0,
+        ref: utr ? `upi|${utr}|${type}|${amount.toFixed(2)}` : `ai|${date}|${type}|${amount.toFixed(2)}|${party.toLowerCase()}` });
+    });
+    return out;
+  }
+  let aiBusy = false;
+  // lines: text lines (SMS, PDF lines or spreadsheet rows); context: statement header sent with every part
+  async function aiReadLines(lines, label, context = '') {
+    if (aiBusy) { toast('DeepSeek is still working…'); return; }
+    lines = lines.map(l => String(l).trim()).filter(Boolean);
+    const parts = [];
+    for (let i = 0, cur = [], size = 0; i < lines.length; i++) {
+      cur.push(lines[i]); size += lines[i].length;
+      if (cur.length >= 70 || size > 7000 || i === lines.length - 1) { parts.push(cur.join('\n')); cur = []; size = 0; }
+    }
+    if (!parts.length) { toast('Nothing to read'); return; }
+    if (parts.length > 3 && !confirm(`DeepSeek will read “${label}” in ${parts.length} parts (about ${Math.ceil(parts.length * 0.4)} min). Continue?`)) return;
+    aiBusy = true;
+    const items = [];
+    try {
+      for (let i = 0; i < parts.length; i++) {
+        toast(`🤖 DeepSeek is reading ${label}${parts.length > 1 ? ` · part ${i + 1} of ${parts.length}` : ''}…`, 600000);
+        const j = await aiJson(AI_EXTRACT(), (context ? `Statement header (for context, not transactions):\n${context}\n\n` : '') + `Text:\n${parts[i]}`);
+        items.push(...aiItems(j.transactions));
+      }
+    } catch (e) { aiBusy = false; toast(e.message, 5000); return; }
+    aiBusy = false;
+    // the same transaction can appear twice when a statement is split into parts
+    const seen = new Set();
+    const uniq = items.filter(x => { const k = `${x.date}|${x.type}|${x.amount}|${x.utr || x.desc}|${x.balance ?? ''}`; if (seen.has(k)) return false; seen.add(k); return true; });
+    $('toast').classList.remove('show');
+    if (!openItemsPreview(uniq, `🤖 DeepSeek · ${label}`, true)) toast(uniq.length ? 'Everything here is already in Kharcha' : 'DeepSeek found no transactions in it', 3500);
+  }
+  const rowsToLines = rows => rows.map(r => r.map(c => c instanceof Date ? isoDate(c) : String(c ?? '').trim()).filter(Boolean).join(' | '));
+  function rowsContext(rows) {
+    const firstData = rows.findIndex(r => r.some(c => parseDate(c, 'dmy')) && r.some(c => parseAmount(c)));
+    return rowsToLines(rows.slice(0, Math.max(1, Math.min(firstData < 0 ? 8 : firstData, 15)))).join('\n');
+  }
+  // Pick categories for "Other" entries; answers are remembered as rules so next time it works offline.
+  async function aiCategorise(list, onDone) {
+    const groups = new Map();
+    list.forEach(x => { const k = merchantKey(x.desc || x.note) || String(x.desc || x.note).toUpperCase(); if (!groups.has(k)) groups.set(k, []); groups.get(k).push(x); });
+    const keys = [...groups.keys()].slice(0, 200);
+    if (!keys.length) { toast('Nothing uncategorised'); return; }
+    if (aiBusy) { toast('DeepSeek is still working…'); return; }
+    aiBusy = true;
+    toast(`🤖 DeepSeek is categorising ${keys.length} payee${keys.length > 1 ? 's' : ''}…`, 600000);
+    let j;
+    try {
+      j = await aiJson(`You categorise Indian bank / UPI transactions by payee. ${aiCatList()} Reply with JSON only: {"c":{"<number>":"<category>"}}. Use the category list for the entry's type exactly; use "Other" / "Other Income" only when you really cannot tell. Person names with no other clue: "Other". Money between the owner's own accounts, wallets or brokers' fund transfers: "Transfer". Stocks, mutual funds, SIP, gold, brokers (Zerodha, Upstox, Groww): "Investment".`,
+        keys.map((k, i) => { const x = groups.get(k)[0]; return `${i}. ${x.type} ₹${x.amount} — ${String(x.desc || x.note).slice(0, 90)}${x.comment ? ' (note: ' + String(x.comment).slice(0, 40) + ')' : ''}`; }).join('\n'));
+    } catch (e) { aiBusy = false; toast(e.message, 5000); return; }
+    aiBusy = false;
+    let n = 0;
+    keys.forEach((k, i) => {
+      const cat = (j.c || {})[i] ?? (j.c || {})[String(i)];
+      groups.get(k).forEach(x => {
+        if (!cat || cat === 'Other' || cat === 'Other Income' || !catsFor(x.type).some(c => c.name === cat)) return;
+        x.category = cat; n++;
+      });
+      const x0 = groups.get(k)[0];
+      if (cat && catsFor(x0.type).some(c => c.name === cat) && !/^Other/.test(cat)) learn(x0.desc || x0.note, cat);
+    });
+    onDone(n);
+  }
+  async function aiAsk(q) {
+    const cutoff = isoDate(new Date(Date.now() - 456 * 864e5));
+    const rows = state.expenses.filter(e => e.date >= cutoff).sort((a, b) => b.date.localeCompare(a.date)).slice(0, 1500);
+    const months = {};
+    state.expenses.forEach(e => { const m = e.date.slice(0, 7); months[m] = months[m] || { out: 0, in: 0 }; if (counted(e)) months[m][e.type === 'credit' ? 'in' : 'out'] += e.amount; });
+    const data = rows.map(e => [e.date, e.type === 'credit' ? 'in' : 'out', e.amount, e.category, acctName(acctById(e.account)) || e.payment || '', String(e.note || '').slice(0, 60), String(e.comment || '').slice(0, 40)].join(' | ')).join('\n');
+    const sys = `You are Kharcha, a helpful personal-finance assistant for an Indian user. Answer in short, plain sentences using ₹ amounts with Indian digit grouping. Base every number on the data; if the data doesn't cover it, say so. Categories "Transfer" (moves between own accounts) and "Investment" are not spending. Today is ${isoDate(new Date())}.`;
+    const user = `Monthly totals (all data, excluding transfers): ${Object.keys(months).sort().map(m => `${m}: out ₹${Math.round(months[m].out)}, in ₹${Math.round(months[m].in)}`).join('; ')}\n\nEntries (date | in/out | amount | category | account | description | user note), newest first${rows.length >= 1500 ? ', most recent 1500 only' : ''}:\n${data}\n\nQuestion: ${q}`;
+    return aiRaw({ model: aiCfg().model || 'deepseek-chat', temperature: 0.2, max_tokens: 1500, messages: [{ role: 'system', content: sys }, { role: 'user', content: user }] });
+  }
+  function renderAi() {
+    const c = aiCfg();
+    $('aiKey').value = c.key || ''; $('aiModel').value = c.model || 'deepseek-chat';
+    $('aiStatus').textContent = c.key ? (c.ok ? '✓ Connected. Used automatically when Kharcha can’t read something.' : 'Key saved, not tested yet.') : 'Not set up.';
+    ['aiCat', 'aiRemove'].forEach(id => $(id).classList.toggle('hidden', !c.key));
+    $('askCard').classList.toggle('hidden', !c.key);
+  }
+  $('aiSave').addEventListener('click', async () => {
+    const key = $('aiKey').value.trim();
+    if (!/^sk-[\w-]{10,}$/.test(key)) { toast('Paste the API key that starts with sk-'); return; }
+    state.settings.ai = { ...aiCfg(), key, model: $('aiModel').value, ok: false }; save(); renderAi();
+    $('aiStatus').textContent = 'Testing…';
+    try { await aiRaw({ model: 'deepseek-chat', max_tokens: 5, messages: [{ role: 'user', content: 'Reply OK' }] });
+      state.settings.ai.ok = true; save(); renderAi(); toast('DeepSeek connected ✓'); }
+    catch (e) { $('aiStatus').textContent = '⚠︎ ' + e.message; }
+  });
+  $('aiModel').addEventListener('change', e => { if (state.settings.ai) { state.settings.ai.model = e.target.value; save(); } });
+  $('aiRemove').addEventListener('click', () => { if (!confirm('Remove the DeepSeek key from Kharcha?')) return; delete state.settings.ai; save(); renderAi(); $('askOut').innerHTML = ''; });
+  $('aiCat').addEventListener('click', () => {
+    const list = state.expenses.filter(e => (e.category === 'Other' || e.category === 'Other Income'));
+    if (!list.length) { toast('No “Other” entries to categorise'); return; }
+    aiCategorise(list, n => { save(); render(); toast(n ? `🤖 Categorised ${n} entr${n > 1 ? 'ies' : 'y'} — DeepSeek's choices are remembered for next time` : 'DeepSeek could not tell these apart', 4000); });
+  });
+  $('askGo').addEventListener('click', async () => {
+    const q = $('askText').value.trim(); if (!q) { $('askText').focus(); return; }
+    if (aiBusy) { toast('DeepSeek is still working…'); return; }
+    aiBusy = true; $('askGo').disabled = true; $('askOut').textContent = '🤖 Thinking…';
+    try {
+      const a = await aiAsk(q);
+      $('askOut').innerHTML = esc(a.trim()).replace(/\*\*(.+?)\*\*/g, '<b>$1</b>').replace(/^#+\s*/gm, '').replace(/\n/g, '<br>');
+    } catch (e) { $('askOut').textContent = '⚠︎ ' + e.message; }
+    aiBusy = false; $('askGo').disabled = false;
+  });
+  renderAi();
+
   // Statement file shared into the iOS app (Mail / Files / WhatsApp → Share → Kharcha).
   window.expensesReceiveFile = (name, b64) => {
     try {
@@ -2638,7 +2840,7 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
   window.expensesReceiveShared = text => {
     const items = parseSmsBatch(text);
     const balMsg = applyBalanceReplies();
-    if (!items.length) { toast(balMsg || 'No transaction found in the shared message'); return; }
+    if (!items.length) { if (!balMsg && aiOn()) aiReadLines([text], 'the shared message'); else toast(balMsg || 'No transaction found in the shared message'); return; }
     if (balMsg) toast(balMsg);
     if (state.settings.autoAddShared) {
       markDups(items);
