@@ -521,7 +521,7 @@
       <input id="mailUrl" type="url" inputmode="url" autocomplete="off" placeholder="https://script.google.com/macros/s/…/exec">
       <button class="btn primary" id="mailCheck">✉️ Check email now</button>
       <button class="btn ghost" id="mailBrowse">📧 Browse emails &amp; add one by one</button>
-      <button class="btn ghost" id="mailResync">↻ Re-sync email (removes and re-adds email entries)</button>
+      <button class="btn ghost" id="mailResync">↻ Re-sync email (reads the last 45 days again)</button>
       <details class="map" id="mailHelp">
         <summary>How to connect Gmail (one time, ~3 min)</summary>
         <ol class="sub" style="padding-left:18px;line-height:1.5">
@@ -634,17 +634,25 @@ const DEFAULT_DAYS = 45;
 const QUERY = '(debited OR credited OR spent OR withdrawn OR "has been used" OR "transaction of" OR "payment of" OR "transferred") ' +
   '(Rs OR INR OR "Rs." OR ₹) -in:spam -in:trash -category:promotions -category:social';
 const HIT = /(debited|credited|spent|withdrawn|has been used|used for|transaction of|payment of|transferred|received|paid|sent)/i;
+const MAX_THREADS = 500;   // per request; the app asks again for older ones ("before") when there are more
 
 function doGet(e) {
   const p = (e && e.parameter) || {};
   if (p.key !== KEY) return out({ error: 'bad key' });
   const after = Number(p.after) || Math.floor(Date.now() / 1000) - DEFAULT_DAYS * 86400;
-  const threads = GmailApp.search(QUERY + ' after:' + after, 0, 200);
+  const before = Number(p.before) || 0;
+  const query = QUERY + ' after:' + after + (before ? ' before:' + before : '');
+  const threads = [];
+  for (let start = 0; start < MAX_THREADS; start += 100) {   // newest first, 100 at a time
+    const page = GmailApp.search(query, start, 100);
+    for (let i = 0; i < page.length; i++) threads.push(page[i]);
+    if (page.length < 100) break;
+  }
   const items = [];
-  threads.forEach(function (t) {
-    t.getMessages().forEach(function (m) {
+  GmailApp.getMessagesForThreads(threads).forEach(function (msgs) {
+    msgs.forEach(function (m) {
       const ts = Math.floor(m.getDate().getTime() / 1000);
-      if (ts < after) return;
+      if (ts < after || (before && ts >= before) || m.isDraft()) return;
       const text = (m.getPlainBody() || '').replace(/\s+/g, ' ').trim();
       const i = text.search(HIT);
       if (i < 0) return;
@@ -652,7 +660,9 @@ function doGet(e) {
                    text: text.slice(Math.max(0, i - 160), i + 320) });
     });
   });
-  return out({ items: items, now: Math.floor(Date.now() / 1000) });
+  const more = threads.length >= MAX_THREADS;
+  return out({ v: 2, items: items, now: Math.floor(Date.now() / 1000), more: more,
+               before: more ? Math.floor(threads[threads.length - 1].getLastMessageDate().getTime() / 1000) + 1 : 0 });
 }
 
 function out(o) {
@@ -1083,9 +1093,10 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
   // yours is fine), and its category is still the one Kharcha's rules would give it
   let classifyMemo = null;   // per tidyTransfers run
   const ruleCat = e => {
-    if (!classifyMemo) return classify(e.note, e.type, true);
-    const k = e.type + '|' + e.note;
-    if (!classifyMemo.has(k)) classifyMemo.set(k, classify(e.note, e.type, true));
+    const nr = payeeless(e);
+    if (!classifyMemo) return classify(e.note, e.type, true, nr);
+    const k = (nr ? '!' : '') + e.type + '|' + e.note;
+    if (!classifyMemo.has(k)) classifyMemo.set(k, classify(e.note, e.type, true, nr));
     return classifyMemo.get(k);
   };
   const autoEligible = e => !e.userCat && (!ownComment(e) || CROSS_RE.test(e.comment)) &&
@@ -1193,7 +1204,13 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
   // Rule keys: "MERCHANT|type|1463.62" (same amount) or "MERCHANT|type|any". Values are
   // { c: comment } when the user chose them; plain strings are older automatic rules, which are
   // ignored for round amounts.
-  const payerKey = e => { const k = merchantKey(e.note || e.desc || ''); return k.length >= 3 ? k : ''; };
+  // An SMS or email alert in which no payee was found keeps the alert's own words as its note ("Dear Customer,
+  // Rs.1,500 debited from a/c **1234…", "<email subject> — …"), and DeepSeek's "Transaction": those words are the
+  // bank's template, the same for all its alerts, so such entries have no payee to file, comment or group by.
+  const ALERT_WORDS = /\b(?:rs\.?|inr)\s*\d|₹\s*\d|[x*]{2,}\d|\b(?:a\/c|acct|account|card|avl|avail(?:able)?|bal(?:ance)?|debited|credited|spent|withdrawn|transaction|txn|dear customer)\b/i;
+  const payeeless = e => { const n = String(e.note || e.desc || '');
+    return /^Transaction(?: · |$)/.test(n) || (/^(?:sms|mail)\|/.test(e.ref || '') && !/^(?:To|From) /.test(n) && ALERT_WORDS.test(n)); };
+  const payerKey = e => { if (payeeless(e)) return ''; const k = merchantKey(e.note || e.desc || ''); return k.length >= 3 ? k : ''; };
   const amtKey = e => Number(e.amount).toFixed(2);
   function ruleComment(e) {
     const rules = state.settings.commentRules || {}, k = payerKey(e);
@@ -2136,10 +2153,11 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
   }
   // "…/BRANCH : ATM SERVICE BRANCH" (Indian Bank) names the bank's branch, not what the money was for
   const stripBranch = t => String(t || '').replace(/\/?\s*BRANCH\s*:.*$/i, '');
-  function classify(desc, type, noSelf = false) {
+  // noRules: an alert's own wording with no payee in it (see payeeless), which no learned rule is about
+  function classify(desc, type, noSelf = false, noRules = false) {
     const allowed = new Set(catsFor(type).map(c => c.name));
-    const k = merchantKey(desc);
-    const learned = [state.rules[k + '|' + type], state.rules[k]].find(c => c && allowed.has(c));
+    const k = noRules ? '' : merchantKey(desc);
+    const learned = k && [state.rules[k + '|' + type], state.rules[k]].find(c => c && allowed.has(c));
     if (learned) return learned;
     if (!noSelf && allowed.has('Transfer') && isSelf(desc)) return 'Transfer';
     const d = ' ' + stripBranch(desc).toLowerCase().replace(/[_/|*]+/g, ' ') + ' ';
@@ -2422,7 +2440,7 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     $('budget').value = state.settings.budget || '';
     $('reviewMin').value = reviewMin();
     $('selfName').value = state.settings.selfName || '';
-    renderMailStatus();
+    renderMailStatus(); renderAi();
     renderCloudStatus();
     $('autoAdd').checked = !!state.settings.autoAddShared;
     const accts = state.accounts || [];
@@ -2452,12 +2470,12 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
   // ---------- sheets ----------
   function showBg() { $('sheetBg').style.display = 'block'; }
   function closeAll() {
-    imp.tagOnImport = null;
+    imp.tagOnImport = null; imp.replace = null;
     if (imp.newSelf) {   // a statement's holder name taken as yours, but its import was cancelled
       if (state.settings.selfName === imp.newSelf) { state.settings.selfName = ''; selfRe = selfPatterns(); save(); }
       imp.newSelf = '';
     }
-    setTimeout(() => runFolderQueue(), 500);   // statements from the folder wait while a sheet is open
+    setTimeout(() => { runFolderQueue(); aiShowDone(); }, 500);   // statements from the folder, and DeepSeek's readings, wait while a sheet is open
     $('sheet').classList.remove('open'); $('impSheet').classList.remove('open'); $('smsSheet').classList.remove('open'); $('mailSheet').classList.remove('open'); $('catSheet').classList.remove('open');
     $('sheetBg').style.display = 'none'; $('sheetBg').classList.remove('over'); catFromForm = false;
     document.activeElement && document.activeElement.blur();
@@ -2668,7 +2686,7 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
       Object.assign(e, data);
       let msg = 'Updated', extra = '';
       const wasCat = e.category;
-      if (e.ref && data.category !== editingOrigCat && data.note) {
+      if (e.ref && data.category !== editingOrigCat && data.note && !payeeless(e)) {
         const k = learn(data.note, data.category, data.type);
         if (k) extra += ` · will file “${payerName(k)}” under ${data.category}`;
       }
@@ -2709,7 +2727,7 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
       if (ne.comment && CROSS_RE.test(ne.comment)) markCross(ne);
       state.expenses.push(ne);
       updateBalances([ne]);
-      if (pendingRef.startsWith('mail|')) { const m = mailCfg(); m.seen = [...new Set([...(m.seen || []), pendingRef.slice(5)])].slice(-1000); }
+      if (pendingRef.startsWith('mail|')) { ne.byHand = true; const m = mailCfg(); m.seen = [...new Set([...(m.seen || []), pendingRef.slice(5)])].slice(-1000); }   // Re-sync keeps it
       if (ne.utr && mergeUtrPairs()) extra += ' · matched by UPI reference';
       tidyTransfers();
       if (ne.category === 'Transfer' && data.category !== 'Transfer') extra += ' · moved to Transfer (not counted)';
@@ -3761,7 +3779,7 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     const utr = /^\d{12}$/.test(rrn) ? rrn : ((t.match(/\b\d{12}\b/) || [])[0] || '');
     const payment = /\bupi\b|vpa|@/i.test(t) ? 'UPI' : /\batm\b|cash withdrawal|withdrawn/i.test(t) ? 'Cash' : /\bcard\b/i.test(t) ? 'Card' : 'Bank';
     const desc = party ? `${type === 'credit' ? 'From' : 'To'} ${party}${bank ? ' · ' + bank : ''}` : t.slice(0, 120);
-    let cat = classify(party || t, type);
+    let cat = classify(party || t, type, false, !party);
     // "We have received your payment … towards your credit card" is a bill payment, not income
     if (type === 'credit' && /credit ?card|card (ending|no\.?|number|x+|\*)|towards (your )?\w*\s*card/i.test(t) &&
         /payment|received|thank/i.test(t) && catsFor('credit').some(c => c.name === 'Transfer')) cat = 'Transfer';
@@ -3830,10 +3848,10 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     if (Object.keys(shown).length) render();
     toast('Everything in this statement is already in Kharcha' + (Object.keys(shown).length ? ' · ' + taggedMsg(shown) : ''), 3500);
   }
-  function openItemsPreview(items, source, dropExact) {
+  // marked: sorted and checked for duplicates already
+  function openItemsPreview(items, source, dropExact, marked) {
     if (!items.length) return false;
-    items.sort((a, b) => b.date.localeCompare(a.date));
-    markDups(items);
+    if (!marked) { items.sort((a, b) => b.date.localeCompare(a.date)); markDups(items); }
     if (dropExact) items = items.filter(x => x.dup !== 'exact');
     if (!items.length) return false;
     Object.assign(imp, { mode: 'sms', rows: [], items, filter: 'all', acctOverride: '', tagOnImport: null, name: source || `${items.length} message${items.length > 1 ? 's' : ''}` });
@@ -3907,10 +3925,10 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     if (e.target.type === 'checkbox') { x.include = e.target.checked; renderImport(); return; }
     if (e.target.tagName === 'SELECT') {
       x.category = e.target.value; x.touched = true;
-      const k = learn(x.desc, x.category, x.type);
+      const k = payeeless(x) ? '' : learn(x.desc, x.category, x.type);
       let n = 0;
       if (k) imp.items.forEach(y => {
-        if (y !== x && !y.touched && y.type === x.type && merchantKey(y.desc) === k && y.category !== x.category) { y.category = x.category; n++; }
+        if (y !== x && !y.touched && y.type === x.type && merchantKey(y.desc) === k && !payeeless(y) && y.category !== x.category) { y.category = x.category; n++; }
       });
       save();
       renderImport();
@@ -3976,6 +3994,10 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
   }
   $('impGo').addEventListener('click', () => {
     imp.newSelf = '';   // the statement's holder name stays as yours
+    if (imp.replace) {   // Re-sync: the email entries these rows were read again for (one whose row you unticked stays)
+      const old = imp.replace, mine = new Set(imp.items.filter(x => !x.include && !x.match).map(x => x.ref)); imp.replace = null;
+      state.expenses = state.expenses.filter(e => !old.has(e.id) || mine.has(e.ref)); tidyTransfers();
+    }
     if (imp.tagOnImport) { tagSameRecords(imp.tagOnImport); imp.tagOnImport = null; }
     if (imp.mode === 'file' && !imp.acctOverride && imp.stmtAcct.learn) learnDigits(imp.stmtAcct.id, imp.stmtAcct.learn);
     const items = imp.items.filter(x => x.include);
@@ -4485,27 +4507,53 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
   function renderMailStatus() {
     const m = state.settings.mail || {};
     $('mailUrl').value = m.url || '';
-    $('mailStatus').textContent = m.url
-      ? (m.checked ? `Connected · last checked ${new Date(m.checked).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' })}` : 'Connected · not checked yet')
-      : 'Not connected. Connect once and the app looks for bank alert emails each time you open it.';
+    const when = m.checked ? `last checked ${new Date(m.checked).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' })}` : 'not checked yet';
+    $('mailStatus').textContent = !m.url ? 'Not connected. Connect once and the app looks for bank alert emails each time you open it.'
+      : mailErr ? `⚠︎ The last check failed: ${mailErr} (${when})`
+      : `Connected · ${when}` + (m.checked && (m.v || 1) < 2 ? ' · A newer setup script reads more emails at once: copy it again below and redeploy.' : '');
     $('mailHelp').open = !m.url;
   }
-  let mailBusy = false;
-  async function checkMail(silent) {
+  let mailBusy = false, mailErr = '';   // mailErr: why the last check failed (automatic checks are silent)
+  const MAIL_DAYS = 45;   // what Browse and Re-sync read
+  // Alert emails since `after` (seconds; '' = the bridge's own default, 45 days). A bridge from the current setup
+  // script sends 500 threads at most and then says so (more): the older ones are asked for in turn.
+  async function mailFetch(m, after) {
+    const url = m.url + (m.url.includes('?') ? '&' : '?') + 'key=' + encodeURIComponent(m.key) + (after ? '&after=' + after : '');
+    const items = [], ids = new Set();
+    let now = 0, v = 1, before = 0;
+    for (let round = 0; round < 8; round++) {
+      const res = await fetch(url + (before ? '&before=' + before : ''), { redirect: 'follow' });
+      let data;
+      try { data = await res.json(); } catch (e) { throw new Error('The Gmail bridge didn’t answer as expected. Check that it is deployed with access “Anyone”.'); }
+      if (data.error) throw new Error(data.error === 'bad key' ? 'The script has a different key. Copy the setup script again and redeploy.' : data.error);
+      (data.items || []).forEach(e => { if (e && e.id && !ids.has(e.id)) { ids.add(e.id); items.push(e); } });
+      now = now || data.now; v = data.v || 1;
+      if (!data.more || !(data.before > 0) || (before && data.before >= before)) break;
+      before = data.before;
+    }
+    return { items, now, v };
+  }
+  // Re-sync reads an email entry again only if you haven't worked on it: no comment of yours, no category or
+  // group you chose, not added by you from Browse, no refund link, not merged with a statement row or an SMS
+  const mailRedo = e => !e.userCat && !ownComment(e) && e.group === undefined && !e.byHand && !e.refundOf &&
+    !refundedOf(e) && !(e.refs || []).length;
+  // resync: read the last 45 days again with the latest rules; the entries those emails added (see mailRedo)
+  // are replaced once you tap Import, and stay as they are if you cancel
+  async function checkMail(silent, resync) {
     const m = mailCfg();
     if (!m.url) { if (!silent) toast('Paste your Gmail bridge address first'); return; }
     if (mailBusy) return;
     mailBusy = true;
-    if (!silent) toast('Checking email…');
+    if (!silent) toast(resync ? 'Reading your email again…' : 'Checking email…', resync ? 60000 : undefined);
     try {
-      const after = m.cursor ? m.cursor - 2 * 86400 : '';
-      const url = m.url + (m.url.includes('?') ? '&' : '?') + 'key=' + encodeURIComponent(m.key) + (after ? '&after=' + after : '');
-      const res = await fetch(url, { redirect: 'follow' });
-      const data = await res.json();
-      if (data.error) throw new Error(data.error === 'bad key' ? 'The script has a different key. Copy the setup script again and redeploy.' : data.error);
-      const items = [];
-      const seen = new Set(m.seen || []);
-      const fresh = (data.items || []).filter(e => e && e.id && !seen.has(e.id));
+      const got = await mailFetch(m, resync ? Math.floor(Date.now() / 1000) - MAIL_DAYS * 86400 : m.cursor ? m.cursor - 2 * 86400 : '');
+      mailErr = '';
+      if (resync) $('toast').classList.remove('show');
+      const again = new Set(resync ? got.items.map(e => e.id) : []);
+      const drop = new Set(state.expenses.filter(e => { const r = String(e.ref || ''); return r.startsWith('mail|') && again.has(r.slice(5)) && mailRedo(e); }).map(e => e.id));
+      const items = [], copies = new Set();
+      const seen = new Set((m.seen || []).filter(id => !again.has(id)));
+      const fresh = got.items.filter(e => !seen.has(e.id));
       fresh.forEach(e => {
         seen.add(e.id);
         const x = parseSms(e.text, { email: true, fallbackDate: isoDate(new Date(e.date)) });
@@ -4518,19 +4566,38 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
             if (bank) x.desc += ' · ' + bank;
           }
         } else if (e.subject) x.desc = e.subject + ' — ' + x.desc;
+        if (/^\s*(re|fwd?|fw)\s*:/i.test(e.subject || '')) copies.add(x);
         items.push(x);
       });
+      // the same alert twice in one check (your forward or reply that quotes it): the first copy is kept
+      const sameTx = (a, b) => a.type === b.type && Math.abs(a.amount - b.amount) < 0.005 && (a.utr && b.utr ? a.utr === b.utr
+        : a.date === b.date && (a.balance != null && b.balance != null ? Math.abs(a.balance - b.balance) < 0.011 : copies.has(a) || copies.has(b)));
+      const kept = [];
+      items.sort((a, b) => (copies.has(a) ? 1 : 0) - (copies.has(b) ? 1 : 0)).forEach(x => { if (!kept.some(y => sameTx(x, y))) kept.push(x); });
+      if (silent && kept.length && sheetOpen()) return;   // not over a sheet you're using: these come again next time
       m.seen = [...seen].slice(-1000);
-      m.cursor = data.now || Math.floor(Date.now() / 1000);
-      m.checked = Date.now();
+      m.cursor = got.now || Math.floor(Date.now() / 1000);
+      m.checked = Date.now(); m.v = got.v;
       save();
       if (view === 'settings') renderMailStatus();
       const n = fresh.length;
-      if (!openItemsPreview(items, `Gmail · ${n} new alert email${n === 1 ? '' : 's'}`, true)) {
-        if (!silent) toast('No new transactions in email');
-      }
+      // duplicates are looked for as if the entries being replaced were gone already
+      const all = state.expenses;
+      if (drop.size) state.expenses = all.filter(e => !drop.has(e.id));
+      try { kept.sort((a, b) => b.date.localeCompare(a.date)); markDups(kept); } finally { state.expenses = all; }
+      if (openItemsPreview(kept, resync ? `Gmail · ${n} alert email${n === 1 ? '' : 's'} read again` : `Gmail · ${n} new alert email${n === 1 ? '' : 's'}`, true, true)) {
+        if (drop.size) imp.replace = drop;
+      } else if (drop.size) {   // nothing to add back: what they added isn't a transaction by the latest rules
+        state.expenses = state.expenses.filter(e => !drop.has(e.id));
+        tidyTransfers(); save(); render();
+        toast(`Removed ${drop.size} entr${drop.size === 1 ? 'y' : 'ies'} that the latest rules don’t read as transactions`, 5000);
+      } else if (!silent) toast('No new transactions in email');
     } catch (err) {
-      if (!silent) toast(err && err.message && err.message.length > 25 ? err.message : 'Could not reach the Gmail bridge. Check the address.');
+      const msg = err && err.message && err.message.length > 25 ? err.message : 'Could not reach the Gmail bridge. Check the address.';
+      // an automatic check says once what is wrong with the bridge (not when the phone is just offline)
+      if (!silent || (msg !== mailErr && !(err instanceof TypeError))) toast(silent ? '✉️ Gmail: ' + msg : msg, silent ? 6000 : undefined);
+      mailErr = msg;
+      if (view === 'settings') renderMailStatus();
     } finally { mailBusy = false; }
   }
   $('mailUrl').addEventListener('change', e => {
@@ -4548,7 +4615,7 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     if (!x) {
       const amount = Math.round(smsAmount(String(e.text)) * 100) / 100;
       x = { type: 'debit', amount: amount > 0 ? amount : 0, date: fallbackDate, payment: 'Bank', desc: '',
-            category: classify(e.subject + ' ' + e.text, 'debit'), ...(m => ({ account: m.id, ...(m.learn ? { learn: m.learn } : {}) }))(matchAccount(e.text)) };
+            category: classify(e.subject + ' ' + e.text, 'debit', false, true), ...(m => ({ account: m.id, ...(m.learn ? { learn: m.learn } : {}) }))(matchAccount(e.text)) };
     }
     if (!/ · /.test(x.desc || '') && (x.desc || '').match(/^(To|From) /)) {
       const sender = String(e.from || '').replace(/<.*>/, '').replace(/["']/g, '').trim();
@@ -4559,7 +4626,13 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
   }
   function renderMailList() {
     const q = $('mailFilter').value.trim().toLowerCase();
-    const refs = new Set(state.expenses.map(t => t.ref).filter(Boolean));
+    // in Kharcha already: added from this email (or merged into another entry), or the same payment from an SMS or statement
+    const stamp = `${dataStamp}|${mailBrowse.loaded}|${state.expenses.length}`;
+    if (mailBrowse.lookAt !== stamp) {   // not again for each letter typed in the filter
+      mailBrowse.look = mailBrowse.items.map(it => ({ ...it.x, ref: 'mail|' + it.e.id }));
+      markDups(mailBrowse.look); mailBrowse.lookAt = stamp;
+    }
+    const look = mailBrowse.look;
     const rows = mailBrowse.items
       .map((it, i) => ({ it, i }))
       .filter(({ it }) => !q || [it.e.subject, it.e.from, it.e.text, it.x.desc, String(it.x.amount)].join(' ').toLowerCase().includes(q));
@@ -4567,18 +4640,18 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
       ? `${mailBrowse.items.length} alert email${mailBrowse.items.length > 1 ? 's' : ''} from the last 45 days`
       : 'No bank alert emails found in the last 45 days.';
     $('mailList').innerHTML = rows.map(({ it, i }) => {
-      const added = refs.has('mail|' + it.e.id);
+      const d = look[i], added = d.dup === 'exact', there = d.dup === 'utr' || d.dup === 'balance';
       const sender = String(it.e.from || '').replace(/<.*>/, '').replace(/["']/g, '').trim();
       const when = new Date(it.e.date).toLocaleDateString(undefined, { day: 'numeric', month: 'short' });
       const amt = it.x.amount ? `<b>${it.x.type === 'credit' ? '+' : '−'}${fmt(it.x.amount)}</b> · ${esc(it.x.desc.replace(/^(To|From) /, ''))}` : 'No amount found';
-      return `<div class="mrow ${added ? 'done' : ''}">
+      return `<div class="mrow ${added || there ? 'done' : ''}">
         <div style="min-width:0">
           <div class="subj">${esc(it.e.subject || '(no subject)')}</div>
           <div class="meta">${esc(sender)} · ${when}</div>
           <div class="snip">${esc(it.e.text)}</div>
           <div class="parsed ${it.x.type === 'credit' ? 'credit' : 'debit'}">${amt}${it.skipped ? '<span class="tag warn">skipped by auto-sync</span>' : ''}</div>
         </div>
-        ${added ? '<span class="tag">Added ✓</span>' : `<button class="chip sel" data-madd="${i}">Add</button>`}
+        ${added ? '<span class="tag">Added ✓</span>' : there ? '<span class="tag">In Kharcha ✓</span>' : `<button class="chip sel" data-madd="${i}">Add</button>`}
       </div>`;
     }).join('') || '<div class="empty">Nothing matches.</div>';
   }
@@ -4590,11 +4663,8 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     if (!refresh && mailBrowse.items.length && Date.now() - mailBrowse.loaded < 10 * 60e3) { renderMailList(); return; }
     $('mailInfo').textContent = 'Loading emails…'; $('mailList').innerHTML = '';
     try {
-      const after = Math.floor(Date.now() / 1000) - 45 * 86400;
-      const url = m.url + (m.url.includes('?') ? '&' : '?') + 'key=' + encodeURIComponent(m.key) + '&after=' + after;
-      const data = await (await fetch(url, { redirect: 'follow' })).json();
-      if (data.error) throw new Error(data.error === 'bad key' ? 'The script has a different key. Copy the setup script again and redeploy.' : data.error);
-      mailBrowse.items = (data.items || []).filter(e => e && e.id).map(mailEntryFor)
+      const data = await mailFetch(m, Math.floor(Date.now() / 1000) - MAIL_DAYS * 86400);
+      mailBrowse.items = data.items.map(mailEntryFor)
         .sort((a, b) => String(b.e.date).localeCompare(String(a.e.date)));
       mailBrowse.loaded = Date.now();
       renderMailList();
@@ -4604,7 +4674,9 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
   }
   $('mailList').addEventListener('click', ev => {
     const b = ev.target.closest('[data-madd]'); if (!b) return;
-    const it = mailBrowse.items[+b.dataset.madd];
+    const it = mailBrowse.items[+b.dataset.madd], d = (mailBrowse.look || [])[+b.dataset.madd];
+    const same = d && d.dup === 'maybe' && state.expenses.find(e => e.id === d.match);
+    if (same && !confirm(`Kharcha already has ${fmt(same.amount)} on ${dShort(same.date)}${same.note ? ` (${String(same.note).slice(0, 60)})` : ''}. Add this email as another entry?`)) return;
     closeAll();
     if (!it.x.account && it.x.acctDigits) { ensureAccounts([it.x]); save(); }
     openSheet(null, { ...it.x, note: it.x.desc, ref: 'mail|' + it.e.id });
@@ -4618,12 +4690,9 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
   $('mailResync').addEventListener('click', () => {
     const m = mailCfg();
     if (!m.url) { toast('Connect Gmail first'); return; }
-    const n = state.expenses.filter(e => String(e.ref || '').startsWith('mail|')).length;
-    if (!confirm(`Remove ${n} entr${n === 1 ? 'y' : 'ies'} added from Gmail and check the last 45 days again with the latest rules? Category changes made to those entries will be lost.`)) return;
-    state.expenses = state.expenses.filter(e => !String(e.ref || '').startsWith('mail|'));
-    m.seen = []; m.cursor = 0; m.checked = 0;
-    save(); render();
-    checkMail(false);
+    if (mailBusy) { toast('Kharcha is checking your email. Try again in a moment.'); return; }
+    if (!confirm(`Read the last ${MAIL_DAYS} days of email again with the latest rules?\n\nEntries from those emails are replaced when you tap Import. Ones you commented on, recategorised, added from Browse or that were matched with a statement or SMS stay as they are.`)) return;
+    checkMail(false, true);
   });
   $('mailScript').addEventListener('click', async () => {
     const script = $('gmailScriptTpl').textContent.replace('__KEY__', mailCfg().key);
@@ -4708,7 +4777,7 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
       if (!wiped && baseN > 20 && localN < baseN / 2) { base = null; restored = Math.max(0, remote.expenses.length - localN); }
       state = migrate(merge3(base, state, migrate(remote)));
       followCatAliases();
-      if (JSON.stringify(state) !== before) { saveLocal(); render(); }
+      if (JSON.stringify(state) !== before) { saveLocal(); render(); renderAi(); }
       if (restored) toast(`☁️ This iPhone had lost entries — restored ${restored} from iCloud`, 6000);
     }
     const merged = JSON.stringify(state);
@@ -4769,14 +4838,16 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
   }
   const aiCatList = () => `Debit categories: ${catsFor('debit').map(c => c.name).join(', ')}. Credit categories: ${catsFor('credit').map(c => c.name).join(', ')}.`;
   const AI_EXTRACT = () => `You extract money transactions from Indian bank / UPI / card SMS, emails and account statements for the owner of the account.
-Reply with JSON only: {"transactions":[{"date":"YYYY-MM-DD","type":"debit" or "credit","amount":number,"party":"merchant or person, short","account":"last digits of the owner's account or card, or empty","bank":"bank name or empty","utr":"12-digit UPI reference or empty","balance":number or null,"category":"..."}]}
-Rules: include only completed transactions — skip OTPs, offers, ads, due/bill reminders, failed or declined payments, requests and mandates. "type" is from the owner's side (money out = debit, money in = credit). Amount in rupees, positive. If the year is missing assume the most recent past date; today is ${isoDate(new Date())}. balance = closing/available balance after the transaction if shown. category must be one of — ${aiCatList()} If nothing qualifies return {"transactions":[]}.`;
+Reply with JSON only: {"transactions":[{"date":"YYYY-MM-DD","type":"debit" or "credit","amount":number,"party":"merchant or person, short","account":"last digits of the owner's account or card, or empty","kind":"card" for a credit card, else "bank","bank":"bank name or empty","utr":"12-digit UPI reference or empty","balance":number or null,"category":"..."}]}
+Rules: include only completed transactions — skip OTPs, offers, ads, due/bill reminders, failed or declined payments, requests and mandates. "type" is from the owner's side (money out = debit, money in = credit). Amount in rupees, positive. If the year is missing assume the most recent past date; today is ${isoDate(new Date())}. balance = closing/available balance after the transaction if shown (null for a credit card). category must be one of — ${aiCatList()} If nothing qualifies return {"transactions":[]}.`;
+  // a number DeepSeek may send as text: "Rs.1,500.00", "₹ 1,23,456.78"
+  const aiNum = v => { const m = String(v == null ? '' : v).replace(/,/g, '').match(/-?\d+(?:\.\d+)?/); return m ? parseFloat(m[0]) : NaN; };
   function aiItems(list) {
     const out = [];
     (Array.isArray(list) ? list : []).forEach(t => {
       if (!t || typeof t !== 'object') return;
       const type = /^c/i.test(String(t.type)) ? 'credit' : 'debit';
-      const amount = Math.round(Math.abs(parseFloat(String(t.amount).replace(/[^\d.\-]/g, ''))) * 100) / 100;
+      const amount = Math.round(Math.abs(aiNum(t.amount)) * 100) / 100;
       const date = parseDate(t.date, 'dmy');
       if (!date || !(amount > 0) || date > isoDate(new Date(Date.now() + 864e5))) return;
       const party = String(t.party || '').replace(/\s+/g, ' ').trim().slice(0, 60);
@@ -4786,34 +4857,50 @@ Rules: include only completed transactions — skip OTPs, offers, ads, due/bill 
       const utr = /^\d{12}$/.test(String(t.utr || '').trim()) ? String(t.utr).trim() : '';
       let category = classify(party || bank, type);
       if ((category === 'Other' || category === 'Other Income') && catsFor(type).some(c => c.name === t.category)) category = t.category;
-      const bal = parseFloat(t.balance);
+      const card = /card/i.test(String(t.kind || ''));
+      const bal = card ? NaN : aiNum(t.balance);   // a card's "available" amount is its limit, not a balance
       out.push({ date, desc: (party ? `${type === 'credit' ? 'From' : 'To'} ${party}` : 'Transaction') + (bank ? ' · ' + bank : ''),
         type, amount, payment: utr ? 'UPI' : 'Bank', category, touched: false, utr, ai: true,
-        account: acct.account, acctDigits: acct.account ? '' : acct.acctDigits, acctBank: bank, acctKind: 'bank',
+        account: acct.account, acctDigits: acct.account ? '' : acct.acctDigits, acctBank: bank, acctKind: card ? 'card' : 'bank',
         balance: isFinite(bal) ? bal : undefined, seq: 0,
         ref: utr ? `upi|${utr}|${type}|${amount.toFixed(2)}` : `ai|${date}|${type}|${amount.toFixed(2)}|${party.toLowerCase()}` });
     });
     return out;
   }
   let aiBusy = false;
+  const aiQueue = [], aiDone = [];   // what arrived while DeepSeek was busy; readings waiting for an open sheet to close
+  function aiFree(wait = 50) {   // DeepSeek is free again: read what arrived meanwhile
+    aiBusy = false;
+    if (aiQueue.length) setTimeout(() => { if (!aiBusy && aiQueue.length) aiReadLines(...aiQueue.shift()); }, wait);
+  }
+  function aiShowDone() {
+    while (aiDone.length && !sheetOpen()) {
+      const [items, label] = aiDone.shift();
+      if (openItemsPreview(items, `🤖 DeepSeek · ${label}`, true)) return;
+      toast('Everything here is already in Kharcha', 3500);
+    }
+  }
   // lines: text lines (SMS, PDF lines or spreadsheet rows); context: statement header sent with every part
   async function aiReadLines(lines, label, context = '') {
-    if (aiBusy) { toast('DeepSeek is still working…'); return; }
+    if (aiBusy) { aiQueue.push([lines, label, context]); toast(`DeepSeek is still working · it reads ${label} next`, 3500); return; }
     lines = lines.map(l => String(l).trim()).filter(Boolean);
     const parts = [];
     for (let i = 0, cur = [], size = 0; i < lines.length; i++) {
       cur.push(lines[i]); size += lines[i].length;
       if (cur.length >= 70 || size > 7000 || i === lines.length - 1) { parts.push(cur.join('\n')); cur = []; size = 0; }
     }
-    if (!parts.length) { toast('Nothing to read'); return; }
-    if (parts.length > 3 && !confirm(`DeepSeek will read “${label}” in ${parts.length} parts (about ${Math.ceil(parts.length * 0.4)} min). Continue?`)) return;
+    if (!parts.length) { toast('Nothing to read'); aiFree(); return; }
+    if (parts.length > 3 && !confirm(`DeepSeek will read “${label}” in ${parts.length} parts (about ${Math.ceil(parts.length * 0.4)} min). Continue?`)) { aiFree(); return; }
     aiBusy = true;
     let uniq;
     try { uniq = await aiExtractParts(parts, label, context); }
-    catch (e) { aiBusy = false; toast(e.message, 5000); return; }
-    aiBusy = false;
+    catch (e) { aiFree(5000); toast(e.message, 5000); return; }
+    aiFree();
     $('toast').classList.remove('show');
-    if (!openItemsPreview(uniq, `🤖 DeepSeek · ${label}`, true)) toast(uniq.length ? 'Everything here is already in Kharcha' : 'DeepSeek found no transactions in it', 3500);
+    if (!uniq.length) { toast('DeepSeek found no transactions in it', 3500); return; }
+    aiDone.push([uniq, label]);
+    if (sheetOpen()) toast(`🤖 DeepSeek has read ${label}. It opens for review when you close this.`, 5000);   // not over what you're doing
+    else aiShowDone();
   }
   function aiSplit(lines) {
     lines = lines.map(l => String(l).trim()).filter(Boolean);
@@ -4825,15 +4912,30 @@ Rules: include only completed transactions — skip OTPs, offers, ads, due/bill 
     return parts;
   }
   async function aiExtractParts(parts, label, context = '') {
-    const items = [];
+    const items = [], key = x => `${x.date}|${x.type}|${x.amount}|${x.utr || x.desc}|${x.balance ?? ''}`;
+    let prev = [];
     for (let i = 0; i < parts.length; i++) {
       toast(`🤖 DeepSeek is reading ${label}${parts.length > 1 ? ` · part ${i + 1} of ${parts.length}` : ''}…`, 600000);
       const j = await aiJson(AI_EXTRACT(), (context ? `Statement header (for context, not transactions):\n${context}\n\n` : '') + `Text:\n${parts[i]}`);
-      items.push(...aiItems(j.transactions));
+      // a row cut in two where the text was split can come back from both parts (as the last of one and the first
+      // of the next); the same charge twice within a part is two real transactions
+      const tail = prev.slice(-2).map(key);
+      const got = aiItems(j.transactions).filter((x, k) => { const t = k < 2 ? tail.indexOf(key(x)) : -1; if (t < 0) return true; tail.splice(t, 1); return false; });
+      items.push(...got); prev = got;
     }
-    // the same transaction can appear twice when a statement is split into parts
-    const seen = new Set();
-    return items.filter(x => { const k = `${x.date}|${x.type}|${x.amount}|${x.utr || x.desc}|${x.balance ?? ''}`; if (seen.has(k)) return false; seen.add(k); return true; });
+    // file order, as for other statements: later rows get the higher seq (the first rows when it is listed newest
+    // first), so the account takes the day's last balance
+    const signed = x => x.type === 'credit' ? x.amount : -x.amount;
+    let fwd = 0, rev = 0;
+    for (let i = 1; i < items.length; i++) {
+      const a = items[i - 1], b = items[i]; if (a.balance == null || b.balance == null) continue;
+      if (Math.abs(a.balance + signed(b) - b.balance) < 0.011) fwd++;
+      if (Math.abs(b.balance + signed(a) - a.balance) < 0.011) rev++;
+    }
+    const span = items.length ? items[0].date.localeCompare(items[items.length - 1].date) : 0;
+    const newestFirst = span ? span > 0 : rev > fwd, run = Date.now().toString(36) + '.' + (++stmtRuns);
+    items.forEach((x, i) => { x.seq = newestFirst ? -i : i; x.run = run; });
+    return items;
   }
   const rowsToLines = rows => rows.map(r => r.map(c => c instanceof Date ? parseDate(c) : String(c ?? '').trim()).filter(Boolean).join(' | '));
   function rowsContext(rows) {
@@ -4842,8 +4944,13 @@ Rules: include only completed transactions — skip OTPs, offers, ads, due/bill 
   }
   // Pick categories for "Other" entries; answers are remembered as rules so next time it works offline.
   async function aiCategorise(list, onDone) {
+    // a payee you filed under Other yourself stays there (that choice is its rule)
+    const ownOther = x => { const k = merchantKey(x.desc || x.note);
+      return /^Other/.test([state.rules[k + '|' + x.type], state.rules[k]].find(c => c && catsFor(x.type).some(z => z.name === c)) || ''); };
+    list = list.filter(x => payeeless(x) || !ownOther(x));
+    // one question per payee; an alert that names none is asked about on its own and teaches no rule
     const groups = new Map();
-    list.forEach(x => { const k = merchantKey(x.desc || x.note) || String(x.desc || x.note).toUpperCase(); if (!groups.has(k)) groups.set(k, []); groups.get(k).push(x); });
+    list.forEach((x, i) => { const k = payeeless(x) ? '#' + i : merchantKey(x.desc || x.note) || String(x.desc || x.note).toUpperCase(); if (!groups.has(k)) groups.set(k, []); groups.get(k).push(x); });
     const keys = [...groups.keys()].slice(0, 200);
     if (!keys.length) { toast('Nothing uncategorised'); return; }
     if (aiBusy) { toast('DeepSeek is still working…'); return; }
@@ -4853,8 +4960,8 @@ Rules: include only completed transactions — skip OTPs, offers, ads, due/bill 
     try {
       j = await aiJson(`You categorise Indian bank / UPI transactions by payee. ${aiCatList()} Reply with JSON only: {"c":{"<number>":"<category>"}}. Use the category list for the entry's type exactly; use "Other" / "Other Income" only when you really cannot tell. Person names with no other clue: "Other". Money between the owner's own accounts, wallets or brokers' fund transfers: "Transfer". Stocks, mutual funds, SIP, gold, brokers (Zerodha, Upstox, Groww): "Investment".`,
         keys.map((k, i) => { const x = groups.get(k)[0]; return `${i}. ${x.type} ₹${x.amount} — ${String(x.desc || x.note).slice(0, 90)}${x.comment ? ' (note: ' + String(x.comment).slice(0, 40) + ')' : ''}`; }).join('\n'));
-    } catch (e) { aiBusy = false; toast(e.message, 5000); return; }
-    aiBusy = false;
+    } catch (e) { aiFree(5000); toast(e.message, 5000); return; }
+    aiFree();
     let n = 0;
     keys.forEach((k, i) => {
       const cat = (j.c || {})[i] ?? (j.c || {})[String(i)];
@@ -4863,7 +4970,7 @@ Rules: include only completed transactions — skip OTPs, offers, ads, due/bill 
         x.category = cat; n++;
       });
       const x0 = groups.get(k)[0];
-      if (cat && catsFor(x0.type).some(c => c.name === cat) && !/^Other/.test(cat)) learn(x0.desc || x0.note, cat, x0.type);
+      if (cat && catsFor(x0.type).some(c => c.name === cat) && !/^Other/.test(cat) && !payeeless(x0)) learn(x0.desc || x0.note, cat, x0.type);
     });
     onDone(n);
   }
@@ -4877,9 +4984,11 @@ Rules: include only completed transactions — skip OTPs, offers, ads, due/bill 
     const user = `Monthly totals (all data, excluding transfers): ${Object.keys(months).sort().map(m => `${m}: out ₹${Math.round(months[m].out)}, in ₹${Math.round(months[m].in)}`).join('; ')}\n\nEntries (date | in/out | amount | category [group] | account | description | user note), newest first${rows.length >= 1500 ? ', most recent 1500 only' : ''}:\n${data}\n\nQuestion: ${q}`;
     return aiRaw({ model: aiCfg().model || 'deepseek-chat', temperature: 0.2, max_tokens: 1500, messages: [{ role: 'system', content: sys }, { role: 'user', content: user }] });
   }
+  let aiKeyShown = '';   // the key the field was last filled with (a new one you are typing is left alone)
   function renderAi() {
     const c = aiCfg();
-    $('aiKey').value = c.key || ''; $('aiModel').value = c.model || 'deepseek-chat';
+    if ($('aiKey').value === aiKeyShown) $('aiKey').value = c.key || '';
+    aiKeyShown = c.key || ''; $('aiModel').value = c.model || 'deepseek-chat';
     $('aiStatus').textContent = c.key ? (c.ok ? '✓ Connected. Used automatically when Kharcha can’t read something.' : 'Key saved, not tested yet.') : 'Not set up.';
     ['aiCat', 'aiRemove'].forEach(id => $(id).classList.toggle('hidden', !c.key));
     $('askCard').classList.toggle('hidden', !c.key);
@@ -4896,9 +5005,10 @@ Rules: include only completed transactions — skip OTPs, offers, ads, due/bill 
   $('aiModel').addEventListener('change', e => { if (state.settings.ai) { state.settings.ai.model = e.target.value; save(); } });
   $('aiRemove').addEventListener('click', () => { if (!confirm('Remove the DeepSeek key from Kharcha?')) return; delete state.settings.ai; save(); renderAi(); $('askOut').innerHTML = ''; });
   $('aiCat').addEventListener('click', () => {
-    const list = state.expenses.filter(e => (e.category === 'Other' || e.category === 'Other Income'));
+    const list = state.expenses.filter(e => (e.category === 'Other' || e.category === 'Other Income') && !e.userCat);   // not ones you filed there
     if (!list.length) { toast('No “Other” entries to categorise'); return; }
-    aiCategorise(list, n => { save(); render(); toast(n ? `🤖 Categorised ${n} entr${n > 1 ? 'ies' : 'y'} — DeepSeek's choices are remembered for next time` : 'DeepSeek could not tell these apart', 4000); });
+    // tidyTransfers: entries now filed as Transfer or Investment no longer need review
+    aiCategorise(list, n => { tidyTransfers(); save(); render(); toast(n ? `🤖 Categorised ${n} entr${n > 1 ? 'ies' : 'y'} — DeepSeek's choices are remembered for next time` : 'DeepSeek could not tell these apart', 4000); });
   });
   $('askGo').addEventListener('click', async () => {
     const q = $('askText').value.trim(); if (!q) { $('askText').focus(); return; }
@@ -4908,7 +5018,7 @@ Rules: include only completed transactions — skip OTPs, offers, ads, due/bill 
       const a = await aiAsk(q);
       $('askOut').innerHTML = esc(a.trim()).replace(/\*\*(.+?)\*\*/g, '<b>$1</b>').replace(/^#+\s*/gm, '').replace(/\n/g, '<br>');
     } catch (e) { $('askOut').textContent = '⚠︎ ' + e.message; }
-    aiBusy = false; $('askGo').disabled = false;
+    aiFree(); $('askGo').disabled = false;
   });
   renderAi();
 
@@ -5135,7 +5245,7 @@ Rules: include only completed transactions — skip OTPs, offers, ads, due/bill 
   if (loadProblem) toast('⚠︎ Kharcha couldn’t read its saved data, so nothing will be saved until it is restored. Settings › Data › Automatic backups.', 10000);
   const autoMail = () => {
     const m = state.settings.mail;
-    if (m && m.url && Date.now() - (m.checked || 0) > 36e5 && !$('impSheet').classList.contains('open')) checkMail(true);
+    if (m && m.url && Date.now() - (m.checked || 0) > 36e5 && !sheetOpen()) checkMail(true);
   };
   setTimeout(autoMail, 800);
   document.addEventListener('visibilitychange', () => { if (!document.hidden) autoMail(); });
