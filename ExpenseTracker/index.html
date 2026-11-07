@@ -1846,8 +1846,8 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     }
     return lines;
   }
-  // Account used for a PhonePe payment: "XXXXXX9226", "XXXXXXXXXX38" (only 2 digits shown), "Wallet".
-  function phonePeAccount(instrument) {
+  // Account a UPI-app payment used: "XXXXXX9226", "XXXXXXXXXX38" (only 2 digits shown), "0007", "Wallet".
+  function upiAccount(instrument) {
     const ins = String(instrument || '').trim();
     if (/wallet/i.test(ins)) {
       const w = (state.accounts || []).find(a => a.kind === 'wallet' && /phonepe/i.test(a.name));
@@ -1859,16 +1859,18 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     return { account: hits.length === 1 ? hits[0].id : '', acctDigits: d.slice(-4), walletName: '' };
   }
   const APP_LABEL = { phonepe: 'PhonePe', gpay: 'GPay', paytm: 'Paytm' };
-  function makePhonePeItem({ date, details, txnId, utr, type, instrument, amount, app = 'phonepe', bank = '' }) {
+  // One payment from a UPI app statement (PhonePe, Google Pay). transfer: money between your own
+  // accounts (self transfer, wallet top-up); bankSure: the statement names the paying bank.
+  function makeUpiAppItem({ date, details, txnId, utr, type, instrument, amount, app = 'phonepe', bank = '', bankSure = false, transfer = false, card = false }) {
     details = String(details || '').replace(/\s+/g, ' ').trim();
     utr = String(utr || '').replace(/\D/g, '');
     const party = (details.match(/^(?:Paid to|Received from|Sent to|Payment to|Transfer(?:red)? (?:to|from))\s+(.+)$/i) || [])[1] || '';
-    const acct = phonePeAccount(instrument);
+    const acct = upiAccount(instrument);
     let category = classify(party || details, type);
-    if (/wallet top-?up/i.test(details) && catsFor(type).some(c => c.name === 'Transfer')) category = 'Transfer';   // bank → PhonePe wallet
+    if ((transfer || /wallet top-?up/i.test(details)) && catsFor(type).some(c => c.name === 'Transfer')) category = 'Transfer';   // e.g. bank → PhonePe wallet
     const note = (party ? `${type === 'credit' ? 'From' : 'To'} ${party}` : details || APP_LABEL[app]) + (utr ? ` · UTR ${utr}` : '') + ' · ' + APP_LABEL[app];
     return { date, desc: note, type, amount, app, payment: acct.walletName ? 'Wallet' : 'UPI', walletName: acct.walletName,
-      category, touched: false, utr, account: acct.account, acctDigits: acct.account ? '' : acct.acctDigits, acctBank: bank, acctKind: 'bank',
+      category, touched: false, utr, account: acct.account, acctDigits: acct.account ? '' : acct.acctDigits, acctBank: bank, acctKind: card ? 'card' : 'bank', bankSure,
       utrSure: !!utr,   // printed by the app as the UPI reference
       ref: utr ? `upi|${utr}|${type}|${amount.toFixed(2)}` : `${app}|${txnId || date + '|' + amount.toFixed(2) + '|' + details}` };
   }
@@ -1892,39 +1894,44 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
       const date = parseDate(r[c.date], 'dmy'); if (!date) return;
       const amount = Math.round(Math.abs(parseAmount(r[c.amt])) * 100) / 100; if (!(amount > 0)) return;
       const type = /^cr/i.test(String(r[c.type]).trim()) ? 'credit' : 'debit';
-      items.push(makePhonePeItem({ date, details: r[c.details], txnId: r[c.id], utr: r[c.utr], type, instrument: r[c.ins], amount }));
+      items.push(makeUpiAppItem({ date, details: r[c.details], txnId: r[c.id], utr: r[c.utr], type, instrument: r[c.ins], amount }));
     });
     return items;
   }
   // Google Pay statement PDF: "03 May, 2026 Paid to X ₹1,700" / "06:23 AM UPI Transaction ID: 648906570936"
   // / "Paid by Union Bank of India 0007". The UPI transaction ID is the 12-digit reference banks print too.
   const isGPay = lines => { const t = lines.join(' '); return /google pay/i.test(t) && /UPI Transaction ID/i.test(t); };
+  // Records are anchored on the "UPI Transaction ID" line (exactly one per payment) rather than on
+  // line order, so a date or details cell that the PDF reader puts a line early or late still lands
+  // in the right payment: the date and "Paid to … ₹amount" closest before the anchor, "Paid by …"
+  // right after it.
   function parseGPay(lines) {
-    const DATE = /^(\d{1,2}) ([A-Z][a-z]{2}),? (\d{4})\b/;
-    const recs = []; let cur = null;
-    lines.forEach(l => {
-      if (DATE.test(l)) { cur = { lines: [l] }; recs.push(cur); }
-      else if (cur && !/^(Note:|Page \d|Transaction statement|Date & time|\d{10}, )/i.test(l)) cur.lines.push(l);
-    });
+    const DATE = /(\d{1,2}) ([A-Z][a-z]{2}),? (\d{4})/g;
+    const WHAT = /\b(Paid to|Sent to|Self transfer to|Received from|Refund from|Self transfer from)\s+(.+?)\s*[+\-−]?\s*₹\s*([\d,]+(?:\.\d{1,2})?)/gi;
+    const WHAT1 = new RegExp(WHAT.source, 'i');   // for .test(): no lastIndex state
+    const BY = /\b(?:Paid by|Received in|Credited to|Paid from)\s+(.+?)\s+(\d{2,6})\b/i;
+    const NOISE = /^(Note:|Page \d|Transaction statement|Date & time|\d{10}, )/i;
+    const anchors = [];
+    lines.forEach((l, i) => { if (/UPI Transaction ID/i.test(l)) anchors.push(i); });
+    const last = (re, text) => { let m, out = null; re.lastIndex = 0; while ((m = re.exec(text))) out = m; return out; };
     const items = [];
-    recs.forEach(r => {
-      const t = r.lines.join(' ').replace(/\s+/g, ' ');
-      const utr = (t.match(/UPI Transaction ID\s*:?\s*(\d{8,})/i) || [])[1];
-      const what = t.match(/\b(Paid to|Sent to|Self transfer to|Received from|Refund from|Self transfer from)\s+(.+?)\s*[+\-−]?\s*₹\s*([\d,]+(?:\.\d{1,2})?)/i);
-      if (!utr || !what) return;   // header lines ("01 May 2026 - 31 October 2026 ₹…") are not transactions
-      const dm = t.match(DATE);
+    anchors.forEach((k, n) => {
+      const from = n ? anchors[n - 1] + 1 : 0;
+      // lines before the anchor, minus the previous payment's "Paid by" and page furniture
+      const before = lines.slice(from, k + 1).filter(l => !NOISE.test(l) && !(BY.test(l) && !WHAT1.test(l))).join(' ').replace(/\s+/g, ' ');
+      const after = lines.slice(k, Math.min(k + 3, n + 1 < anchors.length ? anchors[n + 1] : lines.length)).join(' ');
+      const utr = (lines[k].match(/UPI Transaction ID\s*:?\s*(\d{8,})/i) || [])[1];
+      const what = last(WHAT, before), dm = last(DATE, before);
+      if (!utr || !what || !dm) return;
       const date = parseDate(`${dm[1]} ${dm[2]} ${dm[3]}`, 'dmy');
       const amount = Math.round(parseFloat(what[3].replace(/,/g, '')) * 100) / 100;
       if (!date || !(amount > 0)) return;
       const type = /received|refund|transfer from/i.test(what[1]) ? 'credit' : 'debit';
-      // "Paid by Union Bank of India 0007" / "Received in ICICI Bank 7238"
-      const by = t.match(/\b(?:Paid by|Received in|Credited to|Paid from)\s+(.+?)\s+(\d{2,6})\b/i);
-      const details = (/^self transfer/i.test(what[1]) ? (type === 'credit' ? 'Transfer from ' : 'Transfer to ') : (type === 'credit' ? 'Received from ' : 'Paid to ')) + what[2];
-      const it = makePhonePeItem({ date, details, utr, type, instrument: by ? by[2] : '', amount, app: 'gpay', bank: by ? by[1].trim() : '' });
-      it.bankSure = !!by;   // the statement itself names the paying bank
-      if (by && /credit card|\bcard\b/i.test(by[1])) it.acctKind = 'card';
-      if (/^self transfer/i.test(what[1]) && catsFor(type).some(c => c.name === 'Transfer')) it.category = 'Transfer';
-      items.push(it);
+      const self = /^self transfer/i.test(what[1]);
+      const by = after.match(BY);   // "Paid by Union Bank of India 0007" / "Received in ICICI Bank 7238"
+      const details = (self ? (type === 'credit' ? 'Transfer from ' : 'Transfer to ') : (type === 'credit' ? 'Received from ' : 'Paid to ')) + what[2];
+      items.push(makeUpiAppItem({ date, details, utr, type, instrument: by ? by[2] : '', amount, app: 'gpay',
+        bank: by ? by[1].trim() : '', bankSure: !!by, transfer: self, card: !!by && /credit card|\bcard\b/i.test(by[1]) }));
     });
     return items;
   }
@@ -1958,7 +1965,7 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
       const utr = (t.match(/UTR\s*No\.?\s*:?\s*([0-9]{8,})/i) || [])[1] || '';
       const txnId = (t.match(/Transaction ID\s*:?\s*([A-Z0-9]{8,})/i) || [])[1] || '';
       const am2 = t.match(/(?:Paid by|Debited from|Credited to|Received in)\s+(?:a\/c\s*)?((?:x+|\*+)?\s*\d{2,6}|(?:PhonePe\s+)?Wallet)\b/i);
-      items.push(makePhonePeItem({ date, details: party ? desc : desc, txnId, utr, type, instrument: am2 ? am2[1] : '', amount }));
+      items.push(makeUpiAppItem({ date, details: party ? desc : desc, txnId, utr, type, instrument: am2 ? am2[1] : '', amount }));
     });
     return items;
   }
@@ -3185,7 +3192,7 @@ Rules: include only completed transactions — skip OTPs, offers, ads, due/bill 
       const party = String(t.party || '').replace(/\s+/g, ' ').trim().slice(0, 60);
       const bank = String(t.bank || '').trim().slice(0, 30);
       const digits = String(t.account || '').replace(/\D/g, '');
-      const acct = digits.length >= 2 ? phonePeAccount(digits) : { account: '', acctDigits: '' };
+      const acct = digits.length >= 2 ? upiAccount(digits) : { account: '', acctDigits: '' };
       const utr = /^\d{12}$/.test(String(t.utr || '').trim()) ? String(t.utr).trim() : '';
       let category = classify(party || bank, type);
       if ((category === 'Other' || category === 'Other Income') && catsFor(type).some(c => c.name === t.category)) category = t.category;
