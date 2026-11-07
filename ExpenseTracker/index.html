@@ -379,11 +379,17 @@
     <div class="filters" id="amtBar" style="margin:-4px 0 4px"></div>
     <div class="sub" id="filterSummary" style="margin:0 4px 6px"></div>
     <div class="card hidden" id="payerBanner" style="padding:12px 14px"></div>
+    <button type="button" class="card hidden" id="needsBanner" style="width:100%;text-align:left;padding:10px 14px;font-size:14px;cursor:pointer;border:none;color:var(--text)"></button>
     <div id="list"></div>
   </section>
 
   <!-- Summary view -->
   <section id="view-summary" class="hidden">
+    <div class="card hidden" id="needsCard">
+      <h2>📋 Statements to add</h2>
+      <div class="sub" style="margin-bottom:6px">Kharcha checks your records and asks for the statements that would complete them. Import one with 📥, or save it in your statement folder.</div>
+      <div id="needsList"></div>
+    </div>
     <div class="card hidden" id="balCard">
       <h2>Account balances</h2>
       <div id="balList"></div>
@@ -1700,6 +1706,113 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
   }
   const brokerCheck = key => { brokerMemo.stamp = -1; return brokerMatches().byBroker[key] || { matched: 0, total: 0, missingInBank: [], missingInLedger: [] }; };
 
+  // ---------- statements to add: what would complete your records ----------
+  // A bank-statement row's reference starts with its date ("2026-04-01|debit|…"); SMS, PhonePe/GPay,
+  // Gmail and DeepSeek entries carry their own prefixes. So per account we know which period a real
+  // statement covers, and can ask for exactly the one that's missing.
+  const fromStatement = e => refsOf(e).some(r => /^\d{4}-\d{2}-\d{2}\|/.test(r));
+  const fromApp = (e, app) => e.app === app && refsOf(e).some(r => /^(upi|phonepe|gpay)\|/.test(r));
+  const BROKER_HOW = {
+    upstox: 'Upstox app → Account → Reports: Ledger (choose the funds wallet, not Trading) and P&L / Tax report',
+    angelone: 'Angel One app → Profile → Reports: Ledger statement and Tax P&L',
+    zerodha: 'Zerodha Console → Funds → Statement, and Reports → Tax P&L' };
+  const shortD = d => new Date(d + 'T00:00').toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' });
+  function statementNeeds() {
+    const today = isoDate(new Date()), month = today.slice(0, 7), out = [];
+    const add = n => { if (!(state.settings.dismissedNeeds || {})[n.id]) out.push(n); };
+    // 1. bank accounts and cards: no statement at all, or the statement stops well before the latest entry
+    (state.accounts || []).filter(a => a.kind === 'bank' || a.kind === 'card').forEach(a => {
+      const its = state.expenses.filter(e => e.account === a.id);
+      if (!its.length) return;
+      const st = its.filter(fromStatement), lastAny = its.reduce((m, e) => e.date > m ? e.date : m, '');
+      const label = `${acctName(a)} ••${(a.digits || [])[0] || ''}`, what = a.kind === 'card' ? 'card statement' : 'statement';
+      const generic = /^(bank account|account|card|credit card)$/i.test(a.name);   // known only by its last digits (e.g. from PhonePe)
+      const how = `In ${generic ? `the app or net banking of the bank whose account ends ••${(a.digits || [])[0] || ''}` : `${a.name}'s app or net banking`}, open the account ${what}, choose the dates and download it as Excel or CSV.`;
+      if (!st.length) {
+        const total = sum(its);
+        add({ id: `acct-none:${a.id}`, prio: 2 + Math.min(total / 1e6, 5), icon: a.kind === 'card' ? '💳' : '🏦', title: `${label}: no ${what} yet`,
+          why: `${its.length} entr${its.length === 1 ? 'y' : 'ies'} (${fmt(total)}) ${its.length === 1 ? 'comes' : 'come'} only from SMS, UPI apps or other statements. Its ${what} makes balances, duplicates and transfers exact.`,
+          how, from: its.reduce((m, e) => e.date < m ? e.date : m, today), to: today });
+        return;
+      }
+      const stTo = st.reduce((m, e) => e.date > m ? e.date : m, '');
+      const behind = dayDiff(stTo, today);
+      if (behind > 35 || (lastAny > stTo && dayDiff(stTo, lastAny) > 7)) {
+        add({ id: `acct-newer:${a.id}:${month}`, prio: 2, icon: a.kind === 'card' ? '💳' : '🏦', title: `${label}: newer ${what}`,
+          why: `The last ${what} imported ends ${shortD(stTo)}${lastAny > stTo ? `; ${its.filter(e => e.date > stTo).length} later entries are from SMS or UPI apps only` : ''}.`,
+          how, from: addDaysIso(stTo, 1), to: today });
+      }
+    });
+    // 2. brokers: transfers that can't be verified, ledgers that stop early, missing P&L reports
+    const fyNow = fyOf(today), m = brokerMatches();
+    BROKERS.forEach(b => {
+      const its = state.expenses.filter(e => bankForBroker(e, b)), br = (state.brokers || {})[b.key];
+      if (!its.length && !br) return;
+      const how = BROKER_HOW[b.key] || `${b.name}'s app or website → Reports: Ledger (funds) and P&L / Tax report`;
+      const paid = sum(its.filter(e => e.type === 'debit')), got = sum(its.filter(e => e.type === 'credit'));
+      const first = its.reduce((x, e) => e.date < x ? e.date : x, today), last = its.reduce((x, e) => e.date > x ? e.date : x, '');
+      if (its.length && (!br || !br.ledger || !br.ledger.hasFunds)) {
+        add({ id: `broker-funds:${b.key}`, prio: 6 + Math.min((paid + got) / 1e6, 5), icon: '📊', title: `${b.name}: funds ledger`,
+          why: `${fmt(paid)} sent to ${b.name} and ${fmt(got)} received from it can't be verified${br && br.ledger ? ' — the ledger imported is the ' + (br.ledger.wallet || 'trading') + ' ledger, which has no deposits or withdrawals' : ''}.`,
+          how, from: first, to: last });
+      } else if (br && br.ledger && last > br.ledger.to) {
+        add({ id: `broker-newer:${b.key}:${month}`, prio: 4, icon: '📊', title: `${b.name}: newer ledger`,
+          why: `Its ledger ends ${shortD(br.ledger.to)}; ${its.filter(e => e.date > br.ledger.to).length} later transfers can't be verified yet.`, how, from: addDaysIso(br.ledger.to, 1), to: today });
+      }
+      const v = m.byBroker[b.key];
+      if (v && v.missingInBank.length) {
+        const amt = v.missingInBank.reduce((t, f) => t + f.amount, 0);
+        add({ id: `broker-otherbank:${b.key}:${v.missingInBank.length}`, prio: 5, icon: '🏦', title: `Statement of the bank account linked to ${b.name}`,
+          why: `${b.name}'s ledger shows ${v.missingInBank.length} deposit/payout${v.missingInBank.length > 1 ? 's' : ''} (${fmt(amt)}) not found in your bank entries — probably another bank account.`,
+          how: 'Import the statement of the bank account you use with this broker.', from: v.missingInBank[0].date, to: v.missingInBank[v.missingInBank.length - 1].date });
+      }
+      const traded = its.some(e => fyOf(e.date) === fyNow);
+      if (traded && !(br && br.pnl && br.pnl[fyNow])) {
+        add({ id: `broker-pnl:${b.key}:${fyNow}`, prio: 3, icon: '📈', title: `${b.name}: P&L / tax report FY ${fyNow}`,
+          why: `Shows your profit or loss, charges and interest for the year, and any holdings.`, how, from: `${fyNow.slice(0, 4)}-04-01`, to: today });
+      }
+    });
+    // 3. FDs booked in your bank statement without their FD advice
+    const fdNos = new Set((state.fds || []).map(f => f.no));
+    state.expenses.filter(e => e.type === 'debit' && e.category === investCat() && investType(e)[1] === 'Fixed deposits' && !fdFor(e)).forEach(e => {
+      const no = ((e.note || '').match(/\bFD\b\s*(?:no\.?|number)?\s*:?\s*(\d{6,})/i) || [])[1] || '';
+      if (no && fdNos.has(no)) return;
+      add({ id: `fd:${no || e.id}`, prio: 3, icon: '🏦', title: `FD advice${no ? ' for FD ••' + no.slice(-4) : ''}`,
+        why: `${fmt(e.amount)} went into a fixed deposit on ${shortD(e.date)}. Its advice adds the rate, maturity date and amount.`,
+        how: 'The FD advice / receipt PDF from the bank (net banking → Deposits, or the bank’s email).', from: e.date, to: e.date });
+    });
+    // 4. UPI app statements that are getting old
+    [['phonepe', 'PhonePe', 'PhonePe → History → Download statement'], ['gpay', 'Google Pay', 'Google Pay → your profile → Statement (or Google Pay on the web)']].forEach(([k, name, how]) => {
+      const its = state.expenses.filter(e => fromApp(e, k)); if (!its.length) return;
+      const last = its.reduce((x, e) => e.date > x ? e.date : x, '');
+      if (dayDiff(last, today) > 35) add({ id: `app-newer:${k}:${month}`, prio: 1, icon: '📱', title: `${name}: newer statement`,
+        why: `The last ${name} statement imported ends ${shortD(last)}.`, how, from: addDaysIso(last, 1), to: today });
+    });
+    return out.sort((a, b) => b.prio - a.prio);
+  }
+  let needsMemo = { key: '', needs: [] };
+  function renderNeeds() {
+    const key = `${dataStamp}|${state.expenses.length}|${Object.keys(state.settings.dismissedNeeds || {}).length}|${isoDate(new Date())}`;
+    if (needsMemo.key !== key) needsMemo = { key, needs: statementNeeds() };
+    const needs = needsMemo.needs;
+    $('needsCard').classList.toggle('hidden', !needs.length);
+    $('needsBanner').classList.toggle('hidden', !needs.length);
+    $('needsBanner').innerHTML = needs.length ? `📋 <b>${needs.length} statement${needs.length > 1 ? 's' : ''}</b> would complete your records: ${esc(needs[0].title)}${needs.length > 1 ? ' and more' : ''} ›` : '';
+    $('needsList').innerHTML = needs.map(n => `<div class="rec" style="display:block">
+        <div>${esc(n.icon)} <b>${esc(n.title)}</b>${n.from ? ` <small style="display:inline">· ${esc(shortD(n.from))}${n.to && n.to !== n.from ? ' – ' + esc(shortD(n.to)) : ''}</small>` : ''}</div>
+        <div style="font-size:13px;margin-top:3px">${esc(n.why)}</div>
+        <div class="sub" style="margin:3px 0 0">Where: ${esc(n.how)}</div>
+        <div style="margin-top:6px"><button type="button" class="chip" data-needimport="1">📥 Import it</button> <button type="button" class="chip" data-needdismiss="${esc(n.id)}">Not needed</button></div>
+      </div>`).join('');
+  }
+  $('needsBanner').addEventListener('click', () => { view = 'summary'; syncNav(); render(); setTimeout(() => $('needsCard').scrollIntoView({ behavior: 'smooth', block: 'start' }), 50); });
+  $('needsList').addEventListener('click', e => {
+    if (e.target.closest('[data-needimport]')) { $('importFile').click(); return; }
+    const d = e.target.closest('[data-needdismiss]'); if (!d) return;
+    state.settings.dismissedNeeds = { ...(state.settings.dismissedNeeds || {}), [d.dataset.needdismiss]: Date.now() };
+    save(); render(); toast('Hidden. It comes back if something new needs it.');
+  });
+
   // ---------- fixed deposits (from the bank's FD advice / receipt PDF) ----------
   // Only the deposit's terms are kept: number, bank, amounts, rate, dates. Not address, PAN or nominee.
   const isFdAdvice = lines => { const t = lines.join(' '); return /fixed deposit|term deposit/i.test(t) && /principal amount/i.test(t) && /maturity (date|amount)/i.test(t); };
@@ -1877,6 +1990,7 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     render(); window.scrollTo(0, 0);
   });
   function renderList() {
+    renderNeeds();
     const items = inPeriod();
     const spent = spentOf(items), income = incomeOf(items);
     $('monthTotal').textContent = fmt(spent);
@@ -2007,6 +2121,7 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
       '📞 rings your bank’s missed-call balance service from your phone; the bank replies by SMS. Copy that reply and paste it with 💬 (or say “Hey Siri, send copied message to Kharcha”) to update the balance here. Call from the mobile number registered with the bank.';
   }
   function renderSummary() {
+    renderNeeds();
     renderBalances();
     const r = periodRange();
     const items = inPeriod();
