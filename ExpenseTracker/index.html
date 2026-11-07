@@ -397,6 +397,7 @@
       <div class="card stat"><div class="total-label">Spent</div><div class="v" id="sTotal"></div></div>
       <div class="card stat"><div class="total-label">Income</div><div class="v" id="sIncome" style="color:var(--income)"></div></div>
       <div class="card stat"><div class="total-label">Net saved</div><div class="v" id="sNet"></div></div>
+      <div class="card stat" data-showinvest="1" role="button"><div class="total-label">📈 Invested</div><div class="v" id="sInvest"></div><div class="sub" id="sInvestSub" style="margin:2px 0 0;font-size:11px"></div></div>
       <div class="card stat"><div class="total-label">Daily spend</div><div class="v" id="sAvg"></div></div>
       <div class="card stat"><div class="total-label">Transactions</div><div class="v" id="sCount"></div></div>
       <div class="card stat"><div class="total-label" id="sDiffLabel">Spend vs last mo.</div><div class="v" id="sDiff"></div></div>
@@ -883,12 +884,15 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     if (names[k]) return names[k];
     const near = Object.keys(names).find(x => samePayer(x, k));   // banks shorten names differently
     if (near) return names[near];
-    const m = k.match(/^ACCT (\d+)$/);
-    if (m) {
-      const mine = (state.accounts || []).filter(a => (a.digits || []).some(z => z.endsWith(m[1]) || m[1].endsWith(z)));
-      if (mine.length === 1) return `${acctName(mine[0])} ••${mine[0].digits[0]} (yours)`;
-    }
-    return '';
+    const mine = ownAccountFor(k);
+    return mine ? `${acctName(mine)} ••${mine.digits[0]} (yours)` : '';
+  }
+  // A payee known only by a masked number that is exactly one of your own accounts
+  function ownAccountFor(k) {
+    const m = String(k || '').match(/^ACCT (\d+)$/);
+    if (!m) return null;
+    const mine = (state.accounts || []).filter(a => (a.digits || []).some(z => z.endsWith(m[1]) || m[1].endsWith(z)));
+    return mine.length === 1 ? mine[0] : null;
   }
   const payerName = k => payeeAlias(k) || k.toLowerCase().replace(/\b\w/g, c => c.toUpperCase()).replace(/^Acct /, 'A/c ••');
   // A transaction's description with the payee's name in place of the account number:
@@ -991,6 +995,16 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
   // Keep categories and review marks consistent with cross-entry comments and excluded categories.
   function tidyTransfers() {
     let changed = 0;
+    // money sent to (or received from) one of your own accounts by masked number is a transfer,
+    // unless you gave it another category or a comment of your own
+    state.expenses.forEach(e => {
+      if (!/^Other/.test(e.category) || (e.comment && !CROSS_RE.test(e.comment))) return;
+      const own = ownAccountFor(payerKey(e));
+      if (!own || own.id === e.account || !catsFor(e.type).some(c => c.name === 'Transfer')) return;
+      e.category = 'Transfer'; delete e.unread;
+      if (!e.comment) e.comment = `Cross entry ↔ ${acctLabel(own)}`;
+      changed++;
+    });
     state.expenses.forEach(e => {
       if (e.comment && CROSS_RE.test(e.comment) && (e.category !== 'Transfer' || e.unread)) { markCross(e); changed++; }
       else if (e.unread && !counted(e)) { delete e.unread; changed++; }
@@ -1322,6 +1336,10 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
   }
   const sum = arr => arr.reduce((a, e) => a + e.amount, 0);
   const spentOf = arr => sum(arr.filter(e => e.type === 'debit' && counted(e)));
+  // Investments (SIPs, stocks, gold…) are not spending; shown on their own, net of withdrawals
+  const investCat = () => catAlias('Investment');
+  const investedOf = arr => { const c = investCat(); const its = arr.filter(e => e.category === c);
+    return { out: sum(its.filter(e => e.type === 'debit')), back: sum(its.filter(e => e.type === 'credit')), n: its.length }; };
   const incomeOf = arr => sum(arr.filter(e => e.type === 'credit' && counted(e)));
 
   function toast(msg, ms = 2200) {
@@ -1435,13 +1453,21 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     return e.unread ? `<div class="amtwrap">${amt}<span class="rv">REVIEW</span></div>` : amt;
   }
 
+  document.addEventListener('click', e => {
+    if (!e.target.closest('[data-showinvest]')) return;
+    $('search').value = investCat();
+    if (view !== 'list') { view = 'list'; syncNav(); }
+    render(); window.scrollTo(0, 0);
+  });
   function renderList() {
     const items = inPeriod();
     const spent = spentOf(items), income = incomeOf(items);
     $('monthTotal').textContent = fmt(spent);
     renderBudget(spent);
     const fa = acctById(acctFilter);
+    const inv = investedOf(items);
     $('incomeText').innerHTML = [income ? `Income <b style="color:var(--income)">${fmt(income)}</b> · Net ${fmt(income - spent)}` : '',
+      inv.n ? `<span data-showinvest="1" role="button" style="cursor:pointer">📈 Invested <b>${fmt(inv.out - inv.back)}</b>${inv.back ? ` <span style="font-size:12px">(${fmt(inv.out)} in · ${fmt(inv.back)} withdrawn)</span>` : ''} ›</span>` : '',
       fa && fa.bal ? `Balance <b>${fmt(fa.bal.amount)}</b> on ${new Date(fa.bal.date + 'T00:00').toLocaleDateString(undefined, { day: 'numeric', month: 'short' })}` : ''
     ].filter(Boolean).join('<br>');
 
@@ -1575,6 +1601,9 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     $('sTotal').textContent = fmt(spent);
     $('sIncome').textContent = fmt(income);
     $('sNet').textContent = fmt(income - spent);
+    const inv = investedOf(items);
+    $('sInvest').textContent = fmt(inv.out - inv.back);
+    $('sInvestSub').textContent = inv.back ? `${fmt(inv.out)} in · ${fmt(inv.back)} out` : '';
     $('sNet').style.color = income - spent < 0 ? 'var(--danger)' : '';
     $('sAvg').textContent = fmt(spent / days);
     $('sCount').textContent = items.length;
