@@ -136,6 +136,14 @@
   .mrow .parsed { font-size: 13px; margin-top: 6px; font-variant-numeric: tabular-nums; }
   .mrow .parsed.credit b { color: var(--income); }
   .mrow.done { opacity: .55; }
+  .balrow { display: grid; grid-template-columns: 1fr auto; gap: 2px 10px; align-items: center; padding: 10px 0; border-bottom: 1px solid var(--glass-line, var(--border)); }
+  .balrow:last-child { border-bottom: 0; }
+  .balrow .nm { font-weight: 600; }
+  .balrow .when { color: var(--muted); font-size: 12px; }
+  .balrow .v { font-weight: 700; font-variant-numeric: tabular-nums; text-align: right; }
+  .balrow .est { color: var(--muted); font-size: 12px; text-align: right; }
+  .balrow .actions { grid-column: 1 / 3; display: flex; gap: 8px; margin-top: 6px; }
+  .balrow .actions .chip { text-decoration: none; padding: 6px 12px; font-size: 13px; }
 
   /* import sheet */
   .imp-head { flex: none; }
@@ -338,6 +346,11 @@
 
   <!-- Summary view -->
   <section id="view-summary" class="hidden">
+    <div class="card hidden" id="balCard">
+      <h2>Account balances</h2>
+      <div id="balList"></div>
+      <div class="sub" id="balNote"></div>
+    </div>
     <div class="stats">
       <div class="card stat"><div class="total-label">Spent</div><div class="v" id="sTotal"></div></div>
       <div class="card stat"><div class="total-label">Income</div><div class="v" id="sIncome" style="color:var(--income)"></div></div>
@@ -917,7 +930,48 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     }).join('');
   }
 
+  // Banks' published missed-call balance-enquiry numbers (call from the mobile number registered with the bank).
+  const ENQUIRY = {
+    'SBI': '09223766666', 'HDFC Bank': '18002703333', 'ICICI Bank': '9594612612', 'Axis Bank': '18004195959',
+    'Kotak Bank': '18002740110', 'PNB': '18001802223', 'Bank of Baroda': '8468001111', 'Canara Bank': '09015483483',
+    'Indian Bank': '180042500000', 'Union Bank': '09223008586', 'Yes Bank': '09223920000'
+  };
+  const enquiryFor = a => a.enquiry || (a.kind === 'bank' ? ENQUIRY[bankFromText(a.name) || ''] || '' : '');
+  // last confirmed balance, then every entry dated after it moves the estimate
+  function estimate(a) {
+    if (!a.bal) return null;
+    let v = a.bal.amount, n = 0;
+    state.expenses.forEach(e => {
+      if (e.account !== a.id || e.date <= a.bal.date) return;
+      v += e.type === 'credit' ? e.amount : -e.amount; n++;
+    });
+    return { amount: Math.round(v * 100) / 100, n };
+  }
+  function renderBalances() {
+    const accts = (state.accounts || []).filter(a => a.kind !== 'card');
+    $('balCard').classList.toggle('hidden', !accts.length);
+    if (!accts.length) return;
+    const short = d => new Date(d + 'T00:00').toLocaleDateString(undefined, { day: 'numeric', month: 'short' });
+    let total = 0, known = 0;
+    $('balList').innerHTML = accts.map(a => {
+      const est = estimate(a), num = enquiryFor(a);
+      if (est) { total += est.amount; known++; }
+      return `<div class="balrow">
+        <div><div class="nm">${esc(a.emoji || '🏦')} ${esc(a.name)} <small style="color:var(--muted)">••${esc(a.digits[0] || '')}</small></div>
+          <div class="when">${a.bal ? `Confirmed ${esc(fmt(a.bal.amount))} on ${short(a.bal.date)}` : 'No balance yet'}</div></div>
+        <div><div class="v">${est ? esc(fmt(est.amount)) : '—'}</div>
+          <div class="est">${est && est.n ? `estimated · ${est.n} entr${est.n > 1 ? 'ies' : 'y'} since` : est ? 'up to date' : ''}</div></div>
+        <div class="actions">
+          ${num ? `<a class="chip sel" href="tel:${esc(num)}">📞 Check balance</a>` : `<button class="chip" data-setenq="${esc(a.id)}">📞 Add balance-enquiry number</button>`}
+          <button class="chip" data-pastebal="1">💬 Paste bank reply</button>
+        </div>
+      </div>`;
+    }).join('');
+    $('balNote').innerHTML = (known > 1 ? `Total across accounts: <b>${esc(fmt(Math.round(total * 100) / 100))}</b><br>` : '') +
+      '📞 rings your bank’s missed-call balance service from your phone; the bank replies by SMS. With the Shortcuts automation that reply updates the balance here automatically, or paste it with 💬. Call from the mobile number registered with the bank.';
+  }
   function renderSummary() {
+    renderBalances();
     const mk = monthKey(current);
     const items = inMonth(mk);
     const spent = spentOf(items), income = incomeOf(items);
@@ -1533,19 +1587,54 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
       acctBank: bankFromText(t) || bank, acctKind, balance: smsBalance, seq: 0,
       ref: rrn ? `sms|${rrn}|${type}|${amount.toFixed(2)}` : `sms|${date}|${type}|${amount.toFixed(2)}|${(party || t).toLowerCase()}` };
   }
+  // "Avl bal in A/c XX8810 as on 06-NOV-26: INR 1,23,456.78" — a balance reply without a transaction
+  function parseBalanceSms(raw) {
+    const t = String(raw).replace(/\s+/g, ' ').trim();
+    if (!t || SMS_SKIP.test(t)) return null;
+    const m = t.match(/\bbal(?:ance)?\b.{0,60}?(?:rs\.?|inr|₹)\s*([\d,]+(?:\.\d{1,2})?)(\s*(?:dr|cr)\b)?/i);
+    if (!m) return null;
+    const acct = matchAccount(t);
+    if (!acct.digits && !acct.id) return null;
+    let amount = parseFloat(m[1].replace(/,/g, ''));
+    if (/dr/i.test(m[2] || '')) amount = -amount;
+    return { balance: amount, date: smsDate(t), account: acct.id, acctDigits: acct.digits, acctBank: bankFromText(t) || bankName(t), acctKind: 'bank' };
+  }
+  let lastBalanceReplies = [];
   function parseSmsBatch(text) {
     const chunks = String(text).replace(/\r/g, '').split(/\n\s*\n/).map(c => c.trim()).filter(Boolean);
     const out = [];
+    lastBalanceReplies = [];
     chunks.forEach(c => {
       const lines = c.split('\n').map(l => l.trim()).filter(Boolean);
       const each = lines.map(l => parseSms(l));
       if (lines.length > 1 && each.filter(Boolean).length >= 2) each.forEach(x => x && out.push(x));
-      else { const x = parseSms(c); if (x) out.push(x); }
+      else {
+        const x = parseSms(c);
+        if (x) out.push(x);
+        else { const b = parseBalanceSms(c); if (b) lastBalanceReplies.push(b); }
+      }
     });
     return out;
   }
+  // Apply balance replies: creates the account if needed and sets its confirmed balance.
+  function applyBalanceReplies() {
+    if (!lastBalanceReplies.length) return '';
+    ensureAccounts(lastBalanceReplies);
+    const done = [];
+    lastBalanceReplies.forEach(b => {
+      const a = acctById(b.account); if (!a) return;
+      if (!a.bal || b.date >= a.bal.date) a.bal = { amount: b.balance, date: b.date, seq: 1e9 };
+      done.push(`${a.name} ••${a.digits[0]} ${fmt(b.balance)}`);
+    });
+    lastBalanceReplies = [];
+    save(); render();
+    return done.length ? 'Balance updated: ' + done.join(', ') : '';
+  }
   function openSmsPreview(text, source) {
-    return openItemsPreview(parseSmsBatch(text), source);
+    const items = parseSmsBatch(text);
+    const msg = applyBalanceReplies();
+    if (msg) toast(msg);
+    return openItemsPreview(items, source) || !!msg;
   }
   function openItemsPreview(items, source, dropExact) {
     if (!items.length) return false;
@@ -1582,7 +1671,8 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
   $('smsGo').addEventListener('click', () => {
     const t = $('smsText').value.trim();
     if (!t) { toast('Paste a bank SMS first'); return; }
-    if (!openSmsPreview(t)) toast('No transaction found. Is this a debit/credit message?');
+    if (!openSmsPreview(t)) toast('No transaction or balance found. Is this a bank message?');
+    else if (!$('impSheet').classList.contains('open')) closeAll();
   });
 
   $('impMap').addEventListener('change', e => {
@@ -1655,6 +1745,13 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
   $('prevM').addEventListener('click', () => { current = new Date(current.getFullYear(), current.getMonth() - 1, 1); render(); });
   $('nextM').addEventListener('click', () => { current = new Date(current.getFullYear(), current.getMonth() + 1, 1); render(); });
   $('search').addEventListener('input', renderList);
+  $('balList').addEventListener('click', e => {
+    if (e.target.closest('[data-pastebal]')) { openSmsSheet(''); return; }
+    const b = e.target.closest('[data-setenq]'); if (!b) return;
+    const a = acctById(b.dataset.setenq); if (!a) return;
+    const num = prompt(`Balance-enquiry (missed call) number for ${a.name}`, a.enquiry || '');
+    if (num) { a.enquiry = num.replace(/[^0-9+]/g, ''); save(); renderBalances(); }
+  });
   $('acctBar').addEventListener('click', e => {
     const b = e.target.closest('[data-acct]'); if (!b) return;
     acctFilter = b.dataset.acct; render();
@@ -1689,6 +1786,10 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
       const list = digits.split(/[^0-9]+/).filter(d => d.length >= 3).map(d => d.slice(-6));
       if (name.trim()) a.name = name.trim();
       if (list.length) a.digits = list;
+      if (a.kind !== 'card') {
+        const num = prompt('Balance-enquiry (missed call) number — leave empty for none', enquiryFor(a));
+        if (num !== null) a.enquiry = num.replace(/[^0-9+]/g, '');
+      }
       save(); render(); toast('Account updated');
       return;
     }
@@ -1953,7 +2054,9 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
   // Text from the Share Extension or the "Add Bank Message" Shortcuts action (iOS app).
   window.expensesReceiveShared = text => {
     const items = parseSmsBatch(text);
-    if (!items.length) { toast('No transaction found in the shared message'); return; }
+    const balMsg = applyBalanceReplies();
+    if (!items.length) { toast(balMsg || 'No transaction found in the shared message'); return; }
+    if (balMsg) toast(balMsg);
     if (state.settings.autoAddShared) {
       markDups(items);
       const merged = linkDuplicates(items);
