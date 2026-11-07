@@ -1091,6 +1091,35 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     e.category = a.prev && a.prev !== 'Transfer' && catsFor(e.type).some(c => c.name === a.prev) ? a.prev : classify(e.note, e.type, true);
     if (!e.comment && (a.unread || (a.prev === undefined && needsReview(e)))) e.unread = true;   // a comment of yours means reviewed
   }
+  // ---------- failed transactions: a payment and its reversal ----------
+  // A payment the bank sent back ("REJECT:12016352:ADVICE NOT RECEIVED" out and straight back in,
+  // "UPI/REV/<ref>") is a debit and a credit of the same amount on the same account. They are linked
+  // like a refund, so neither counts, and the credit is never taken for money from another account.
+  const REVERSAL_RE = /\b(reject(ed)?|revers(al|ed)?|rev|return(ed)?|rtn|failed|failure|unsuccessful|declined|chargeback)\b/i;
+  function linkReversals() {
+    const norm = t => String(t || '').toLowerCase().replace(/\s+/g, ' ').trim();
+    const nums = t => String(t || '').match(/\d{6,}/g) || [];
+    const credits = state.expenses.filter(c => c.type === 'credit' && c.account && !c.refundOf && !c.userCat);
+    if (!credits.length) return 0;
+    const debits = state.expenses.filter(d => d.type === 'debit' && d.account), taken = new Set();
+    const linkedTo = new Set(state.expenses.filter(c => c.refundOf).map(c => c.refundOf));
+    let n = 0;
+    credits.forEach(c => {
+      const cn = norm(c.note), rev = REVERSAL_RE.test(c.note || ''), cNums = new Set(nums(c.note));
+      const d = debits.find(d => d.account === c.account && !taken.has(d.id) && !linkedTo.has(d.id) && Math.abs(d.amount - c.amount) < 0.005 &&
+        d.date <= c.date && dayDiff(d.date, c.date) <= 3 && (norm(d.note) === cn || (rev && nums(d.note).some(x => cNums.has(x)))));
+      if (!d) return;
+      [c, d].forEach(e => {   // undo a "cross entry" Kharcha made of either side
+        if (!e.autoXfer) return;
+        const p = e.autoXfer.with && state.expenses.find(x => x.id === e.autoXfer.with);
+        autoUnmark(e);
+        if (p && p.autoXfer && p.autoXfer.with === e.id) autoUnmark(p);
+      });
+      c.refundOf = d.id; c.reversal = true; delete c.unread; delete d.unread;
+      taken.add(d.id); n++;
+    });
+    return n;
+  }
   function markCross(e) {
     if (e.category !== 'Transfer' && catsFor(e.type).some(c => c.name === 'Transfer')) e.category = 'Transfer';
     delete e.unread;
@@ -2473,8 +2502,9 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
   const shortNote = e => { const t = noteText(e).split(' · ')[0]; return t.length > 34 ? t.slice(0, 33) + '…' : t; };
   function refundLine(e) {
     const d = refundTarget(e);
-    if (d) return `↩️ Refund of the ${dShort(d.date)} payment of ${fmt(d.amount)} (${shortNote(d)})`;
+    if (d) return e.reversal ? `↩️ The bank reversed the ${dShort(d.date)} payment of ${fmt(d.amount)} (failed) · not counted` : `↩️ Refund of the ${dShort(d.date)} payment of ${fmt(d.amount)} (${shortNote(d)})`;
     const back = refundsOf(e); if (!back.length) return '';
+    if (back.some(c => c.reversal)) return `↩️ Failed: the bank sent it back${back.length === 1 ? ` on ${dShort(back[0].date)}` : ''} · not counted`;
     const got = refundedOf(e);
     return got >= e.amount - 0.005 ? `↩️ Refunded in full${back.length === 1 ? ` on ${dShort(back[0].date)}` : ''}` : `↩️ ${fmt(got)} came back · counts ${fmt(amtOf(e))}`;
   }
@@ -3812,6 +3842,8 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     if (add.length) state.settings.imports = (state.settings.imports || []).concat({ at: now, n: add.length, name: String(src || '').slice(0, 80) }).slice(-80);
     const utrMerged = mergeUtrPairs();
     if (utrMerged) label = (label || `Imported ${add.length} transactions`) + ` · ${utrMerged} matched by UPI reference`;
+    const failed = linkReversals();
+    if (failed) label = (label || `Imported ${add.length} transactions`) + ` · ${failed} failed payment${failed > 1 ? 's' : ''} sent back (not counted)`;
     const t = tidyTransfers();
     const own = selfRows + t.self + t.acct + t.pair;
     if (own) label = (label || `Imported ${add.length} transactions`) + ` · ${own} between your own accounts → Transfer`;
@@ -4263,6 +4295,10 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
   {
     const n = mergeUtrPairs();
     if (n) { save(); setTimeout(() => toast(`${n} payment${n > 1 ? 's were' : ' was'} in Kharcha twice: PhonePe listed the whole amount, your bank only the part it paid (the rest came from the PhonePe wallet). Now one entry each.`, 6000), 5200); }
+  }
+  {
+    const n = linkReversals();
+    if (n) { save(); setTimeout(() => toast(`${n} failed payment${n > 1 ? 's' : ''} found: money that went out and the bank sent straight back. ${n > 1 ? 'They no longer count' : 'It no longer counts'} as spending or income.`, 6000), 3000); }
   }
   if (tidyTransfers().total) save();
   render();
