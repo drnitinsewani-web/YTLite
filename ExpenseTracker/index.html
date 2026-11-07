@@ -760,7 +760,7 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
 
   // Keyword rules used to auto-categorise statement lines. First match wins.
   const AUTO_RULES = [
-    ['Investment', /safe ?gold|digital gold|augmont|mmtc|jar app|eq trade|upstox|zerodha|groww|angel ?one|angel broking|icici ?sec|icicidirect|hdfc ?sec|kotak ?sec|5paisa|\bdhan\b|paytm money|indmoney|kuvera|smallcase|mutual fund|\bmf\b|\bsip\b|bse limited|bse star|nse clearing|indian clearing|\bfd\b|fixed deposit|fd booking|rd instal|recurring deposit|\bppf\b|\bnps\b|sukanya|vanguard|fidelity|schwab|robinhood|brokerage/],
+    ['Investment', /indian cle\b|paytm ?money|\bmf\d*@|\.mf\d*\b|mutual ?fund|safe ?gold|digital gold|augmont|mmtc|jar app|eq trade|upstox|zerodha|groww|angel ?one|angel broking|icici ?sec|icicidirect|hdfc ?sec|kotak ?sec|5paisa|\bdhan\b|paytm money|indmoney|kuvera|smallcase|mutual fund|\bmf\b|\bsip\b|bse limited|bse star|nse clearing|indian clearing|\bfd\b|fixed deposit|fd booking|rd instal|recurring deposit|\bppf\b|\bnps\b|sukanya|vanguard|fidelity|schwab|robinhood|brokerage/],
     ['Fees & Charges', /mtf inte|mtf pledge|pledge chg|\bchg\b|charges|annual fee|\bamc\b|gst on|sms alert|penalty|late fee|min(imum)? bal|non ?maint|processing fee|convenience fee|overdraft fee|service fee/],
     ['Transfer', /payment received.*thank|thank you for (your )?payment|autopay si|auto ?debit cc|\batd\b.*\bcc|cc ?billpay|credit ?card|cc ?(payment|pymt|bill)|card ?(payment|pymt)|cred club|\bcred\b|\bself\b|own a\/?c|own account|sweep/],
     ['Salary', /salary|\bsal\b|payroll|stipend|wages/],
@@ -1969,12 +1969,14 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     for (let i = 0; i < 10 && al[name] && al[name] !== name; i++) name = al[name];
     return name;
   }
+  // "…/BRANCH : ATM SERVICE BRANCH" (Indian Bank) names the bank's branch, not what the money was for
+  const stripBranch = t => String(t || '').replace(/\/?\s*BRANCH\s*:.*$/i, '');
   function classify(desc, type, noSelf = false) {
     const allowed = new Set(catsFor(type).map(c => c.name));
     const learned = state.rules[merchantKey(desc)];
     if (learned && allowed.has(learned)) return learned;
     if (!noSelf && allowed.has('Transfer') && isSelf(desc)) return 'Transfer';
-    const d = ' ' + String(desc).toLowerCase().replace(/[_/|*]+/g, ' ') + ' ';
+    const d = ' ' + stripBranch(desc).toLowerCase().replace(/[_/|*]+/g, ' ') + ' ';
     for (const [cat, re] of AUTO_RULES) { const nm = catAlias(cat); if (allowed.has(nm) && re.test(d)) return nm; }
     const fallback = type === 'credit' ? 'Other Income' : 'Other';
     return allowed.has(fallback) ? fallback : (catsFor(type)[0] || {}).name || fallback;
@@ -3681,6 +3683,23 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
   });
 
   selfRe = selfPatterns();
+  // When Kharcha's rules improve, entries it categorised itself are re-checked once (never ones you set,
+  // commented, or that are transfers): today "Other" that a rule now recognises, and UPI payments that a
+  // branch name ("ATM SERVICE BRANCH") had wrongly filed as Cash.
+  const RULES_VERSION = 2;
+  if ((state.settings.rulesV || 1) < RULES_VERSION) {
+    let n = 0;
+    state.expenses.forEach(e => {
+      if (e.userCat || e.autoXfer || e.category === 'Transfer' || (e.comment && !isAutoComment(e))) return;
+      const wrongCash = e.category === 'Cash' && /\batm service branch\b/i.test(e.note || '') && !/\b(atm|cash) ?(wdl|withdrawal|wd)\b|\bnwd\b|\batw\b/i.test(stripBranch(e.note));
+      if (!/^Other/.test(e.category) && !wrongCash) return;
+      const c = classify(e.note, e.type, true);
+      if (c !== e.category && (wrongCash || !/^Other/.test(c))) { e.category = c; n++; }
+    });
+    state.settings.rulesV = RULES_VERSION;
+    if (n) setTimeout(() => toast(`Re-checked categories with improved rules: ${n} entr${n === 1 ? 'y' : 'ies'} updated`, 4000), 800);
+    save();
+  }
   if (tidyTransfers().total) save();
   render();
   (() => {
