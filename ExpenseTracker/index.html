@@ -1322,12 +1322,16 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
       const b = brokerByKey(k), br = (state.brokers || {})[k] || {};
       const its = items.filter(e => bankForBroker(e, b));
       const paid = sum(its.filter(e => e.type === 'debit')), got = sum(its.filter(e => e.type === 'credit'));
-      const lines = [`Bank → ${esc(b.name)} <b>${fmt(paid)}</b> · ${esc(b.name)} → bank <b style="color:var(--income)">${fmt(got)}</b> <span class="sub">(${its.length} in this period)</span>`];
+      const lines = its.length ? [`Bank → ${esc(b.name)} <b>${fmt(paid)}</b> · ${esc(b.name)} → bank <b style="color:var(--income)">${fmt(got)}</b> <span class="sub">(${its.length} in this period)</span>`] : [];
       const v = m.byBroker[k];
       if (br.ledger && br.ledger.hasFunds && v) {
         lines.push(`<span style="color:${v.matched === v.total && !v.missingInLedger.length ? 'var(--income)' : 'var(--warn)'}">${v.matched === v.total ? '✓' : '⚠︎'} ${v.matched} of ${v.total} deposits/withdrawals in its ledger (${esc(short(br.ledger.from))} – ${esc(short(br.ledger.to))}) found in your bank entries</span>`);
         v.missingInBank.slice(0, 6).forEach(f => lines.push(`<span class="sub">⚠︎ ${esc(b.name)} shows ${f.dir === 'in' ? 'a deposit' : 'a payout'} of ${fmt(f.amount)} on ${esc(short(f.date))}, not in your bank entries (another bank account?)</span>`));
         v.missingInLedger.slice(0, 6).forEach(e => lines.push(`<span class="sub">⚠︎ Bank ${e.type === 'debit' ? 'payment to' : 'payout from'} ${esc(b.name)} ${fmt(e.amount)} on ${esc(short(e.date))} is not in its ledger</span>`));
+      } else if (br.ledger && br.ledger.kind === 'sof') {
+        lines.push(`Statement of funds ${esc(short(br.ledger.from))} – ${esc(short(br.ledger.to))}: <b>no deposits or withdrawals</b>${br.ledger.balance !== undefined ? ` · balance ${fmt(br.ledger.balance)}` : ''}`);
+        const clash = state.expenses.filter(e => bankForBroker(e, b) && e.date >= br.ledger.from && e.date <= br.ledger.to).length;
+        if (clash) lines.push(`<span style="color:var(--warn)">⚠︎ Yet your bank shows ${clash} transfer${clash > 1 ? 's' : ''} with ${esc(b.name)} in that period — this statement is probably from another account. Import ${esc(b.name)}'s funds ledger to verify them.</span>`);
       } else if (br.ledger) {
         lines.push(`<span class="sub">Its ledger here is the ${esc(br.ledger.wallet || 'trading')} ledger, which has no deposits or withdrawals. Import its <b>funds ledger</b> to verify these transfers.</span>`);
       } else if (its.length) {
@@ -1340,9 +1344,27 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
           (p.to ? ` <span class="sub">(to ${esc(short(p.to))})</span>` : ''));
       }
       if (br.holdings) lines.push(br.holdings.count ? `Holdings: <b>${br.holdings.count}</b>${br.holdings.unrealised ? ` · unrealised ${sign(br.holdings.unrealised)}` : ''}${br.holdings.asOf ? ` <span class="sub">(${esc(short(br.holdings.asOf))})</span>` : ''}` : `Holdings: none${br.holdings.asOf ? ` <span class="sub">(as of ${esc(short(br.holdings.asOf))})</span>` : ''}`);
-      return `<div class="rec" style="display:block"><div><b>${esc(b.name)}</b>${br.client ? ` <small style="display:inline">· ${esc(br.client)}</small>` : ''}</div>${lines.map(l => `<div style="font-size:13px;margin-top:3px">${l}</div>`).join('')}</div>`;
+      return `<div class="rec" style="display:block"><div><b>${esc(b.name)}</b>${br.client ? ` <small style="display:inline">· ${esc(br.client)}</small>` : ''}${br.unnamed ? ` <button type="button" class="chip" data-namebroker="${esc(k)}" style="margin-left:6px">✏️ Which broker?</button>` : ''}</div>${lines.map(l => `<div style="font-size:13px;margin-top:3px">${l}</div>`).join('')}</div>`;
     }).join('') + `<div class="sub" style="margin-top:6px">Import a broker's ledger and P&amp;L or tax report (📥 Import, or your statement folder) to verify transfers and see results.</div>`;
   }
+  // an unnamed statement: rename it, or fold it into a broker Kharcha knows
+  document.addEventListener('click', e => {
+    const x = e.target.closest('[data-namebroker]'); if (!x) return;
+    const k = x.dataset.namebroker, br = (state.brokers || {})[k]; if (!br) return;
+    const v = prompt('Which broker is this statement from? (e.g. Zerodha, HDFC Securities)', br.unnamed ? '' : br.name);
+    if (v === null || !v.trim()) return;
+    const known = BROKERS.find(b => b.re.test(v) || b.name.toLowerCase() === v.trim().toLowerCase());
+    const all = { ...state.brokers };
+    if (known && known.key !== k) {
+      const into = all[known.key] || { key: known.key, name: known.name };
+      // keep the richer ledger (one with deposits/withdrawals wins), and the P&L/holdings already known
+      const keepLedger = into.ledger && (into.ledger.hasFunds || !br.ledger) ? into.ledger : br.ledger;
+      all[known.key] = { ...br, ...into, key: known.key, name: known.name, ledger: keepLedger, unnamed: undefined, client: into.client || br.client };
+      delete all[k];
+    } else all[k] = { ...br, name: v.trim().slice(0, 40), unnamed: undefined };
+    state.brokers = JSON.parse(JSON.stringify(all)); save(); render();
+    toast(known ? `Filed under ${known.name}` : `Named “${v.trim()}”`);
+  });
   function renderInvest(items) {
     const c = investCat(), its = items.filter(e => e.category === c);
     const fds = (state.fds || []).slice().sort((a, b) => a.maturity.localeCompare(b.maturity));
@@ -1567,7 +1589,8 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     { key: 'icicisec', name: 'ICICI Securities', re: /icici securities|icicidirect/i, bank: /icici ?sec|icicidirect/i },
     { key: 'kotaksec', name: 'Kotak Securities', re: /kotak securities/i, bank: /kotak ?sec/i },
     { key: 'dhan', name: 'Dhan', re: /\bdhan\b|raise securities/i, bank: /\bdhan\b|raise sec/i }];
-  const brokerByKey = k => BROKERS.find(b => b.key === k);
+  const NEVER = /(?!)/;
+  const brokerByKey = k => BROKERS.find(b => b.key === k) || { key: k, name: ((state.brokers || {})[k] || {}).name || 'Broker', re: NEVER, bank: NEVER };
   const cellNum = v => { const n = parseAmount(v); return isNaN(n) ? 0 : n; };
   const cellText = r => (r || []).map(c => c instanceof Date ? isoDate(c) : String(c ?? '').trim()).filter(Boolean);
   const fyOf = d => { const y = +d.slice(0, 4), m = +d.slice(5, 7); const s = m >= 4 ? y : y - 1; return `${s}-${String(s + 1).slice(2)}`; };
@@ -1587,8 +1610,18 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     let b = hasClient ? BROKERS.find(x => x.re.test(heading)) : null;
     if (!b && sheets.some(sh => /^broking ledger$/i.test(sh.n)) && sheets.some(sh => /^mtf ledger$/i.test(sh.n))) b = brokerByKey('angelone');
     if (!b && hasClient && sheets.some(sh => sh.rows.some(r => cellText(r).some(c => /^angelone charge$/i.test(c))))) b = brokerByKey('angelone');
+    // SEBI's quarterly "Statement of Accounts for funds": every broker sends one; some don't print their name
+    const top = sheets.map(sh => sh.rows.slice(0, 8).map(r => cellText(r).join(' ')).join(' ')).join(' ');
+    const sof = /statement of accounts? for funds|statement of funds|running account settlement/i.test(top);
+    if (!b && sof) {
+      b = BROKERS.find(x => x.re.test(top + ' ' + fileName));
+      if (!b) { const id = (top.match(/(?:match|client|ucc)\s*(?:id|code)?\s*:\s*([A-Z0-9]{4,})/i) || [])[1] || 'unknown';
+        b = { key: `sof-${id}`, name: `Broker account ••${id.slice(-4)}`, re: NEVER, bank: NEVER, unnamed: true }; }
+    }
     if (!b) return null;
-    const rep = { broker: b, client: kv['ucc'] || kv['clientcode'] || kv['client id'] || kv['client code'] || '' };
+    const periodM = top.match(/period\s*:?\s*(\d{1,2}[-\/ ][A-Za-z0-9]{2,9}[-\/ ]\d{2,4})\s*to\s*(\d{1,2}[-\/ ][A-Za-z0-9]{2,9}[-\/ ]\d{2,4})/i);
+    const netBal = (() => { let v = null; sheets.forEach(sh => sh.rows.forEach(r => { const t = cellText(r); const i = t.findIndex(c => /^net balance\s*:?$/i.test(c)); if (i >= 0 && t[i + 1] !== undefined) v = cellNum(t[i + 1]); })); return v; })();
+    const rep = { broker: b, client: kv['ucc'] || kv['clientcode'] || kv['client id'] || kv['client code'] || (b.unnamed ? b.key.slice(4) : '') };
     // --- ledger: a header with Debit and Credit columns, then dated rows
     sheets.forEach(sh => {
       if (rep.ledger || /mtf ledger/i.test(sh.n)) return;
@@ -1609,8 +1642,10 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
         const amount = Math.round((dir === 'in' ? cr || dr : dr || cr) * 100) / 100;
         if (dir && amount > 0) funds.push({ date, dir, amount, what: what.slice(0, 60) });
       });
-      const from = parseDate(kv['startdate'], 'dmy') || first, to = parseDate(kv['enddate'], 'dmy') || last;
-      rep.ledger = { from, to, wallet: (kv['wallet'] || '').toLowerCase(), hasFunds: funds.length > 0, funds };
+      const from = parseDate(kv['startdate'], 'dmy') || (periodM && parseDate(periodM[1], 'dmy')) || first;
+      const to = parseDate(kv['enddate'], 'dmy') || (periodM && parseDate(periodM[2], 'dmy')) || last;
+      rep.ledger = { from, to, wallet: sof ? 'funds' : (kv['wallet'] || '').toLowerCase(), kind: sof ? 'sof' : 'ledger', hasFunds: funds.length > 0, funds,
+        ...(netBal !== null ? { balance: netBal, balanceOn: to } : {}) };
     });
     // --- P&L / tax report: sections with Gross / Net P&L
     const secOf = t => /equit|delivery|intraday|bonds|sgb/i.test(t) ? 'Equity' : /futures? ?(&|and) ?options|^f ?& ?o$|^fo$|derivative/i.test(t) ? 'F&O' : /commodit/i.test(t) ? 'Commodities' : /currenc/i.test(t) ? 'Currency' : '';
@@ -1655,13 +1690,16 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
   }
   // Saves a broker report and says what it contained and how much of it your bank entries confirm.
   function saveBrokerReport(rep) {
-    const b = rep.broker, cur = (state.brokers || {})[b.key] || { key: b.key, name: b.name };
+    const b = rep.broker, cur = (state.brokers || {})[b.key] || { key: b.key, name: b.name, ...(b.unnamed ? { unnamed: true } : {}) };
     const next = { ...cur, client: rep.client || cur.client || '' };
     if (rep.ledger) {
       // a ledger covering a longer or later period replaces the older one; same period: funds merged
       // downloads of different periods are combined: the widest period, every money movement once
       const old = cur.ledger, L = rep.ledger;
-      if (old && old.hasFunds && !L.hasFunds) next.ledger = old;   // a trading-wallet ledger never hides fund movements already known
+      const wider = (x, y) => ({ from: x.from && x.from < y.from ? x.from : y.from, to: x.to > y.to ? x.to : y.to });
+      if (old && old.hasFunds && !L.hasFunds) next.ledger = L.kind === 'sof' ? { ...old, ...wider(old, L) } : old;   // never hides fund movements already known
+      else if (old && !old.hasFunds && !L.hasFunds && old.kind === L.kind) next.ledger = { ...L, ...wider(old, L),
+        ...(L.to >= old.to ? {} : { balance: old.balance, balanceOn: old.balanceOn }) };   // quarterly statements: one longer period
       else if (old && old.hasFunds) {
         const key = f => `${f.date}|${f.dir}|${f.amount.toFixed(2)}`, seen = new Set(old.funds.map(key));
         next.ledger = { ...L, from: old.from < L.from ? old.from : L.from, to: old.to > L.to ? old.to : L.to,
@@ -1675,11 +1713,12 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     const parts = [];
     if (rep.ledger) {
       if (rep.ledger.hasFunds) { const v = brokerCheck(b.key); parts.push(`${rep.ledger.funds.length} money movement${rep.ledger.funds.length === 1 ? '' : 's'} · ${v.matched} verified with your bank`); }
+      else if (rep.ledger.kind === 'sof') parts.push(`statement of funds ${shortD(rep.ledger.from)} – ${shortD(rep.ledger.to)}: no deposits or withdrawals${rep.ledger.balance !== undefined ? ', balance ' + fmt(rep.ledger.balance) : ''}`);
       else parts.push(`ledger without deposits or withdrawals${rep.ledger.wallet ? ' (' + rep.ledger.wallet + ' wallet)' : ''}`);
     }
     if (rep.pnl) parts.push(`P&L FY ${rep.pnl.fy}: ` + Object.entries(rep.pnl.sections).map(([k, x]) => `${k} ${x.net >= 0 ? '+' : '−'}${fmt(Math.abs(x.net ?? x.gross))}`).join(', '));
     if (rep.holdings) parts.push(rep.holdings.count ? `${rep.holdings.count} holdings` : 'no holdings');
-    return `📊 ${b.name}: ${parts.join(' · ')}`;
+    return `📊 ${next.name || b.name}: ${parts.join(' · ')}${next.unnamed ? ' · tell Kharcha which broker in Summary › Brokers' : ''}`;
   }
   // Bank entries that name a broker (payments to it, payouts from it)
   const bankForBroker = (e, b) => b.bank.test(noteText(e) + ' ' + (e.comment || ''));
@@ -1753,7 +1792,7 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
       const first = its.reduce((x, e) => e.date < x ? e.date : x, today), last = its.reduce((x, e) => e.date > x ? e.date : x, '');
       if (its.length && (!br || !br.ledger || !br.ledger.hasFunds)) {
         add({ id: `broker-funds:${b.key}`, prio: 6 + Math.min((paid + got) / 1e6, 5), icon: '📊', title: `${b.name}: funds ledger`,
-          why: `${fmt(paid)} sent to ${b.name} and ${fmt(got)} received from it can't be verified${br && br.ledger ? ' — the ledger imported is the ' + (br.ledger.wallet || 'trading') + ' ledger, which has no deposits or withdrawals' : ''}.`,
+          why: `${fmt(paid)} sent to ${b.name} and ${fmt(got)} received from it can't be verified${br && br.ledger ? (br.ledger.kind === 'sof' ? ' — the statement of funds imported shows no deposits or withdrawals at all, so it is probably from another account' : ' — the ledger imported is the ' + (br.ledger.wallet || 'trading') + ' ledger, which has no deposits or withdrawals') : ''}.`,
           how, from: first, to: last });
       } else if (br && br.ledger && last > br.ledger.to) {
         add({ id: `broker-newer:${b.key}:${month}`, prio: 4, icon: '📊', title: `${b.name}: newer ledger`,
@@ -2981,7 +3020,7 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     catch (e) { toast(e.message && e.message.length > 20 ? e.message : 'Could not read that file'); return; }
     rows = (rows || []).filter(r => Array.isArray(r) && r.some(c => String(c).trim() !== ''));
     const br = readBrokerReport(lastBook, file.name);
-    if (br) { toast(saveBrokerReport(br) + ' · see Summary › Brokers', 7000); return; }
+    if (br) { const msg = saveBrokerReport(br); toast(/Summary › Brokers/.test(msg) ? msg : msg + ' · see Summary › Brokers', 7000); return; }
     const ph = phonePeHeader(rows);
     if (ph >= 0) {
       previewStatement(parsePhonePeRows(rows, ph), `PhonePe · ${file.name}`, 'No transactions found in this file');
