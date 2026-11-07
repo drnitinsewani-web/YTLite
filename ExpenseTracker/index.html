@@ -135,6 +135,7 @@
   }
   .sheet.open { transform: none; }
   #catSheet { z-index: 13; }   /* opens on top of a transaction being edited */
+  .sheet-bg.over { z-index: 12; }   /* …which then sits behind the backdrop */
   .chip.add { border-style: dashed; color: var(--accent); }
   #fCats.editing .chip[data-cat] { outline: 2px dashed var(--accent); outline-offset: -2px; }
   .sheet.tall { height: 92vh; display: flex; flex-direction: column; padding-bottom: 0; }
@@ -885,6 +886,7 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
   let view = 'list';
   let editingId = null, editingOrigCat = null;
   let selectedCat = null, formType = 'debit';
+  let catEditing = -1, catFromForm = false;   // the category editor, and whether it is on top of a transaction
 
   const fmt = n => {
     try { return new Intl.NumberFormat(undefined, { style: 'currency', currency: state.settings.currency }).format(n); }
@@ -942,12 +944,17 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
   let payerFilter = '';
   // Names you gave payees (settings.payeeNames: payee key → name), e.g. "ACCT 1090" → "CA Sharma".
   // A payee known only by a masked number that is one of YOUR accounts is named after that account.
-  function payeeAlias(k) {
+  // The key whose name a payee shows: its own, else one a bank wrote differently ("UPSTOX SEC" → "UPSTOX SECURITIES")
+  function payeeNameKey(k) {
     if (!k) return '';
     const names = state.settings.payeeNames || {};
-    if (names[k]) return names[k];
-    const near = Object.keys(names).find(x => samePayer(x, k));   // banks shorten names differently
-    if (near) return names[near];
+    if (names[k]) return k;
+    return Object.keys(names).find(x => samePayer(x, k)) || '';   // banks shorten names differently
+  }
+  function payeeAlias(k) {
+    if (!k) return '';
+    const nk = payeeNameKey(k);
+    if (nk) return state.settings.payeeNames[nk];
     const mine = ownAccountFor(k);
     return mine ? `${acctName(mine)} ••${mine.digits[0]} (yours)` : '';
   }
@@ -1203,10 +1210,12 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     return state.expenses.filter(x => x.id !== e.id && !x.comment && x.type === e.type && payerKey(x) === k &&
       (!sameAmount || amtKey(x) === amtKey(e)));
   };
+  let matchShown = null;   // the payer, type and amount the options below were worked out for
   function renderMatchOptions(e) {
     const k = e && payerKey(e);
     $('fMatch').classList.toggle('hidden', !k);
-    if (!k) return;
+    matchShown = k ? { k, type: e.type, amt: amtKey(e) } : null;
+    if (!k) { $('fMatchAmt').checked = $('fMatchAny').checked = $('fMatchFuture').checked = false; return; }
     const same = commentMatches(e, true).length, any = commentMatches(e, false).length;
     $('fMatchAmtN').textContent = same; $('fMatchAnyN').textContent = any;
     $('fMatchAmtRow').classList.toggle('hidden', !same);
@@ -1461,12 +1470,16 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
   }
 
   // Apply the saved comment as chosen in the edit sheet; returns how many other entries changed.
+  // The options were shown for the entry as it was opened: none apply once its payer or type changed,
+  // and after a change of amount only "any amount" still does.
   function learnComment(e) {
-    if (!e.comment || !payerKey(e)) return 0;
-    const anyAmt = $('fMatchAny').checked, sameAmt = $('fMatchAmt').checked || anyAmt;
+    const m = matchShown;
+    if (!e.comment || !m || payerKey(e) !== m.k || e.type !== m.type) return 0;
+    const amtSame = amtKey(e) === m.amt;
+    const anyAmt = $('fMatchAny').checked, sameAmt = ($('fMatchAmt').checked && amtSame) || anyAmt;
     let n = 0;
     if (sameAmt) commentMatches(e, !anyAmt).forEach(x => { x.comment = e.comment; delete x.unread; if (CROSS_RE.test(e.comment)) markCross(x); n++; });
-    if ($('fMatchFuture').checked) {
+    if ($('fMatchFuture').checked && (amtSame || anyAmt)) {
       const key = `${payerKey(e)}|${e.type}|${anyAmt ? 'any' : amtKey(e)}`;
       state.settings.commentRules = { ...(state.settings.commentRules || {}), [key]: { c: e.comment } };
     }
@@ -2112,17 +2125,24 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
   const stripBranch = t => String(t || '').replace(/\/?\s*BRANCH\s*:.*$/i, '');
   function classify(desc, type, noSelf = false) {
     const allowed = new Set(catsFor(type).map(c => c.name));
-    const learned = state.rules[merchantKey(desc)];
-    if (learned && allowed.has(learned)) return learned;
+    const k = merchantKey(desc);
+    const learned = [state.rules[k + '|' + type], state.rules[k]].find(c => c && allowed.has(c));
+    if (learned) return learned;
     if (!noSelf && allowed.has('Transfer') && isSelf(desc)) return 'Transfer';
     const d = ' ' + stripBranch(desc).toLowerCase().replace(/[_/|*]+/g, ' ') + ' ';
     for (const [cat, re] of AUTO_RULES) { const nm = catAlias(cat); if (allowed.has(nm) && re.test(d)) return nm; }
     const fallback = type === 'credit' ? 'Other Income' : 'Other';
     return allowed.has(fallback) ? fallback : (catsFor(type)[0] || {}).name || fallback;
   }
-  function learn(desc, cat) {
+  // A category you chose for a payee, used for its later imports. When the payee's rule holds a category
+  // its other kind of entry uses ("To RAHUL" → Rent, then "From RAHUL" → Refund), this kind gets a rule
+  // of its own ("RAHUL SHARMA|credit") so neither replaces the other.
+  function learn(desc, cat, type) {
     const k = merchantKey(desc);
-    if (k.length >= 3) state.rules[k] = cat;
+    if (k.length < 3) return k;
+    const cur = state.rules[k], other = type === 'credit' ? 'debit' : 'credit';
+    if (type && cur && cur !== cat && catsFor(other).some(c => c.name === cur)) state.rules[k + '|' + type] = cat;
+    else { state.rules[k] = cat; if (type) delete state.rules[k + '|' + type]; }
     return k;
   }
 
@@ -2409,7 +2429,7 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     $('ruleCount').textContent = rules.length + crules.length ? `(${rules.length + crules.length})` : '';
     $('ruleChips').innerHTML = rules.length + crules.length
       ? rules.sort((a, b) => a[0].localeCompare(b[0])).map(([k, v]) =>
-          `<span class="chip">${esc(k)} <small>→</small> ${esc(catOf(v).emoji)} ${esc(v)}<span class="x" data-rule="${esc(k)}" role="button" aria-label="Forget">✕</span></span>`).join('') +
+          `<span class="chip">${esc(k.split('|')[0])} <small>${k.includes('|') ? (k.endsWith('|credit') ? 'money in ' : 'money out ') : ''}→</small> ${esc(catOf(v).emoji)} ${esc(v)}<span class="x" data-rule="${esc(k)}" role="button" aria-label="Forget">✕</span></span>`).join('') +
         crules.map(([k, v]) => { const [m, t, a] = k.split('|');
           return `<span class="chip">💬 ${esc(m)} <small>${a === 'any' ? 'any amount' : (t === 'credit' ? '+' : '') + esc(fmt(+a))} →</small> ${esc(v)}<span class="x" data-crule="${esc(k)}" role="button" aria-label="Forget">✕</span></span>`; }).join('')
       : '<span class="sub" style="margin:0">None yet.</span>';
@@ -2425,7 +2445,7 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     }
     setTimeout(() => runFolderQueue(), 500);   // statements from the folder wait while a sheet is open
     $('sheet').classList.remove('open'); $('impSheet').classList.remove('open'); $('smsSheet').classList.remove('open'); $('mailSheet').classList.remove('open'); $('catSheet').classList.remove('open');
-    $('sheetBg').style.display = 'none';
+    $('sheetBg').style.display = 'none'; $('sheetBg').classList.remove('over'); catFromForm = false;
     document.activeElement && document.activeElement.blur();
   }
 
@@ -2438,7 +2458,7 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     $('fType').querySelectorAll('button').forEach(b => b.classList.toggle('sel', b.dataset.type === formType));
     $('fCats').classList.toggle('editing', catEditMode);
     $('fCats').innerHTML = catsFor(formType).map(c =>
-      `<button type="button" class="chip ${c.name === selectedCat && !catEditMode ? 'sel' : ''}" data-cat="${esc(c.name)}">${catEditMode ? '✏️ ' : ''}${esc(c.emoji)} ${esc(c.name)}</button>`).join('') +
+      `<button type="button" class="chip ${c.name === selectedCat ? 'sel' : ''}" data-cat="${esc(c.name)}">${catEditMode ? '✏️ ' : ''}${esc(c.emoji)} ${esc(c.name)}</button>`).join('') +
       (catEditMode ? `<button type="button" class="chip sel" data-catedit="done">✓ Done</button>`
         : `<button type="button" class="chip add" data-catnew="1">＋ New</button><button type="button" class="chip add" data-catedit="1">✏️ Edit</button>`) +
       (catEditMode ? `<span class="sub" style="margin:0;align-self:center">Tap a category to rename, change or delete it</span>` : '');
@@ -2465,7 +2485,7 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
   let catAllFor = '';
   function renderCatAll() {
     const e = editingId ? state.expenses.find(x => x.id === editingId) : null;
-    const list = e && formType === e.type && selectedCat !== editingOrigCat && !catEditMode ? catMatches(e, selectedCat) : [];
+    const list = e && formType === e.type && selectedCat !== editingOrigCat ? catMatches(e, selectedCat) : [];
     $('fCatAllRow').classList.toggle('hidden', !list.length);
     if (!list.length) return;
     $('fCatAllN').textContent = list.length; $('fCatAllWord').textContent = list.length === 1 ? 'entry' : 'entries';
@@ -2534,10 +2554,16 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     save(); render(); renderRefund(e);
     toast(fullyRefunded(debit) ? `Linked · the ${fmt(debit.amount)} payment came back in full: neither counts as spending or income` : `Linked · the payment now counts ${fmt(amtOf(debit))} (${fmt(refundedOf(debit))} came back)`, 5000);
   });
-  let pendingRef = '', returnToMail = false, pendingTidy = false, pendingLearn = null;
+  let pendingRef = '', returnToMail = false, pendingTidy = false, pendingLearn = null, pendingPre = null, formSugFor = null;
+  // A category the form can show for its type: the name itself, else where a rename or delete took it ('' if neither)
+  const fitCat = name => [name, catAlias(name || '')].find(n => n && catsFor(formType).some(c => c.name === n)) || '';
+  // suggestions follow the type shown and the categories as they are now
+  const refreshFormSuggest = () => renderFormSuggest(formSugFor && { ...formSugFor, type: formType });
   function openSheet(exp, pre) {
     const src = exp || pre;
+    returnToMail = false;   // set again by the Gmail list after it opens the form
     pendingRef = !exp && pre && pre.ref ? pre.ref : '';
+    pendingPre = !exp && pre ? pre : null;
     pendingLearn = !exp && pre && pre.learn && pre.account ? { id: pre.account, d: pre.learn } : null;
     editingId = exp ? exp.id : null;
     editingOrigCat = exp ? exp.category : null;
@@ -2549,7 +2575,8 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     renderMatchOptions(exp || null);
     renderRefund(exp || null);
     renderBatchBtn(exp || null);
-    renderFormSuggest(exp || (pre ? { ...pre, note: pre.note || pre.desc } : null));
+    formSugFor = exp || (pre ? { ...pre, note: pre.note || pre.desc } : null);
+    renderFormSuggest(formSugFor);
     renderPayeeBtn(exp);
     const hk = exp && payerKey(exp), hn = hk ? state.expenses.filter(e => samePayer(payerKey(e), hk)).length : 0;
     $('fHistory').classList.toggle('hidden', !(hn > 1) || payerFilter === hk);
@@ -2558,7 +2585,10 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     $('fAppAmt').classList.toggle('hidden', !(exp && exp.bankAmt));
     if (exp && exp.bankAmt) $('fAppAmt').textContent = `One payment of ${fmt(exp.amount)}: ${fmt(exp.bankAmt)} from the bank account (its statement) and ${fmt(Math.max(0, exp.amount - exp.bankAmt))} ${exp.app === 'phonepe' ? 'from your PhonePe wallet' : `from ${appLabel(exp.app)} (balance, offer or reward)`} — ${appLabel(exp.app)}'s statement lists the whole amount.`;
     let pay = 'Cash'; try { pay = localStorage.getItem(KEY + ':pay') || pay; } catch (e) {}
-    $('fPay').value = src ? (src.payment || 'Other') : pay;
+    const pv = src ? (src.payment || 'Other') : pay;
+    $('fPay').querySelectorAll('option[data-extra]').forEach(o => o.remove());
+    if (![...$('fPay').options].some(o => o.value === pv)) { const o = new Option(pv, pv); o.dataset.extra = '1'; $('fPay').add(o); }   // e.g. "Wallet" from a PhonePe statement
+    $('fPay').value = pv;
     const today = new Date();
     $('fDate').value = src && src.date ? src.date : (monthKey(current) === monthKey(today) ? isoDate(today) : isoDate(current));
     selectedCat = src && src.category ? src.category : (catsFor(formType)[0] || {}).name;
@@ -2577,14 +2607,23 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
   $('fType').addEventListener('click', e => {
     const b = e.target.closest('[data-type]'); if (!b || b.dataset.type === formType) return;
     formType = b.dataset.type;
-    if (!catsFor(formType).some(c => c.name === selectedCat)) selectedCat = (catsFor(formType)[0] || {}).name;
-    renderFormCats();
+    selectedCat = fitCat(selectedCat) || (catsFor(formType)[0] || {}).name;
+    renderFormCats(); refreshFormSuggest();
   });
   $('sheet').addEventListener('submit', ev => {
     ev.preventDefault();
     const amount = parseFloat($('fAmount').value);
     if (!(amount > 0)) { toast('Enter an amount'); return; }
-    if (!selectedCat) { toast('Pick a category'); return; }
+    const cur = editingId ? state.expenses.find(x => x.id === editingId) : null;
+    if (editingId && !cur) {   // removed meanwhile, e.g. deleted on another device and synced in while this was open
+      returnToMail = false; closeAll(); render(); toast('This transaction was removed meanwhile, so your changes weren’t saved', 5000); return;
+    }
+    if (cur && !state.categories.some(c => c.name === editingOrigCat)) {   // its category was renamed or deleted meanwhile
+      if (selectedCat === editingOrigCat) selectedCat = cur.category;
+      editingOrigCat = cur.category;
+    }
+    selectedCat = fitCat(selectedCat);
+    if (!selectedCat) { renderFormCats(); toast('Pick a category'); return; }
     const data = {
       type: formType, amount: Math.round(amount * 100) / 100, category: selectedCat,
       date: $('fDate').value || isoDate(new Date()), note: $('fNote').value.trim(), payment: $('fPay').value,
@@ -2597,7 +2636,7 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     try { localStorage.setItem(KEY + ':acct', data.account); } catch (e) {}
     try { localStorage.setItem(KEY + ':pay', data.payment); } catch (e) {}
     if (editingId) {
-      const e = state.expenses.find(x => x.id === editingId);
+      const e = cur;
       const others = data.category !== editingOrigCat && data.type === e.type && !$('fCatAllRow').classList.contains('hidden') && $('fCatAll').checked
         ? catMatches(e, data.category) : [];
       const who = others.length ? payerName(payerKey(e)) : '';
@@ -2608,6 +2647,7 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
         data.userCat = true;   // tidyTransfers leaves it alone
         if (e.autoXfer && data.category !== 'Transfer' && data.comment && data.comment === e.autoXfer.c) delete data.comment;   // "Self transfer" no longer true
         if (!data.comment) delete e.comment;
+        if (e.autoXfer && e.autoXfer.unread && !data.comment) e.unread = true;   // its review mark, kept aside while it was a transfer
         delete e.autoXfer;
         pendingTidy = true;   // its pair partner (if any) is re-checked below
       }
@@ -2615,7 +2655,7 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
       let msg = 'Updated', extra = '';
       const wasCat = e.category;
       if (e.ref && data.category !== editingOrigCat && data.note) {
-        const k = learn(data.note, data.category);
+        const k = learn(data.note, data.category, data.type);
         if (k) extra += ` · will file “${payerName(k)}” under ${data.category}`;
       }
       if (others.length) {
@@ -2643,10 +2683,23 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
       if (e.category !== wasCat) extra += ' · moved to Transfer (not counted)';
       toast(msg + extra, extra ? 5000 : undefined);
     } else {
-      state.expenses.push({ id: uid(), createdAt: Date.now(), ...data, ...(pendingRef ? { ref: pendingRef } : {}),
-        ...(pendingRef && !data.comment && needsReview(data) ? { unread: true } : {}) });
+      const ne = { id: uid(), createdAt: Date.now(), ...data, ...(pendingRef ? { ref: pendingRef } : {}),
+        ...(pendingRef && !data.comment && needsReview(data) ? { unread: true } : {}) };
+      // from an email, as an import keeps them: its UPI reference and app (a statement then finds the payment) and the balance it showed
+      const x = pendingPre || {};
+      if (x.utr && x.type === data.type) { ne.utr = x.utr; if (x.utrSure) ne.utrSure = true; }
+      if (x.app) ne.app = x.app;
+      if (x.balance != null && (x.account || '') === data.account && x.date === data.date) ne.balance = x.balance;
+      let extra = '';
+      if (pendingRef && !ne.comment && applyCommentRule(ne)) extra += ' · commented automatically';
+      if (ne.comment && CROSS_RE.test(ne.comment)) markCross(ne);
+      state.expenses.push(ne);
+      updateBalances([ne]);
       if (pendingRef.startsWith('mail|')) { const m = mailCfg(); m.seen = [...new Set([...(m.seen || []), pendingRef.slice(5)])].slice(-1000); }
-      toast((data.type === 'credit' ? 'Added income ' : 'Added ') + fmt(data.amount));
+      if (ne.utr && mergeUtrPairs()) extra += ' · matched by UPI reference';
+      tidyTransfers();
+      if (ne.category === 'Transfer' && data.category !== 'Transfer') extra += ' · moved to Transfer (not counted)';
+      toast((data.type === 'credit' ? 'Added income ' : 'Added ') + fmt(data.amount) + extra, extra ? 5000 : undefined);
     }
     if (pendingTidy) { pendingTidy = false; tidyTransfers(); }
     if (!editingId && pendingLearn && data.account === pendingLearn.id) learnDigits(pendingLearn.id, pendingLearn.d);
@@ -2675,13 +2728,14 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     if (!confirm(back.length ? `Delete this transaction?\n\nIts refund${back.length > 1 ? 's' : ''} (${back.map(c => fmt(c.amount)).join(', ')}) will then count as income.` : 'Delete this transaction?')) return;
     if (del) forget([del]);
     state.expenses = state.expenses.filter(e => e.id !== editingId);
-    save(); closeAll(); render(); toast('Deleted');
+    const t = tidyTransfers();   // the other side of an automatic pair counts again
+    save(); closeAll(); render(); toast(t.undone ? `Deleted · ${t.undone} transfer mark${t.undone > 1 ? 's' : ''} undone` : 'Deleted');
   });
   $('fSuggest').addEventListener('click', e => {
     const b = e.target.closest('[data-sug]'); if (!b) return;
-    const sg = formSugs[+b.dataset.sug]; if (!sg) return;
+    const sg = formSugs[+b.dataset.sug], cat = sg && fitCat(sg.category); if (!cat) return;
     if (sg.comment) $('fComment').value = sg.comment;
-    selectedCat = sg.category; renderFormCats();
+    selectedCat = cat; renderFormCats();
     $('fSuggest').querySelectorAll('[data-sug]').forEach(x => x.classList.toggle('sel', x === b));
     if (sg.comment) $('fComment').dispatchEvent(new Event('input'));
   });
@@ -2690,23 +2744,25 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     payeeKeyEditing = e ? payerKey(e) : '';
     $('fPayee').classList.toggle('hidden', !payeeKeyEditing);
     if (!payeeKeyEditing) return;
-    const own = (state.settings.payeeNames || {})[payeeKeyEditing];
+    const own = (state.settings.payeeNames || {})[payeeNameKey(payeeKeyEditing)];
     $('fPayee').textContent = own ? `✏️ Payee: ${own} — rename` : /^ACCT /.test(payeeKeyEditing)
       ? `✏️ Name this account (${payerName(payeeKeyEditing)})` : `✏️ Give ${payerName(payeeKeyEditing)} a name`;
   }
   $('fPayee').addEventListener('click', () => {
     const k = payeeKeyEditing; if (!k) return;
     const names = { ...(state.settings.payeeNames || {}) };
+    const nk = payeeNameKey(k) || k;   // the name shown may be saved under the bank's longer spelling
     const label = /^ACCT /.test(k) ? `account ${payerName(k)}` : payerName(k);
-    const v = prompt(`Who is ${label}? (e.g. CA Sharma, Maid, Dad). Shown instead of the account number in every transaction with them. Leave empty to remove.`, names[k] || '');
+    const v = prompt(`Who is ${label}? (e.g. CA Sharma, Maid, Dad). Shown instead of the account number in every transaction with them. Leave empty to remove.`, names[nk] || '');
     if (v === null) return;
     const name = v.replace(/\s+/g, ' ').trim().slice(0, 40);
-    if (name) names[k] = name; else delete names[k];
+    if (name) names[nk] = name; else delete names[nk];
     state.settings.payeeNames = names;
     const n = state.expenses.filter(x => samePayer(payerKey(x), k)).length;
+    const shown = state.expenses.filter(x => payeeNameKey(payerKey(x)) === nk).length;
     save(); render(); renderPayeeBtn(state.expenses.find(x => x.id === editingId));
     $('fHistory').textContent = `🕘 All transactions with ${payerName(k)} (${n})`;
-    toast(name ? `${n} transaction${n === 1 ? '' : 's'} now show “${name}”` : 'Name removed');
+    toast(name ? `${shown} transaction${shown === 1 ? '' : 's'} now show “${name}”` : payeeAlias(k) ? `Name removed · still shown as “${payeeAlias(k)}”` : 'Name removed');
   });
   // The entries one import added (a file from the folder or 📥 Import): to take a wrong file back out
   function importOf(e) {
@@ -2743,7 +2799,10 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     closeAll();
     if (returnToMail) { returnToMail = false; openMailSheet(); }
   });
-  $('sheetBg').addEventListener('click', () => { returnToMail = false; closeAll(); });
+  $('sheetBg').addEventListener('click', () => {
+    if (catFromForm) { closeCatSheet(undefined, true); return; }   // only the category editor: back to the transaction
+    returnToMail = false; closeAll();
+  });
   $('fab').addEventListener('click', () => openSheet(null));
   $('list').addEventListener('click', e => {
     const it = e.target.closest('.item'); if (!it) return;
@@ -3834,7 +3893,7 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     if (e.target.type === 'checkbox') { x.include = e.target.checked; renderImport(); return; }
     if (e.target.tagName === 'SELECT') {
       x.category = e.target.value; x.touched = true;
-      const k = learn(x.desc, x.category);
+      const k = learn(x.desc, x.category, x.type);
       let n = 0;
       if (k) imp.items.forEach(y => {
         if (y !== x && !y.touched && y.type === x.type && merchantKey(y.desc) === k && y.category !== x.category) { y.category = x.category; n++; }
@@ -4054,9 +4113,11 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
   });
   // ---------- category editor ----------
   const FIXED_CATS = new Set(['Transfer', 'Other', 'Other Income']);   // names used in Kharcha's own logic
-  let catEditing = -1, catFromForm = false;
+  let catSnap = null;   // the open transaction as it was when the editor opened on top of it
   function openCatSheet(i, fromForm = false) {
     catEditing = i; catFromForm = fromForm;
+    const fe = fromForm && editingId ? state.expenses.find(x => x.id === editingId) : null;
+    catSnap = fe ? { category: fe.category, comment: fe.comment || '' } : null;
     const c = i >= 0 ? state.categories[i] : { emoji: '', name: '', kind: fromForm ? formType : 'debit' };
     $('catTitle').textContent = i >= 0 ? 'Edit category' : 'New category';
     $('catEmoji').value = c.emoji || ''; $('catEmoji').placeholder = '🏷️';
@@ -4079,7 +4140,7 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
       $('catMoveTo').innerHTML = opts.map(x => `<option value="${esc(x.name)}" ${x.name === def ? 'selected' : ''}>${esc(x.emoji)} ${esc(x.name)}</option>`).join('');
       $('catMoveTo').classList.toggle('hidden', !n); $('catMoveLbl').classList.toggle('hidden', !n);
     }
-    showBg();
+    showBg(); $('sheetBg').classList.toggle('over', fromForm);   // the transaction under it can't be tapped
     requestAnimationFrame(() => $('catSheet').classList.add('open'));
     if (i < 0) setTimeout(() => $('catName').focus(), 260);
   }
@@ -4087,15 +4148,29 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
   document.querySelectorAll('#catChips, #incChips').forEach(el => el.addEventListener('click', e => {
     const x = e.target.closest('[data-editcat]'); if (x) openCatSheet(+x.dataset.editcat);
   }));
-  // back to the transaction it was opened from, or close everything
-  function closeCatSheet(selectName) {
-    if (!catFromForm) { closeAll(); return; }
-    $('catSheet').classList.remove('open'); catFromForm = false;
-    if (selectName !== undefined && catsFor(formType).some(c => c.name === selectName)) selectedCat = selectName;
-    if (!catsFor(formType).some(c => c.name === selectedCat)) selectedCat = (catsFor(formType)[0] || {}).name;
-    catEditMode = false; renderFormCats();
+  // Back to the transaction it was opened from, brought up to date, or close everything. pick: a category
+  // to select (if it fits the transaction); stay: the chips stay in edit mode. Returns a note for the toast.
+  function closeCatSheet(pick, stay) {
+    if (!catFromForm) { closeAll(); return ''; }
+    catFromForm = false;
+    $('catSheet').classList.remove('open'); $('sheetBg').classList.remove('over');
+    document.activeElement && document.activeElement.blur();
+    // a rename or delete (or the transfer check after it) may have changed the transaction: not your change
+    const e = editingId ? state.expenses.find(x => x.id === editingId) : null, s = catSnap;
+    if (e && s) {
+      if (e.category !== s.category) { if (selectedCat === editingOrigCat) selectedCat = e.category; editingOrigCat = e.category; }
+      if ((e.comment || '') !== s.comment && $('fComment').value.trim() === s.comment) $('fComment').value = e.comment || '';
+      $('fReviewBanner').classList.toggle('hidden', !e.unread);
+    }
+    catSnap = null;
+    const had = selectedCat, picked = pick !== undefined && !!fitCat(pick);
+    if (picked) selectedCat = pick;
+    selectedCat = fitCat(selectedCat);   // renamed: its new name; no longer for this type: none, you pick one
+    if (!stay) catEditMode = false;
+    renderFormCats(); refreshFormSuggest();
+    return picked ? ' · selected' : had && !selectedCat ? ' · pick a category for this transaction' : '';
   }
-  $('catCancel').addEventListener('click', () => closeCatSheet());
+  $('catCancel').addEventListener('click', () => closeCatSheet(undefined, true));
   $('catGroupPick').addEventListener('click', e => { const b = e.target.closest('[data-pickgroup]'); if (b) $('catGroup').value = b.dataset.pickgroup; });
   // rename every use of a category: transactions, learned rules, earlier renames
   function renameCategory(from, to) {
@@ -4123,21 +4198,16 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
       const stranded = lost && state.expenses.filter(e => e.category === old.name && e.type === lost).length;
       if (stranded) { toast(`${stranded} ${lost === 'credit' ? 'income' : 'expense'} entr${stranded === 1 ? 'y uses' : 'ies use'} it — choose “Both” or move them first`, 4000); return; }
       if ((catsFor('debit').length <= 1 && old.kind !== 'credit' && kind === 'credit') || (catsFor('credit').length <= 1 && old.kind !== 'debit' && kind === 'debit')) { toast('Keep at least one expense and one income category'); return; }
-      if (name !== old.name) {
-        renameCategory(old.name, name);
-        if (editingOrigCat === old.name) editingOrigCat = name;   // the open transaction isn't "changed by you" by a rename
-        if (selectedCat === old.name) selectedCat = name;
-      }
+      if (name !== old.name) renameCategory(old.name, name);   // an open transaction follows when the editor closes
       const { exclude: _x, group: _g, ...rest } = old;
       state.categories[catEditing] = { ...rest, emoji, name, kind, ...(exclude ? { exclude: true } : {}), ...(group ? { group } : {}) };
     } else {
       state.categories.push({ emoji, name, kind, ...(exclude ? { exclude: true } : {}), ...(group ? { group } : {}) });
     }
     tidyTransfers();   // review marks follow the "not counted" setting
-    const fromForm = catFromForm;
-    save(); renderSettings(); render();
-    if (fromForm) closeCatSheet(old ? (selectedCat === name ? name : undefined) : name); else closeAll();
-    toast(old ? (old.name !== name ? `Renamed to ${emoji} ${name}` : 'Category saved') : `Added ${emoji} ${name}${fromForm ? ' · selected' : ''}`);
+    save(); render();
+    const note = closeCatSheet(old ? undefined : name);
+    toast((old ? (old.name !== name ? `Renamed to ${emoji} ${name}` : 'Category saved') : `Added ${emoji} ${name}`) + note);
   });
   $('catDelete').addEventListener('click', () => {
     const c = state.categories[catEditing]; if (!c) return;
@@ -4164,10 +4234,9 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     state.settings.catAlias = JSON.parse(JSON.stringify(al));
     state.categories.splice(catEditing, 1);
     tidyTransfers();
-    const fromForm = catFromForm;
-    if (editingOrigCat === c.name) editingOrigCat = to;
-    save(); renderSettings(); render();
-    if (fromForm) closeCatSheet(selectedCat === c.name ? to : undefined); else closeAll();
+    save(); render();
+    // a transaction open under the editor goes where its entries of that type went
+    closeCatSheet(selectedCat === c.name ? (target && (target.kind === 'both' || target.kind === formType) ? to : (formType === 'credit' ? 'Other Income' : 'Other')) : undefined);
     toast(n ? `Deleted · ${n} moved to ${to}` : 'Category deleted');
   });
   $('payeeChips').addEventListener('click', e => {
@@ -4493,10 +4562,10 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
   $('mailList').addEventListener('click', ev => {
     const b = ev.target.closest('[data-madd]'); if (!b) return;
     const it = mailBrowse.items[+b.dataset.madd];
-    returnToMail = true;
     closeAll();
     if (!it.x.account && it.x.acctDigits) { ensureAccounts([it.x]); save(); }
     openSheet(null, { ...it.x, note: it.x.desc, ref: 'mail|' + it.e.id });
+    returnToMail = true;   // Save or Cancel goes back to the list
   });
   $('mailFilter').addEventListener('input', renderMailList);
   $('mailClose').addEventListener('click', closeAll);
@@ -4738,7 +4807,7 @@ Rules: include only completed transactions — skip OTPs, offers, ads, due/bill 
         x.category = cat; n++;
       });
       const x0 = groups.get(k)[0];
-      if (cat && catsFor(x0.type).some(c => c.name === cat) && !/^Other/.test(cat)) learn(x0.desc || x0.note, cat);
+      if (cat && catsFor(x0.type).some(c => c.name === cat) && !/^Other/.test(cat)) learn(x0.desc || x0.note, cat, x0.type);
     });
     onDone(n);
   }
