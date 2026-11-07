@@ -830,21 +830,28 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     return true;
   }
   // Which UPI app a payment went through: import source, UPI ID handle in the narration, or wallet
-  const APP_RES = [
-    ['phonepe', /phone ?pe|@yb?l\b|@ibl\b|@axl\b/i],
-    ['gpay', /google ?pay|\bg ?pay\b|@ok(?:axis|hdfcbank|icici|sbi)\b/i],
-    ['paytm', /paytm|@pt(?:sbi|hdfc|yes|axis)\b/i]];
+  // One table per app: how to recognise it (the brand as a whole word, not a gateway/company name
+  // like "PAYTM*SWIGGY" or "PHONEPE PVT LTD", or its UPI ID handles), its badge and search words.
+  const GATEWAY = String.raw`(?!\s*\*|\s+(?:pvt|private|ltd|limited|payments?\s+(?:bank|services|ltd|limited)))`;
+  const APPS = {
+    phonepe: { re: new RegExp(String.raw`\bphonepe\b${GATEWAY}|@yb?l\b|@ibl\b|@axl\b`, 'i'),
+      badge: '<span class="appb phonepe" title="PhonePe">Pe</span>', words: ['phonepe'] },
+    gpay: { re: new RegExp(String.raw`\bgoogle\s?pay\b${GATEWAY}|\bgpay\b${GATEWAY}|@ok(?:axis|hdfcbank|icici|sbi)\b`, 'i'),
+      badge: '<span class="appb gpay" title="Google Pay"><b>G</b>Pay</span>', words: ['gpay', 'googlepay', 'google'] },
+    paytm: { re: new RegExp(String.raw`\bpaytm\b${GATEWAY}|@paytm\b|@pt(?:sbi|hdfc|yes|axis)\b`, 'i'),
+      badge: '<span class="appb paytm" title="Paytm">Pay<b>tm</b></span>', words: ['paytm'] } };
+  const appFrom = text => Object.keys(APPS).find(k => APPS[k].re.test(text || '')) || '';
   function appOf(e) {
-    if (e.app) return e.app;
-    const t = e.note || e.desc || '';
-    const hit = APP_RES.find(([, re]) => re.test(t));
-    if (hit) return hit[0];
+    if (e.app) return APPS[e.app] ? e.app : '';
+    const hit = appFrom(e.note || e.desc);
+    if (hit) return hit;
     const a = e.account && acctById(e.account);
-    return a && a.kind === 'wallet' ? (APP_RES.find(([, re]) => re.test(a.name)) || [])[0] || '' : '';
+    if (a) return a.kind === 'wallet' ? appFrom(a.name) : '';
+    return appFrom(e.walletName);   // import review: wallet account not created yet
   }
-  const appBadge = e => ({ phonepe: '<span class="appb phonepe" title="PhonePe">Pe</span>',
-    gpay: '<span class="appb gpay" title="Google Pay"><b>G</b>Pay</span>',
-    paytm: '<span class="appb paytm" title="Paytm">Pay<b>tm</b></span>' })[appOf(e)] || '';
+  const appBadge = e => (APPS[appOf(e)] || {}).badge || '';
+  // search word names an app: whole name, or a prefix of 4+ letters ("phon", "payt")
+  const appWordMatch = (app, w) => !!app && APPS[app].words.some(x => x === w || (w.length >= 4 && x.startsWith(w)));
   const reviewMin = () => { const v = state.settings.reviewMin; return v == null ? 1000 : v; };
   // Transfers and investments are money moving between your own accounts: never "to review".
   const needsReview = x => reviewMin() > 0 && x.amount > reviewMin() && !catOf(x.category).exclude;
@@ -1298,10 +1305,11 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
         if (minAmt && e.amount <= minAmt) return false;
         if (reviewOnly && !e.unread) return false;
         if (!q) return true;
+        const app = appOf(e);
         return parseQuery(q).every(t => t.op
           ? (t.op === '>' ? e.amount > t.v : t.op === '>=' ? e.amount >= t.v : t.op === '<' ? e.amount < t.v : e.amount <= t.v)
           : (e.note.toLowerCase().includes(t.word) || e.category.toLowerCase().includes(t.word) || String(e.comment || '').toLowerCase().includes(t.word)
-             || (appOf(e) && ({ phonepe: 'phonepe phone pe', gpay: 'gpay google pay', paytm: 'paytm' })[appOf(e)].includes(t.word))
+             || appWordMatch(app, t.word)
              || (acctById(e.account) && `${acctById(e.account).nick || ''} ${acctById(e.account).name}`.toLowerCase().includes(t.word))));
       })
       .sort((a, b) => b.date.localeCompare(a.date) || b.createdAt - a.createdAt);
@@ -2108,7 +2116,7 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
       }
       const items = parsePhonePe(lines);
       $('toast').classList.remove('show');
-      if (!openItemsPreview(items, `PhonePe · ${file.name}`, true)) toast(items.length ? 'Everything in this statement is already in Kharcha' : 'No transactions found in this PDF');
+      if (!openItemsPreview(items, `PhonePe · ${file.name}`, true)) toast(items.length ? alreadyMsg() : 'No transactions found in this PDF');
       return;
     }
     let rows;
@@ -2119,7 +2127,7 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     if (ph >= 0) {
       const items = parsePhonePeRows(rows, ph);
       $('toast').classList.remove('show');
-      if (!openItemsPreview(items, `PhonePe · ${file.name}`, true)) toast(items.length ? 'Everything in this statement is already in Kharcha · PhonePe payments are marked Pe' : 'No transactions found in this file');
+      if (!openItemsPreview(items, `PhonePe · ${file.name}`, true)) toast(items.length ? alreadyMsg() : 'No transactions found in this file');
       return;
     }
     const det = detectColumns(rows);
@@ -2245,7 +2253,7 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
         /payment|received|thank/i.test(t) && catsFor('credit').some(c => c.name === 'Transfer')) cat = 'Transfer';
     const acct = matchAccount(t);
     return { date, desc, type, amount, payment, category: cat, touched: false, account: acct.id, acctDigits: acct.digits,
-      acctBank: bankFromText(t) || bank, acctKind, balance: smsBalance, seq: 0, utr,
+      acctBank: bankFromText(t) || bank, acctKind, balance: smsBalance, seq: 0, utr, app: appFrom(t),
       ref: rrn ? `sms|${rrn}|${type}|${amount.toFixed(2)}` : `sms|${date}|${type}|${amount.toFixed(2)}|${(party || t).toLowerCase()}` };
   }
   // "Avl bal in A/c XX8810 as on 06-NOV-26: INR 1,23,456.78" — a balance reply without a transaction
@@ -2297,18 +2305,25 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     if (msg) toast(msg);
     return openItemsPreview(items, source) || !!msg;
   }
+  let lastTagged = 0;
+  const alreadyMsg = () => 'Everything in this statement is already in Kharcha' + (lastTagged ? ` · ${lastTagged} marked as PhonePe` : '');
   function openItemsPreview(items, source, dropExact) {
     if (!items.length) return false;
     items.sort((a, b) => b.date.localeCompare(a.date));
     markDups(items);
-    // re-importing tags entries already in Kharcha with the app they were paid through
-    let tagged = 0;
-    items.forEach(x => {
-      if (!x.app || !x.dup) return;
-      const e = x.dup === 'exact' ? state.expenses.find(y => refsOf(y).includes(x.ref)) : x.match && state.expenses.find(y => y.id === x.match);
-      if (e && !e.app) { e.app = x.app; tagged++; }
-    });
-    if (tagged) { save(); render(); }
+    // Re-importing tags entries already in Kharcha (same reference: certain, and these rows are
+    // dropped from review) with the app they were paid through. Weaker matches are tagged only when
+    // the user confirms the merge (linkDuplicates).
+    lastTagged = 0;
+    if (items.some(x => x.app && x.dup === 'exact')) {
+      const byRef = new Map();
+      state.expenses.forEach(e => refsOf(e).forEach(r => byRef.set(r, e)));
+      items.forEach(x => {
+        const e = x.app && x.dup === 'exact' && byRef.get(x.ref);
+        if (e && !e.app) { e.app = x.app; lastTagged++; }
+      });
+      if (lastTagged) { save(); render(); }
+    }
     if (dropExact) items = items.filter(x => x.dup !== 'exact');
     if (!items.length) return false;
     Object.assign(imp, { mode: 'sms', rows: [], items, filter: 'all', acctOverride: '', name: source || `${items.length} message${items.length > 1 ? 's' : ''}` });
