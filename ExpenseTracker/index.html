@@ -178,6 +178,12 @@
   .irow.off { opacity: .45; }
   .tag { display: inline-block; font-size: 11px; padding: 1px 6px; border-radius: 6px; background: var(--surface-2); color: var(--muted); margin-left: 4px; }
   .tag.warn { color: var(--warn); }
+  .appb { display: inline-flex; align-items: center; height: 16px; padding: 0 5px; border-radius: 5px; font-size: 10px; font-weight: 800; letter-spacing: -.2px; vertical-align: 2px; margin-left: 6px; line-height: 1; font-family: -apple-system, system-ui, sans-serif; }
+  .appb.phonepe { background: #5f259f; color: #fff; }
+  .appb.gpay { background: #fff; color: #5f6368; border: 1px solid #dadce0; }
+  .appb.gpay b { color: #4285f4; margin-right: 1px; }
+  .appb.paytm { background: #002e6e; color: #fff; }
+  .appb.paytm b { color: #00baf2; font-weight: 800; }
   .tag.sug { color: var(--accent); background: color-mix(in srgb, var(--accent) 12%, transparent); cursor: pointer; }
   .tag.sug.on { color: #fff; background: var(--accent); }
   .sugs { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
@@ -823,6 +829,22 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     }
     return true;
   }
+  // Which UPI app a payment went through: import source, UPI ID handle in the narration, or wallet
+  const APP_RES = [
+    ['phonepe', /phone ?pe|@yb?l\b|@ibl\b|@axl\b/i],
+    ['gpay', /google ?pay|\bg ?pay\b|@ok(?:axis|hdfcbank|icici|sbi)\b/i],
+    ['paytm', /paytm|@pt(?:sbi|hdfc|yes|axis)\b/i]];
+  function appOf(e) {
+    if (e.app) return e.app;
+    const t = e.note || e.desc || '';
+    const hit = APP_RES.find(([, re]) => re.test(t));
+    if (hit) return hit[0];
+    const a = e.account && acctById(e.account);
+    return a && a.kind === 'wallet' ? (APP_RES.find(([, re]) => re.test(a.name)) || [])[0] || '' : '';
+  }
+  const appBadge = e => ({ phonepe: '<span class="appb phonepe" title="PhonePe">Pe</span>',
+    gpay: '<span class="appb gpay" title="Google Pay"><b>G</b>Pay</span>',
+    paytm: '<span class="appb paytm" title="Paytm">Pay<b>tm</b></span>' })[appOf(e)] || '';
   const reviewMin = () => { const v = state.settings.reviewMin; return v == null ? 1000 : v; };
   // Transfers and investments are money moving between your own accounts: never "to review".
   const needsReview = x => reviewMin() > 0 && x.amount > reviewMin() && !catOf(x.category).exclude;
@@ -1279,6 +1301,7 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
         return parseQuery(q).every(t => t.op
           ? (t.op === '>' ? e.amount > t.v : t.op === '>=' ? e.amount >= t.v : t.op === '<' ? e.amount < t.v : e.amount <= t.v)
           : (e.note.toLowerCase().includes(t.word) || e.category.toLowerCase().includes(t.word) || String(e.comment || '').toLowerCase().includes(t.word)
+             || (appOf(e) && ({ phonepe: 'phonepe phone pe', gpay: 'gpay google pay', paytm: 'paytm' })[appOf(e)].includes(t.word))
              || (acctById(e.account) && `${acctById(e.account).nick || ''} ${acctById(e.account).name}`.toLowerCase().includes(t.word))));
       })
       .sort((a, b) => b.date.localeCompare(a.date) || b.createdAt - a.createdAt);
@@ -1307,7 +1330,7 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
           const c = catOf(e.category);
           return `<div class="item ${e.unread ? 'unread' : ''}" data-id="${e.id}">
             <div class="emoji">${esc(c.emoji)}</div>
-            <div class="info"><div class="cat">${esc(c.name)}</div>
+            <div class="info"><div class="cat">${esc(c.name)}${appBadge(e)}</div>
               <div class="note">${esc([e.note, !acctFilter && acctById(e.account) ? acctLabel(acctById(e.account)) : e.payment].filter(Boolean).join(' · '))}</div>
               ${e.comment ? `<div class="comment">💬 ${esc(e.comment)}</div>` : e.unread ? (sg => strongSug(sg) && sg.comment ? `<div class="sug-hint">💡 ${esc(sg.comment)}?</div>` : '')(suggestFor(e)[0]) : ''}</div>
             ${amtHtml(e)}</div>`;
@@ -1690,7 +1713,7 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     let category = classify(party || details, type);
     if (/wallet top-?up/i.test(details) && catsFor(type).some(c => c.name === 'Transfer')) category = 'Transfer';   // bank → PhonePe wallet
     const note = (party ? `${type === 'credit' ? 'From' : 'To'} ${party}` : details || 'PhonePe') + (utr ? ` · UTR ${utr}` : '') + ' · PhonePe';
-    return { date, desc: note, type, amount, payment: acct.walletName ? 'Wallet' : 'UPI', walletName: acct.walletName,
+    return { date, desc: note, type, amount, app: 'phonepe', payment: acct.walletName ? 'Wallet' : 'UPI', walletName: acct.walletName,
       category, touched: false, utr, account: acct.account, acctDigits: acct.account ? '' : acct.acctDigits, acctBank: '', acctKind: 'bank',
       ref: utr ? `upi|${utr}|${type}|${amount.toFixed(2)}` : `phonepe|${txnId || date + '|' + amount.toFixed(2) + '|' + details}` };
   }
@@ -1911,6 +1934,7 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
       if (x.balance != null && e.balance == null) e.balance = x.balance;
       if (!e.account && x.account) e.account = x.account;
       if (x.utr && !e.utr) e.utr = x.utr;
+      if (x.app && !e.app) e.app = x.app;   // e.g. a bank-statement entry paid through PhonePe
       n++;
     });
     return n;
@@ -2043,7 +2067,7 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     const rows = it.map((x, i) => !pass(x) ? '' : `
       <div class="irow ${x.include ? '' : 'off'}" data-i="${i}">
         <input type="checkbox" ${x.include ? 'checked' : ''} aria-label="Include">
-        <div class="d"><div class="desc">${esc(x.desc || '(no description)')}</div>
+        <div class="d"><div class="desc">${esc(x.desc || '(no description)')}${appBadge(x)}</div>
           <div class="meta">${new Date(x.date + 'T00:00').toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' })}${x.dup === 'exact' ? '<span class="tag warn">already imported</span>' : x.dup === 'balance' ? '<span class="tag warn">same as existing entry · balance matches</span>' : x.dup === 'utr' ? '<span class="tag warn">same payment already in Kharcha · UTR matches</span>' : x.dup ? '<span class="tag warn">possible duplicate</span>' : ''}${
             x.balanceGap ? '<span class="tag warn">balance doesn’t add up here</span>' : ''}${
             acctById(finalAcct(x)) ? `<span class="tag">${esc(acctLabel(acctById(finalAcct(x))))}</span>`
@@ -2095,7 +2119,7 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     if (ph >= 0) {
       const items = parsePhonePeRows(rows, ph);
       $('toast').classList.remove('show');
-      if (!openItemsPreview(items, `PhonePe · ${file.name}`, true)) toast(items.length ? 'Everything in this statement is already in Kharcha' : 'No transactions found in this file');
+      if (!openItemsPreview(items, `PhonePe · ${file.name}`, true)) toast(items.length ? 'Everything in this statement is already in Kharcha · PhonePe payments are marked Pe' : 'No transactions found in this file');
       return;
     }
     const det = detectColumns(rows);
@@ -2277,6 +2301,14 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     if (!items.length) return false;
     items.sort((a, b) => b.date.localeCompare(a.date));
     markDups(items);
+    // re-importing tags entries already in Kharcha with the app they were paid through
+    let tagged = 0;
+    items.forEach(x => {
+      if (!x.app || !x.dup) return;
+      const e = x.dup === 'exact' ? state.expenses.find(y => refsOf(y).includes(x.ref)) : x.match && state.expenses.find(y => y.id === x.match);
+      if (e && !e.app) { e.app = x.app; tagged++; }
+    });
+    if (tagged) { save(); render(); }
     if (dropExact) items = items.filter(x => x.dup !== 'exact');
     if (!items.length) return false;
     Object.assign(imp, { mode: 'sms', rows: [], items, filter: 'all', acctOverride: '', name: source || `${items.length} message${items.length > 1 ? 's' : ''}` });
@@ -2367,6 +2399,7 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
       date: x.date, note: x.desc, payment: x.payment || 'Bank', ref: x.ref, account: x.account || '',
       ...(x.balance != null ? { balance: x.balance } : {}),
       ...(x.utr ? { utr: x.utr } : {}),
+      ...(x.app ? { app: x.app } : {}),
       ...(x.comment ? { comment: x.comment } : needsReview(x) ? { unread: true } : {})
     }));
     const autoCommented = add.filter(applyCommentRule).length;
