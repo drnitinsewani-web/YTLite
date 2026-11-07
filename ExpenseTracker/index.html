@@ -326,8 +326,12 @@
 <header>
   <div class="monthbar">
     <button class="iconbtn" id="prevM" aria-label="Previous month">‹</button>
-    <h1 id="monthTitle"></h1>
+    <h1 id="monthTitle" role="button" title="Switch between month and financial year" style="cursor:pointer"></h1>
     <button class="iconbtn" id="nextM" aria-label="Next month">›</button>
+  </div>
+  <div class="seg" id="periodSeg" style="max-width:230px;margin:8px auto 0;padding:3px">
+    <button type="button" data-period="month" style="padding:5px 8px;font-size:13px;white-space:nowrap">Month</button>
+    <button type="button" data-period="fy" style="padding:5px 8px;font-size:13px;white-space:nowrap">Financial year</button>
   </div>
 </header>
 
@@ -365,7 +369,7 @@
       <div class="card stat"><div class="total-label">Net saved</div><div class="v" id="sNet"></div></div>
       <div class="card stat"><div class="total-label">Daily spend</div><div class="v" id="sAvg"></div></div>
       <div class="card stat"><div class="total-label">Transactions</div><div class="v" id="sCount"></div></div>
-      <div class="card stat"><div class="total-label">Spend vs last mo.</div><div class="v" id="sDiff"></div></div>
+      <div class="card stat"><div class="total-label" id="sDiffLabel">Spend vs last mo.</div><div class="v" id="sDiff"></div></div>
     </div>
     <div class="card">
       <h2>Spending by category</h2>
@@ -377,7 +381,7 @@
       <div id="incBars"></div>
     </div>
     <div class="card">
-      <h2>Spending, last 6 months</h2>
+      <h2 id="chartTitle">Spending, last 6 months</h2>
       <div class="chart" id="chart"></div>
     </div>
   </section>
@@ -734,7 +738,7 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
   const needsReview = x => reviewMin() > 0 && x.amount > reviewMin();
   function renderAmtBar() {
     const custom = minAmt && !AMT_PRESETS.includes(minAmt);
-    const toReview = inMonth(monthKey(current)).filter(e => e.unread).length;
+    const toReview = inPeriod().filter(e => e.unread).length;
     $('amtBar').innerHTML = (toReview || reviewOnly ? `<button class="chip ${reviewOnly ? 'sel' : ''}" data-review="1">● To review ${toReview}</button>` : '') + AMT_PRESETS.map(v =>
       `<button class="chip ${minAmt === v ? 'sel' : ''}" data-min="${v}">${v ? 'Over ' + fmt(v).replace(/\.00$/, '') : 'All amounts'}</button>`).join('') +
       `<button class="chip ${custom ? 'sel' : ''}" data-min="custom">${custom ? 'Over ' + fmt(minAmt).replace(/\.00$/, '') : 'Custom…'}</button>`;
@@ -745,6 +749,25 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     renderList();
   }
   const inMonth = mk => state.expenses.filter(e => e.date.slice(0, 7) === mk && (!acctFilter || e.account === acctFilter));
+  // Period shown on Expenses and Summary: a calendar month, or an Indian financial year (1 Apr – 31 Mar).
+  let period = 'month';
+  try { period = localStorage.getItem('expense-tracker-v1:period') === 'fy' ? 'fy' : 'month'; } catch (e) {}
+  const fyStartYear = d => d.getMonth() >= 3 ? d.getFullYear() : d.getFullYear() - 1;
+  const fyLabel = y => `FY ${y}–${String((y + 1) % 100).padStart(2, '0')}`;
+  function periodRange(d = current, p = period) {
+    if (p === 'fy') { const y = fyStartYear(d); return { from: `${y}-04-01`, to: `${y + 1}-03-31`, label: fyLabel(y) }; }
+    const mk = monthKey(d);
+    return { from: mk + '-01', to: mk + '-31', label: d.toLocaleDateString(undefined, { month: 'long', year: 'numeric' }) };
+  }
+  const inRange = r => state.expenses.filter(e => e.date >= r.from && e.date <= r.to && (!acctFilter || e.account === acctFilter));
+  const inPeriod = () => inRange(periodRange());
+  const prevPeriodDate = () => period === 'fy' ? new Date(current.getFullYear() - 1, current.getMonth(), 1) : new Date(current.getFullYear(), current.getMonth() - 1, 1);
+  const periodWord = () => period === 'fy' ? 'this financial year' : 'this month';
+  function setPeriod(p) {
+    period = p === 'fy' ? 'fy' : 'month';
+    try { localStorage.setItem('expense-tracker-v1:period', period); } catch (e) {}
+    render();
+  }
 
   // ---------- accounts ----------
   const acctById = id => (state.accounts || []).find(a => a.id === id);
@@ -820,7 +843,8 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     $('acctBar').innerHTML = !accts.length ? '' : [`<button class="chip ${!acctFilter ? 'sel' : ''}" data-acct="">All accounts</button>`]
       .concat(accts.map(a => `<button class="chip ${acctFilter === a.id ? 'sel' : ''}" data-acct="${esc(a.id)}">${esc(acctLabel(a))}${a.bal ? ` <small>${esc(fmt(a.bal.amount))}</small>` : ''}</button>`)).join('');
     const a = acctById(acctFilter);
-    $('spentLabel').textContent = a ? `Spent this month · ${a.name}` : 'Spent this month';
+    const pw = period === 'fy' ? `Spent in ${periodRange().label}` : 'Spent this month';
+    $('spentLabel').textContent = a ? `${pw} · ${a.name}` : pw;
   }
   const sum = arr => arr.reduce((a, e) => a + e.amount, 0);
   const spentOf = arr => sum(arr.filter(e => e.type === 'debit' && counted(e)));
@@ -889,9 +913,12 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
 
   // ---------- render ----------
   function render() {
-    $('monthTitle').textContent = current.toLocaleDateString(undefined, { month: 'long', year: 'numeric' });
-    const isNowMonth = monthKey(current) === monthKey(new Date());
-    $('nextM').style.visibility = isNowMonth ? 'hidden' : 'visible';
+    const r = periodRange();
+    $('monthTitle').textContent = r.label;
+    $('nextM').style.visibility = r.to >= isoDate(new Date()) ? 'hidden' : 'visible';
+    $('prevM').setAttribute('aria-label', period === 'fy' ? 'Previous financial year' : 'Previous month');
+    $('nextM').setAttribute('aria-label', period === 'fy' ? 'Next financial year' : 'Next month');
+    $('periodSeg').querySelectorAll('button').forEach(b => b.classList.toggle('sel', b.dataset.period === period));
     renderAcctBar();
     const unread = state.expenses.filter(e => e.unread).length;
     $('navBadge').textContent = unread > 99 ? '99+' : unread;
@@ -902,7 +929,7 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
   }
 
   function renderBudget(total) {
-    const b = state.settings.budget;
+    const b = state.settings.budget * (period === 'fy' ? 12 : 1);
     const bar = $('budgetBar');
     if (!b) { bar.classList.add('hidden'); $('budgetText').textContent = 'Set a monthly budget in Settings'; return; }
     bar.classList.remove('hidden');
@@ -921,7 +948,7 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
   }
 
   function renderList() {
-    const items = inMonth(monthKey(current));
+    const items = inPeriod();
     const spent = spentOf(items), income = incomeOf(items);
     $('monthTotal').textContent = fmt(spent);
     renderBudget(spent);
@@ -1029,12 +1056,15 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
   }
   function renderSummary() {
     renderBalances();
-    const mk = monthKey(current);
-    const items = inMonth(mk);
+    const r = periodRange();
+    const items = inPeriod();
     const spent = spentOf(items), income = incomeOf(items);
-    const now = new Date();
-    const days = mk === monthKey(now) ? now.getDate() : new Date(current.getFullYear(), current.getMonth() + 1, 0).getDate();
-    const prevSpent = spentOf(inMonth(monthKey(new Date(current.getFullYear(), current.getMonth() - 1, 1))));
+    const today = isoDate(new Date());
+    const end = r.to < today ? r.to : today;
+    const lastDay = period === 'fy' ? end : (r.to < today ? isoDate(new Date(current.getFullYear(), current.getMonth() + 1, 0)) : today);
+    const days = Math.max(1, Math.round((new Date(lastDay + 'T00:00') - new Date(r.from + 'T00:00')) / 864e5) + 1);
+    const prevSpent = spentOf(inRange(periodRange(prevPeriodDate())));
+    $('sDiffLabel').textContent = period === 'fy' ? 'Spend vs last FY' : 'Spend vs last mo.';
 
     $('sTotal').textContent = fmt(spent);
     $('sIncome').textContent = fmt(income);
@@ -1057,19 +1087,23 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     });
     $('notCounted').innerHTML = Object.keys(ex).length ? 'Not counted: ' + Object.entries(ex).map(([c, v]) =>
       `${esc(catOf(c).emoji)} ${esc(c)} ${v.out ? fmt(v.out) + ' out' : ''}${v.out && v.in ? ', ' : ''}${v.in ? fmt(v.in) + ' in' : ''}`).join(' · ') : '';
-    $('catBars').innerHTML = debits.length ? barsHtml(debits, '') : '<div class="sub">Nothing spent this month.</div>';
+    $('catBars').innerHTML = debits.length ? barsHtml(debits, '') : `<div class="sub">Nothing spent ${periodWord()}.</div>`;
     $('incCard').classList.toggle('hidden', !credits.length);
     $('incBars').innerHTML = barsHtml(credits, 'inc');
 
     const months = [];
-    for (let i = 5; i >= 0; i--) months.push(new Date(current.getFullYear(), current.getMonth() - i, 1));
+    if (period === 'fy') { const y = fyStartYear(current); for (let i = 0; i < 12; i++) months.push(new Date(y, 3 + i, 1)); }
+    else for (let i = 5; i >= 0; i--) months.push(new Date(current.getFullYear(), current.getMonth() - i, 1));
+    $('chartTitle').textContent = period === 'fy' ? `Spending by month, ${r.label}` : 'Spending, last 6 months';
     const totals = months.map(m => spentOf(inMonth(monthKey(m))));
     const max = Math.max(...totals, 1);
+    const curIdx = period === 'fy' ? months.findIndex(m => monthKey(m) === monthKey(new Date())) : 5;
+    $('chart').style.gap = period === 'fy' ? '3px' : '';
     $('chart').innerHTML = months.map((m, i) => `
-      <div class="col ${i === 5 ? 'cur' : ''}" title="${fmt(totals[i])}">
+      <div class="col ${i === curIdx ? 'cur' : ''}" title="${fmt(totals[i])}">
         <div class="lbl">${totals[i] ? compact(totals[i]) : ''}</div>
         <div class="track"><div class="b" style="height:${totals[i] / max * 100}%"></div></div>
-        <div class="lbl">${m.toLocaleDateString(undefined, { month: 'short' })}</div>
+        <div class="lbl">${period === 'fy' ? m.toLocaleDateString(undefined, { month: 'short' }).slice(0, 1) : m.toLocaleDateString(undefined, { month: 'short' })}</div>
       </div>`).join('');
   }
   function compact(n) {
@@ -1813,8 +1847,14 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
   });
 
   // ---------- navigation ----------
-  $('prevM').addEventListener('click', () => { current = new Date(current.getFullYear(), current.getMonth() - 1, 1); render(); });
-  $('nextM').addEventListener('click', () => { current = new Date(current.getFullYear(), current.getMonth() + 1, 1); render(); });
+  const step = n => { current = new Date(current.getFullYear(), current.getMonth() + n * (period === 'fy' ? 12 : 1), 1); render(); };
+  $('prevM').addEventListener('click', () => step(-1));
+  $('nextM').addEventListener('click', () => {
+    step(1);
+    if (current > new Date()) { current = new Date(); current.setDate(1); render(); }   // never past today's month
+  });
+  $('monthTitle').addEventListener('click', () => setPeriod(period === 'fy' ? 'month' : 'fy'));
+  $('periodSeg').addEventListener('click', e => { const b = e.target.closest('[data-period]'); if (b) setPeriod(b.dataset.period); });
   $('search').addEventListener('input', renderList);
   $('amtBar').addEventListener('click', e => {
     if (e.target.closest('[data-review]')) { reviewOnly = !reviewOnly; renderList(); return; }
