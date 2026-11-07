@@ -894,11 +894,11 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     if (own && own.id !== e.account) return own;
     const note = e.note || e.desc || '';
     // a masked number in the narration ("A/c XX9226") is yours only when no other person is named
-    // (then it is their account) and it matches 4+ known digits (PhonePe's 2-digit endings are too short)
+    // (then it is their account) and it matches 3+ known digits (PhonePe's 2-digit endings are too short)
     if (!namedParty(e)) {
       const accts = state.accounts || [];
       for (const d of acctDigitsIn(note, false)) {   // masked numbers only: plain long numbers are often references
-        const hit = accts.filter(a => a.id !== e.account && (a.digits || []).some(z => z.length >= 4 && (d.endsWith(z) || z.endsWith(d))));
+        const hit = accts.filter(a => a.id !== e.account && (a.digits || []).some(z => z.length >= 3 && (d.endsWith(z) || z.endsWith(d))));
         if (hit.length === 1) return hit[0];
       }
     }
@@ -986,10 +986,6 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
   const needsReview = x => reviewMin() > 0 && x.amount > reviewMin() && !catOf(x.category).exclude;
   // Comments that mean "money moved between my own accounts"
   const CROSS_RE = /cross\s*-?\s*ent|contra\b|self[\s-]*(transfer|trf)|own\s+(a\/?c|account)|internal\s+transfer|between\s+(my|own)\s+accounts/i;
-  function markCross(e) {
-    if (e.category !== 'Transfer' && catsFor(e.type).some(c => c.name === 'Transfer')) e.category = 'Transfer';
-    delete e.unread;
-  }
   // ---------- automatic transfers ----------
   // Money between your own accounts is never spending or income. Kharcha marks such entries Transfer by
   // itself and records why in e.autoXfer = { why: 'self' | 'acct' | 'pair', with: partner id, prev:
@@ -1002,15 +998,22 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     const p = partyOf(e).trim();
     return !!p && !isSelf(p) && !ownAccountFor(payerKey(e)) && !/^[x*•\s\d]+$/i.test(p) && !/^bank account\s+[x*]/i.test(p);
   };
-  // two sides of one transfer: neither names a third party, or both name the same person (your own
-  // name on both sides even before Kharcha knows your name)
-  const pairable = (d, c) => (!namedParty(d) && !namedParty(c)) || (!!payerKey(d) && samePayer(payerKey(d), payerKey(c)));
+  // two sides of one transfer: neither names a third party ("To Rohit" ₹500 and "From Rohit" ₹500 is
+  // Rohit paying you back, not a transfer; your own name counts once Kharcha knows it)
+  const pairable = (d, c) => !namedParty(d) && !namedParty(c);
   const isAutoComment = e => !!e.autoXfer && !!e.autoXfer.c && e.comment === e.autoXfer.c;
   const ownComment = e => !!e.comment && !isAutoComment(e);
   // Kharcha may (re)categorise it: not chosen by you, no comment of yours (a "cross entry" comment of
   // yours is fine), and its category is still the one Kharcha's rules would give it
+  let classifyMemo = null;   // per tidyTransfers run
+  const ruleCat = e => {
+    if (!classifyMemo) return classify(e.note, e.type, true);
+    const k = e.type + '|' + e.note;
+    if (!classifyMemo.has(k)) classifyMemo.set(k, classify(e.note, e.type, true));
+    return classifyMemo.get(k);
+  };
   const autoEligible = e => !e.userCat && (!ownComment(e) || CROSS_RE.test(e.comment)) &&
-    (/^Other/.test(e.category) || e.category === classify(e.note, e.type, true) || !!e.autoXfer);
+    (!!e.autoXfer || /^Other/.test(e.category) || e.category === ruleCat(e));
   function autoMark(e, why, comment, withId) {
     if (!e.autoXfer) e.autoXfer = { prev: e.category, ...(e.unread ? { unread: true } : {}) };
     Object.assign(e.autoXfer, { why }); if (withId) e.autoXfer.with = withId; else delete e.autoXfer.with;
@@ -1022,7 +1025,7 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     if (a.c && e.comment === a.c) delete e.comment;
     if (e.comment && CROSS_RE.test(e.comment)) return;   // your own "cross entry" comment keeps it a transfer
     e.category = a.prev && a.prev !== 'Transfer' && catsFor(e.type).some(c => c.name === a.prev) ? a.prev : classify(e.note, e.type, true);
-    if (a.unread || (a.prev === undefined && needsReview(e) && !e.comment)) e.unread = true;
+    if (!e.comment && (a.unread || (a.prev === undefined && needsReview(e)))) e.unread = true;   // a comment of yours means reviewed
   }
   function markCross(e) {
     if (e.category !== 'Transfer' && catsFor(e.type).some(c => c.name === 'Transfer')) e.category = 'Transfer';
@@ -1033,8 +1036,10 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     const debits = state.expenses.filter(e => e.type === 'debit' && ok(e));
     const credits = state.expenses.filter(e => e.type === 'credit' && ok(e));
     const used = new Set();
+    const byAmt = new Map();
+    credits.forEach(x => { const k = x.amount.toFixed(2); if (!byAmt.has(k)) byAmt.set(k, []); byAmt.get(k).push(x); });
     debits.forEach(d => {
-      const c = credits.find(x => !used.has(x.id) && x.account !== d.account && Math.abs(x.amount - d.amount) < 0.005 && dayDiff(x.date, d.date) <= 3 && pairable(d, x));
+      const c = (byAmt.get(d.amount.toFixed(2)) || []).find(x => !used.has(x.id) && x.account !== d.account && dayDiff(x.date, d.date) <= 3 && pairable(d, x));
       if (!c) return;
       used.add(c.id);
       autoMark(d, 'pair', `Cross entry ↔ ${acctLabel(acctById(c.account))}`, c.id);
@@ -1045,12 +1050,13 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
   // Earlier versions marked transfers without recording why: adopt those marks so they can be
   // re-checked like new ones (a pair needs its partner: same amount, opposite side, within 3 days).
   function adoptLegacyMarks() {
-    const legacy = state.expenses.filter(e => !e.autoXfer && !e.userCat && e.category === 'Transfer' &&
-      (e.comment === 'Self transfer' || /^Cross entry ↔ /.test(e.comment || '')));
+    // only Kharcha writes "Cross entry ↔ 🏦 ICICI Bank ••7238" (emoji + account label); a plain comment
+    // such as "Self transfer" may be yours and is never adopted
+    const LEGACY = /^Cross entry ↔ \S+ .+ ••\d+$/u;
+    const legacy = state.expenses.filter(e => !e.autoXfer && !e.userCat && e.category === 'Transfer' && LEGACY.test(e.comment || ''));
     legacy.forEach(e => {
       if (e.autoXfer) return;   // adopted as someone's partner
       const base = { prev: undefined, c: e.comment };
-      if (e.comment === 'Self transfer') { e.autoXfer = { ...base, why: 'self' }; return; }
       const p = legacy.find(x => x !== e && !x.autoXfer && x.type !== e.type && x.account !== e.account &&
         Math.abs(x.amount - e.amount) < 0.005 && dayDiff(x.date, e.date) <= 3);
       if (p) { e.autoXfer = { ...base, why: 'pair', with: p.id }; p.autoXfer = { prev: undefined, c: p.comment, why: 'pair', with: e.id }; }
@@ -1061,14 +1067,18 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
   // categories. Returns what changed: { total, self, acct, pair, undone }.
   function tidyTransfers() {
     selfRe = selfPatterns();
+    classifyMemo = new Map();
+    try { return tidyRun(); } finally { classifyMemo = null; }
+  }
+  function tidyRun() {
     const res = { total: 0, self: 0, acct: 0, pair: 0, undone: 0 };
     adoptLegacyMarks();
     // 1. re-check automatic marks; both sides of a broken pair are undone together
     const byId = new Map(state.expenses.map(e => [e.id, e]));
     const stale = new Set();
+    state.expenses.forEach(e => { if (e.autoXfer && (e.userCat || (ownComment(e) && CROSS_RE.test(e.comment)))) delete e.autoXfer; });   // yours now
     state.expenses.forEach(e => {
       const a = e.autoXfer; if (!a) return;
-      if (e.userCat || (ownComment(e) && CROSS_RE.test(e.comment))) { delete e.autoXfer; return; }   // yours now
       if (a.why === 'pair') {
         const p = byId.get(a.with);
         if (!p || !p.autoXfer || p.autoXfer.with !== e.id || p.category !== 'Transfer' || !pairable(e.type === 'debit' ? e : p, e.type === 'debit' ? p : e)) stale.add(e);
@@ -1082,9 +1092,9 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     });
     // 2. payments to/from your own name or one of your other accounts
     state.expenses.forEach(e => {
-      if (e.category === 'Transfer' || !autoEligible(e) || !catsFor(e.type).some(c => c.name === 'Transfer') || catOf(e.category).exclude) return;
+      if (e.category === 'Transfer' || e.userCat || catOf(e.category).exclude || !catsFor(e.type).some(c => c.name === 'Transfer')) return;
       const other = selfTransferTo(e);
-      if (!other) return;
+      if (!other || !autoEligible(e)) return;
       if (other === true) { autoMark(e, 'self', 'Self transfer'); res.self++; }
       else { autoMark(e, 'acct', `Cross entry ↔ ${acctLabel(other)}`); res.acct++; }
     });
@@ -1811,10 +1821,11 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     $('fGroup').innerHTML = groups.concat(['']).map(g => `<button type="button" class="chip ${g === cur ? 'sel' : ''}" data-group="${esc(g)}">${g ? esc(g) : 'No group'}</button>`).join('') +
       `<span class="sub" style="margin:0;align-self:center">${formGroup === null ? (catG ? `from ${esc(selectedCat)}` : '') : 'this transaction only'}</span>`;
   }
-  let pendingRef = '', returnToMail = false;
+  let pendingRef = '', returnToMail = false, pendingTidy = false, pendingLearn = null;
   function openSheet(exp, pre) {
     const src = exp || pre;
     pendingRef = !exp && pre && pre.ref ? pre.ref : '';
+    pendingLearn = !exp && pre && pre.learn && pre.account ? { id: pre.account, d: pre.learn } : null;
     editingId = exp ? exp.id : null;
     editingOrigCat = exp ? exp.category : null;
     formType = src ? src.type : 'debit';
@@ -1876,6 +1887,7 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
         if (e.autoXfer && data.category !== 'Transfer' && data.comment && data.comment === e.autoXfer.c) delete data.comment;   // "Self transfer" no longer true
         if (!data.comment) delete e.comment;
         delete e.autoXfer;
+        pendingTidy = true;   // its pair partner (if any) is re-checked below
       }
       Object.assign(e, data);
       let msg = 'Updated';
@@ -1902,6 +1914,9 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
       if (pendingRef.startsWith('mail|')) { const m = mailCfg(); m.seen = [...new Set([...(m.seen || []), pendingRef.slice(5)])].slice(-1000); }
       toast((data.type === 'credit' ? 'Added income ' : 'Added ') + fmt(data.amount));
     }
+    if (pendingTidy) { pendingTidy = false; tidyTransfers(); }
+    if (!editingId && pendingLearn && data.account === pendingLearn.id) learnDigits(pendingLearn.id, pendingLearn.d);
+    pendingLearn = null;
     save();
     const d = new Date(data.date + 'T00:00'); current = new Date(d.getFullYear(), d.getMonth(), 1);
     closeAll(); render();
@@ -2669,7 +2684,7 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     if (!acct.digits && !acct.id) return null;
     let amount = parseFloat(m[1].replace(/,/g, ''));
     if (/dr/i.test(m[2] || '')) amount = -amount;
-    return { balance: amount, date: smsDate(t), account: acct.id, acctDigits: acct.digits, acctBank: bankFromText(t) || bankName(t), acctKind: 'bank' };
+    return { balance: amount, date: smsDate(t), account: acct.id, acctDigits: acct.digits, ...(acct.learn ? { learn: acct.learn } : {}), acctBank: bankFromText(t) || bankName(t), acctKind: 'bank' };
   }
   let lastBalanceReplies = [];
   function parseSmsBatch(text) {
@@ -2695,6 +2710,7 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     const done = [];
     lastBalanceReplies.forEach(b => {
       const a = acctById(b.account); if (!a) return;
+      if (b.learn) learnDigits(a.id, b.learn);
       if (!a.bal || b.date >= a.bal.date) a.bal = { amount: b.balance, date: b.date, seq: 1e9 };
       done.push(`${acctName(a)} ••${a.digits[0]} ${fmt(b.balance)}`);
     });
@@ -2822,11 +2838,20 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     if (autoCommented) label = (label || `Imported ${add.length} transactions`) + ` · ${autoCommented} commented automatically`;
     updateBalances(items);
     if (created.length) label = (label || `Imported ${add.length} transactions`) + ` · added account${created.length > 1 ? 's' : ''} ` + created.map(a => acctLabel(a)).join(', ');
-    // your own name on an imported row: Transfer from the start, recorded as automatic
-    add.forEach(e => { if (!e.userCat && e.category === 'Transfer' && isSelf(e.note)) { e.category = classify(e.note, e.type, true); } });
+    // your own name on an imported row: Transfer from the start, recorded as automatic so it can be
+    // undone if your name changes (review mark worked out for the category it would otherwise have)
+    let selfRows = 0;
+    add.forEach(e => {
+      if (e.userCat || e.category !== 'Transfer' || !isSelf(e.note)) return;
+      selfRows++;
+      const prev = classify(e.note, e.type, true);
+      e.autoXfer = { why: 'self', prev, ...(!e.comment && needsReview({ ...e, category: prev }) ? { unread: true } : {}) };
+      if (!e.comment) { e.comment = 'Self transfer'; e.autoXfer.c = e.comment; }
+      delete e.unread;
+    });
     state.expenses.push(...add);
     const t = tidyTransfers();
-    const own = t.self + t.acct + t.pair;
+    const own = selfRows + t.self + t.acct + t.pair;
     if (own) label = (label || `Imported ${add.length} transactions`) + ` · ${own} between your own accounts → Transfer`;
     if (t.undone) label = (label || `Imported ${add.length} transactions`) + ` · ${t.undone} earlier transfer mark${t.undone > 1 ? 's' : ''} undone`;
     save();
@@ -2842,7 +2867,7 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     if (imp.mode === 'file' && !imp.acctOverride && imp.stmtAcct.learn) learnDigits(imp.stmtAcct.id, imp.stmtAcct.learn);
     const items = imp.items.filter(x => x.include);
     items.forEach(x => {
-      if (imp.acctOverride) { x.account = finalAcct(x); x.acctDigits = ''; x.bankSure = false; }   // user chose an account (or none)
+      if (imp.acctOverride) { x.account = finalAcct(x); x.acctDigits = ''; x.bankSure = false; delete x.learn; }   // user chose an account (or none)
     });
     const skipped = imp.items.filter(x => !x.include);
     skipped.forEach(x => { if (imp.acctOverride) x.account = finalAcct(x); });
@@ -3215,7 +3240,7 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     if (!x) {
       const amount = Math.round(smsAmount(String(e.text)) * 100) / 100;
       x = { type: 'debit', amount: amount > 0 ? amount : 0, date: fallbackDate, payment: 'Bank', desc: '',
-            category: classify(e.subject + ' ' + e.text, 'debit'), account: matchAccount(e.text).id };
+            category: classify(e.subject + ' ' + e.text, 'debit'), ...(m => ({ account: m.id, ...(m.learn ? { learn: m.learn } : {}) }))(matchAccount(e.text)) };
     }
     if (!/ · /.test(x.desc || '') && (x.desc || '').match(/^(To|From) /)) {
       const sender = String(e.from || '').replace(/<.*>/, '').replace(/["']/g, '').trim();
