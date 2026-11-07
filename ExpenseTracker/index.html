@@ -753,7 +753,42 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
   // "To review": imported transactions above the threshold stay unread until a comment is saved.
   let reviewOnly = false;
   const reviewMin = () => { const v = state.settings.reviewMin; return v == null ? 1000 : v; };
-  const needsReview = x => reviewMin() > 0 && x.amount > reviewMin();
+  // Transfers and investments are money moving between your own accounts: never "to review".
+  const needsReview = x => reviewMin() > 0 && x.amount > reviewMin() && !catOf(x.category).exclude;
+  // Comments that mean "money moved between my own accounts"
+  const CROSS_RE = /cross\s*-?\s*ent|contra\b|self[\s-]*(transfer|trf)|own\s+(a\/?c|account)|internal\s+transfer|between\s+(my|own)\s+accounts/i;
+  function markCross(e) {
+    if (e.category !== 'Transfer' && catsFor(e.type).some(c => c.name === 'Transfer')) e.category = 'Transfer';
+    delete e.unread;
+  }
+  // A debit in one of your accounts and the same amount credited to a different account of yours
+  // within 3 days is a cross entry: both become Transfer. Entries with their own comment are left alone.
+  function pairCrossEntries() {
+    const ok = e => e.account && counted(e) && e.amount >= 100 && (!e.comment || CROSS_RE.test(e.comment));
+    const debits = state.expenses.filter(e => e.type === 'debit' && ok(e));
+    const credits = state.expenses.filter(e => e.type === 'credit' && ok(e));
+    const used = new Set(); let n = 0;
+    debits.forEach(d => {
+      const c = credits.find(x => !used.has(x.id) && x.account !== d.account && Math.abs(x.amount - d.amount) < 0.005 && dayDiff(x.date, d.date) <= 3);
+      if (!c) return;
+      used.add(c.id);
+      [[d, c], [c, d]].forEach(([x, other]) => {
+        markCross(x);
+        if (!x.comment) x.comment = `Cross entry ↔ ${acctLabel(acctById(other.account))}`;
+      });
+      n++;
+    });
+    return n;
+  }
+  // Keep categories and review marks consistent with cross-entry comments and excluded categories.
+  function tidyTransfers() {
+    let changed = 0;
+    state.expenses.forEach(e => {
+      if (e.comment && CROSS_RE.test(e.comment) && (e.category !== 'Transfer' || e.unread)) { markCross(e); changed++; }
+      else if (e.unread && !counted(e)) { delete e.unread; changed++; }
+    });
+    return changed + pairCrossEntries();
+  }
   // Comment rules: a comment saved on one transaction is reused for transactions from the same
   // payer/merchant with the same amount and type (now and in future imports).
   // Round figures (whole rupees, multiples of ₹100: 500, 1,000, 10,000…) are usually one-off transfers
@@ -776,7 +811,7 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
   function applyCommentRule(e) {
     if (e.comment) return false;
     const c = ruleComment(e); if (!c) return false;
-    e.comment = c; delete e.unread; return true;
+    e.comment = c; delete e.unread; if (CROSS_RE.test(c)) markCross(e); return true;
   }
   // existing uncommented entries matching e: same payer & type, and (optionally) the same amount
   const commentMatches = (e, sameAmount) => {
@@ -803,7 +838,7 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     if (!e.comment || !payerKey(e)) return 0;
     const anyAmt = $('fMatchAny').checked, sameAmt = $('fMatchAmt').checked || anyAmt;
     let n = 0;
-    if (sameAmt) commentMatches(e, !anyAmt).forEach(x => { x.comment = e.comment; delete x.unread; n++; });
+    if (sameAmt) commentMatches(e, !anyAmt).forEach(x => { x.comment = e.comment; delete x.unread; if (CROSS_RE.test(e.comment)) markCross(x); n++; });
     if ($('fMatchFuture').checked) {
       const key = `${payerKey(e)}|${e.type}|${anyAmt ? 'any' : amtKey(e)}`;
       state.settings.commentRules = { ...(state.settings.commentRules || {}), [key]: { c: e.comment } };
@@ -1285,6 +1320,7 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
       if (!data.comment) delete e.comment;
       Object.assign(e, data);
       let msg = 'Updated';
+      const wasCat = e.category;
       if (e.ref && data.category !== editingOrigCat && data.note) {
         const k = learn(data.note, data.category);
         if (k) msg = `Updated · will file “${k}” under ${data.category}`;
@@ -1297,6 +1333,9 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
         const n = learnComment(e);
         if (n) msg += ` · same comment added to ${n} other transaction${n > 1 ? 's' : ''}`;
       }
+      if (data.comment && CROSS_RE.test(data.comment)) markCross(e);
+      if (!counted(e)) delete e.unread;   // transfers / investments never need review
+      if (e.category !== wasCat) msg += ' · moved to Transfer (not counted)';
       toast(msg);
     } else {
       state.expenses.push({ id: uid(), createdAt: Date.now(), ...data, ...(pendingRef ? { ref: pendingRef } : {}),
@@ -1904,6 +1943,10 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     updateBalances(items);
     if (created.length) label = (label || `Imported ${add.length} transactions`) + ` · added account${created.length > 1 ? 's' : ''} ` + created.map(a => acctLabel(a)).join(', ');
     state.expenses.push(...add);
+    const crossBefore = state.expenses.filter(e => e.category === 'Transfer').length;
+    tidyTransfers();
+    const crossNew = state.expenses.filter(e => e.category === 'Transfer').length - crossBefore;
+    if (crossNew) label = (label || `Imported ${add.length} transactions`) + ` · ${crossNew} cross entr${crossNew > 1 ? 'ies' : 'y'} → Transfer`;
     save();
     const latest = add.reduce((m, x) => x.date > m ? x.date : m, '');
     if (latest) { const d = new Date(latest + 'T00:00'); current = new Date(d.getFullYear(), d.getMonth(), 1); }
@@ -2093,6 +2136,7 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
   });
 
   selfRe = selfPatterns();
+  if (tidyTransfers()) save();
   render();
   (() => {
     const q = new URLSearchParams(location.search);
