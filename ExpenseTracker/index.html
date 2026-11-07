@@ -1594,9 +1594,10 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
   const cellNum = v => { const n = parseAmount(v); return isNaN(n) ? 0 : n; };
   const cellText = r => (r || []).map(c => c instanceof Date ? isoDate(c) : String(c ?? '').trim()).filter(Boolean);
   const fyOf = d => { const y = +d.slice(0, 4), m = +d.slice(5, 7); const s = m >= 4 ? y : y - 1; return `${s}-${String(s + 1).slice(2)}`; };
-  const FUND_IN = /funds? added|pay ?-?in\b|funds? received|add(ed)? funds?|deposit/i;
-  const FUND_OUT = /funds? withdrawn|withdrawal|pay ?-?out|quarterly settlement|running account settlement|funds? (paid|released)/i;
-  const INTERNAL = /normal account|\bmtf\b|journal|bill posting/i;
+  const FUND_IN = /funds? added|amount added|added via|pay ?-?in\b|funds? received|add(ed)? funds?|deposit|\breceipt\b/i;
+  const FUND_OUT = /funds? withdrawn|withdraw|pay ?-?out|quarterly settlement|running account settlement|funds? (paid|released)|transferred to (your )?bank|paid to (your )?bank/i;
+  // moves inside the broker (between its own wallets, MTF, trade bills) are not money from or to your bank
+  const INTERNAL = /(normal|trading|mtf|main|funds?) (account|wallet)|\bmtf\b|bill posting|stock value|p\/l amt|trades? executed/i;
   function readBrokerReport(book, fileName) {
     if (!book) return null;
     const sheets = book.names.map(n => ({ n, rows: (book.sheets[n] || []).filter(r => Array.isArray(r) && cellText(r).length) }));
@@ -1714,7 +1715,11 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     if (rep.ledger) {
       if (rep.ledger.hasFunds) { const v = brokerCheck(b.key); parts.push(`${rep.ledger.funds.length} money movement${rep.ledger.funds.length === 1 ? '' : 's'} · ${v.matched} verified with your bank`); }
       else if (rep.ledger.kind === 'sof') parts.push(`statement of funds ${shortD(rep.ledger.from)} – ${shortD(rep.ledger.to)}: no deposits or withdrawals${rep.ledger.balance !== undefined ? ', balance ' + fmt(rep.ledger.balance) : ''}`);
-      else parts.push(`ledger without deposits or withdrawals${rep.ledger.wallet ? ' (' + rep.ledger.wallet + ' wallet)' : ''}`);
+      else {
+        const sent = state.expenses.filter(e => bankForBroker(e, b)).length;
+        parts.push(`this is the ${rep.ledger.wallet || 'trading'} wallet ledger — it has no deposits or withdrawals` +
+          (sent ? `. Your ${sent} bank transfers with ${b.name} are in its ${b.key === 'upstox' ? '“Normal”' : 'funds'} wallet ledger: download that one` : ''));
+      }
     }
     if (rep.pnl) parts.push(`P&L FY ${rep.pnl.fy}: ` + Object.entries(rep.pnl.sections).map(([k, x]) => `${k} ${x.net >= 0 ? '+' : '−'}${fmt(Math.abs(x.net ?? x.gross))}`).join(', '));
     if (rep.holdings) parts.push(rep.holdings.count ? `${rep.holdings.count} holdings` : 'no holdings');
@@ -1752,7 +1757,7 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
   const fromStatement = e => refsOf(e).some(r => /^\d{4}-\d{2}-\d{2}\|/.test(r));
   const fromApp = (e, app) => e.app === app && refsOf(e).some(r => /^(upi|phonepe|gpay)\|/.test(r));
   const BROKER_HOW = {
-    upstox: 'Upstox app → Account → Reports: Ledger (choose the funds wallet, not Trading) and P&L / Tax report',
+    upstox: 'Upstox → Reports → Ledger: set Wallet to “Normal” (not “Trading”) before downloading — the right file says “Wallet: NORMAL” at the top',
     angelone: 'Angel One app → Profile → Reports: Ledger statement and Tax P&L',
     zerodha: 'Zerodha Console → Funds → Statement, and Reports → Tax P&L' };
   const shortD = d => new Date(d + 'T00:00').toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' });
