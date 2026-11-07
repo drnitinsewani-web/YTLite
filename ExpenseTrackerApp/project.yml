@@ -32,7 +32,7 @@ targets:
     info:
       path: Config/App-Info.plist
       properties:
-        CFBundleDisplayName: Expenses
+        CFBundleDisplayName: Kharcha
         CFBundleShortVersionString: $(MARKETING_VERSION)
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         AppGroupID: $(APP_GROUP_ID)
@@ -63,7 +63,7 @@ targets:
     info:
       path: Config/Share-Info.plist
       properties:
-        CFBundleDisplayName: Expenses
+        CFBundleDisplayName: Kharcha
         CFBundleShortVersionString: $(MARKETING_VERSION)
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         AppGroupID: $(APP_GROUP_ID)

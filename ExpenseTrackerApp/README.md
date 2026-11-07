@@ -3,7 +3,7 @@
 A native iOS wrapper around the web app in [`../ExpenseTracker`](../ExpenseTracker).
 The same code runs inside the app, plus:
 
-- **Share Extension:** "Expenses" appears in the iOS share sheet. Share a bank SMS (or any text)
+- **Share Extension:** "Kharcha" appears in the iOS share sheet. Share a bank SMS (or any text)
   and it waits in an inbox; the next time you open the app it shows up for review.
 - **Durable storage:** data is saved in the app's own storage (Application Support), not browser storage.
 - **Exports** (CSV and backup) open the iOS share sheet, so you can save them to Files, iCloud or WhatsApp.
@@ -53,8 +53,8 @@ Add yourself under **Internal Testing** (create a group and add your Apple ID), 
 **TestFlight** app on your iPhone and tap **Install**.
 
 ## Using the Share Extension
-In Messages, select the SMS text (or long-press → *Copy* and paste anywhere) → **Share** → **Expenses**.
-If you don't see it, scroll the app row to the end → **More** → turn on *Expenses*.
+In Messages, select the SMS text (or long-press → *Copy* and paste anywhere) → **Share** → **Kharcha**.
+If you don't see it, scroll the app row to the end → **More** → turn on *Kharcha*.
 Open Expenses afterwards: the shared messages appear in the review screen.
 
 ## Bank SMS reach the app automatically (Shortcuts automation)

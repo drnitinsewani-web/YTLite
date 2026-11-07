@@ -1,7 +1,7 @@
 import UIKit
 import UniformTypeIdentifiers
 
-/// Appears as "Expenses" in the iOS share sheet. Saves the shared text (e.g. a
+/// Appears as "Kharcha" in the iOS share sheet. Saves the shared text (e.g. a
 /// bank SMS) to the App Group inbox; the main app shows it for review when opened.
 final class ShareViewController: UIViewController {
     private let card = UIView()
@@ -24,7 +24,7 @@ final class ShareViewController: UIViewController {
         card.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(card)
 
-        titleLabel.text = "Saving to Expenses…"
+        titleLabel.text = "Saving to Kharcha…"
         titleLabel.font = .preferredFont(forTextStyle: .headline)
         titleLabel.textAlignment = .center
         titleLabel.numberOfLines = 0
@@ -99,7 +99,7 @@ final class ShareViewController: UIViewController {
         }
         let saved = SharedInbox.append(texts.joined(separator: "\n\n"))
         if saved {
-            show(title: "Saved ✓", detail: "Open Expenses to review and add it.", autoClose: true)
+            show(title: "Saved ✓", detail: "Open Kharcha to review and add it.", autoClose: true)
         } else {
             show(title: "Couldn’t save", detail: "The app group isn’t set up for this build.", autoClose: false)
         }
