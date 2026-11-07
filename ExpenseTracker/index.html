@@ -404,6 +404,7 @@
       <button class="btn primary" id="askGo">Ask</button>
       <div id="askOut" class="sub" style="margin-top:10px;line-height:1.5;color:var(--text)"></div>
     </div>
+    <div class="filters hidden" id="sAcct" style="margin:0 0 8px"></div>
     <div class="stats">
       <div class="card stat" data-showkind="spent" role="button"><div class="total-label">Spent ›</div><div class="v" id="sTotal"></div></div>
       <div class="card stat" data-showkind="income" role="button"><div class="total-label">Income ›</div><div class="v" id="sIncome" style="color:var(--income)"></div></div>
@@ -565,7 +566,7 @@
     </div>
     <div class="card">
       <h2>Data</h2>
-      <div class="sub">Your data is stored only on this device. Back it up now and then.</div>
+      <div class="sub" id="dataWhere">Your data is stored only on this device. Back it up now and then.</div>
       <div class="native-only">
         <button class="btn ghost" id="autoBackups">🛟 Automatic backups</button>
         <div class="sub hidden" id="backupList" style="margin-top:8px"></div>
@@ -809,7 +810,8 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     return {
       v: STATE_VERSION, expenses: [], rules: {}, accounts: [], fds: [], brokers: {},
       categories: DEFAULT_CATS.map(({ since, ...c }) => c),
-      settings: { currency: /-IN$/i.test(lang) ? 'INR' : 'USD', budget: 0, selfName: '' }
+      // reviewBackfill: new data never needs the one-time "to review" marking of older versions (see migrate)
+      settings: { currency: /-IN$/i.test(lang) ? 'INR' : 'USD', budget: 0, selfName: '', reviewBackfill: true }
     };
   }
   // Rules learned under payee keys that were only labels ("ACCOUNT UTR", "UTR PHONEPE") matched
@@ -826,8 +828,8 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
   }
   function migrate(s) {
     const d = defaultState();
-    const oldVersion = +s.v || 1;
-    s = { ...d, ...s, settings: { ...d.settings, ...(s.settings || {}) } };
+    const oldVersion = +s.v || 1, oldSettings = s.settings || {};
+    s = { ...d, ...s, settings: { ...d.settings, ...oldSettings } };
     s.rules = s.rules && typeof s.rules === 'object' ? s.rules : {};
     s.categories = (Array.isArray(s.categories) && s.categories.length ? s.categories : d.categories)
       .map(c => ({ ...c, kind: c.kind || 'debit' }))
@@ -839,7 +841,7 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     });
     s.v = STATE_VERSION;
     s.expenses = s.expenses.map(e => ({ ...e, type: e.type === 'credit' ? 'credit' : 'debit' }));
-    if (!s.settings.reviewBackfill) {
+    if (!oldSettings.reviewBackfill) {
       const min = s.settings.reviewMin == null ? 1000 : s.settings.reviewMin;
       if (min > 0) s.expenses.forEach(e => { if (e.ref && !e.comment && e.amount > min) e.unread = true; });
       s.settings.reviewBackfill = true;
@@ -852,10 +854,18 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
   // If saved data exists but can't be read, Kharcha must not start empty and save that emptiness over
   // it (or sync it to iCloud): `loadProblem` stops all saving until the data is restored.
   let loadProblem = '';
+  // the iPhone app's inbox was offered while a sheet was open or nothing could be saved (expensesCanReceive)
+  let inboxWaiting = false;
+  function inboxRetry() {
+    if (!inboxWaiting || loadProblem || document.querySelector('.sheet.open')) return;
+    inboxWaiting = false; native({ type: 'inboxOpen' });
+  }
   function load() {
-    if (NATIVE && window.__EXPENSES_NATIVE_STATE__) {
+    const saved = NATIVE ? window.__EXPENSES_NATIVE_STATE__ : null;
+    // nothing saved yet (a new install): the app passes null (older versions the text "null")
+    if (saved && saved !== 'null') {
       try {
-        const s = JSON.parse(window.__EXPENSES_NATIVE_STATE__);
+        const s = JSON.parse(saved);
         if (s && Array.isArray(s.expenses)) return migrate(s);
         loadProblem = 'unexpected format';
       } catch (e) { loadProblem = String((e && e.message) || e); }
@@ -867,14 +877,19 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     return defaultState();
   }
   let state = load();
+  // entries when Kharcha opened: the iCloud safety net looks at this, not at entries deleted on purpose since
+  let loadN = state.expenses.length;
   let dataStamp = 0;
   function saveLocal() {
     dataStamp++;
     if (loadProblem) return;   // never overwrite data that couldn't be read
     const json = JSON.stringify(state);
-    if (NATIVE) native({ type: 'save', data: json });
+    if (NATIVE) { native({ type: 'save', data: json }); inboxRetry(); }   // e.g. restored from a backup
     try { localStorage.setItem(KEY, json); }
-    catch (e) { if (!NATIVE) toast('Could not save — storage full or unavailable'); }
+    catch (e) {
+      if (!NATIVE) toast('Could not save — storage full or unavailable');
+      else try { localStorage.removeItem(KEY); } catch (e2) {}   // the app's file has it; never keep an old copy to fall back on
+    }
   }
   let cloudTimer = null;
   function save() {
@@ -887,6 +902,15 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
   }
 
   let current = new Date(); current.setDate(1);
+  // iOS can keep Kharcha in memory for days: when it comes back on a later day, a month (or year) that
+  // was "now" moves on to today's, and "Today"/"Yesterday" are worked out again
+  let shownToday = isoDate(new Date());
+  function catchUpToday() {
+    const t = isoDate(new Date()); if (t === shownToday) return false;
+    const r = periodRange(), was = shownToday; shownToday = t;
+    if (was >= r.from && was <= r.to) { current = new Date(); current.setDate(1); }
+    return true;
+  }
   let view = 'list';
   let editingId = null, editingOrigCat = null;
   let selectedCat = null, formType = 'debit';
@@ -926,7 +950,7 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
   const amtOf = e => e.type === 'debit' ? Math.max(0, Math.round((e.amount - refundedOf(e)) * 100) / 100) : e.amount;
   // money between your own accounts ("Cross entry", "self transfer" in its comment, or marked by
   // Kharcha) is never income or spending, whatever category it carries
-  const isCross = e => !!e.autoXfer || CROSS_RE.test(e.comment || '');
+  const isCross = e => !!e.autoXfer || isCrossText(e.comment);
   const counted = e => !catOf(e.category).exclude && !isCross(e) && !refundTarget(e) && !fullyRefunded(e);
   let acctFilter = '';
   // Amount filter (remembered per device) and amount terms in search: ">1000", ">=5000", "<500", "swiggy >300"
@@ -947,21 +971,31 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
   let payerFilter = '';
   // Names you gave payees (settings.payeeNames: payee key → name), e.g. "ACCT 1090" → "CA Sharma".
   // A payee known only by a masked number that is one of YOUR accounts is named after that account.
-  function payeeAlias(k) {
+  function givenName(k) {
     if (!k) return '';
     const names = state.settings.payeeNames || {};
     if (names[k]) return names[k];
     const near = Object.keys(names).find(x => samePayer(x, k));   // banks shorten names differently
-    if (near) return names[near];
+    return near ? names[near] : '';
+  }
+  function payeeAlias(k) {
+    if (!k) return '';
+    const given = givenName(k);
+    if (given) return given;
     const mine = ownAccountFor(k);
     return mine ? `${acctName(mine)} ••${mine.digits[0]} (yours)` : '';
   }
+  // a card payment or cash withdrawal prints the card used ("POS 459150XXXXXX1234 SWIGGY",
+  // "ATW-459150XXXXXX1234-…"): the card you paid with, never an account the money went to
+  const CARD_USE = /^(?:POS|ATW|NWD|EAW|ATM|PCD|ECOM|VPS|MPS|IPS|NFS)\b|\bPOS\b|\bdebit\s*card\b|\bDC\s+SI\b|\bcash\s*(?:wdl|withdrawal)\b/i;
+  const cardUse = e => CARD_USE.test(stripBranch(e.note || e.desc || ''));
   // The other side of a self transfer: one of your accounts (object), true for "your own name",
-  // or null. Never the account the entry itself belongs to.
+  // or null. Never the account the entry itself belongs to, nor a payee you named as someone else.
   function selfTransferTo(e) {
-    const own = ownAccountFor(payerKey(e));
+    const note = e.note || e.desc || '', k = payerKey(e);
+    if (givenOther(k) || cardUse(e)) return null;
+    const own = ownAccountFor(k);
     if (own && own.id !== e.account) return own;
-    const note = e.note || e.desc || '';
     // a masked number in the narration ("A/c XX9226") is yours only when no other person is named
     // (then it is their account) and it matches 3+ known digits (PhonePe's 2-digit endings are too short)
     if (!namedParty(e)) {
@@ -971,13 +1005,13 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
         if (hit.length === 1) return hit[0];
       }
     }
-    return isSelf(note) ? true : null;
+    return selfNamed(note) ? true : null;
   }
-  // A payee known only by a masked number that is exactly one of your own accounts
+  // A payee known only by a masked number that is exactly one of your own accounts (unless you named it)
   function ownAccountFor(k) {
     const m = String(k || '').match(/^ACCT (\d+)$/);
-    if (!m) return null;
-    const mine = (state.accounts || []).filter(a => (a.digits || []).some(z => z.endsWith(m[1]) || m[1].endsWith(z)));
+    if (!m || givenOther(k)) return null;
+    const mine = acctMatches(m[1]);
     return mine.length === 1 ? mine[0] : null;
   }
   const payerName = k => payeeAlias(k) || k.toLowerCase().replace(/\b\w/g, c => c.toUpperCase()).replace(/^Acct /, 'A/c ••');
@@ -1053,23 +1087,90 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
   const reviewMin = () => { const v = state.settings.reviewMin; return v == null ? 1000 : v; };
   // Transfers and investments are money moving between your own accounts: never "to review".
   const needsReview = x => reviewMin() > 0 && x.amount > reviewMin() && !catOf(x.category).exclude && !bizIncome(x);
-  // Comments that mean "money moved between my own accounts"
-  const CROSS_RE = /cross\s*-?\s*ent|contra\b|self[\s-]*(transfer|trf)|own\s+(a\/?c|account)|internal\s+transfer|between\s+(my|own)\s+accounts/i;
+  // Comments that mean "money moved between my own accounts" ("Cross entery" too): whole words only
+  // ("across entire team", "Crown Academy", "own AC service" are not), and not when negated ("Not a self
+  // transfer - paid dad")
+  const CROSS_RE = /\bcross\s*-?\s*ent|\bcontra\b|\bself[\s-]*(?:transfer|trf)|\bown\s+(?:a\/c|acc(?:ount|t)?s?)\b|\binternal\s+transfer|\bbetween\s+(?:my|own)\s+accounts/gi;
+  const NOT_BEFORE = /\b(?:not|no|non|isn'?t|wasn'?t|never)[\s-]+(?:(?:a|an|the|my|really|actually)\s+)*$/i;
+  function isCrossText(c) {
+    const t = String(c || '');
+    let m, hit = false;
+    CROSS_RE.lastIndex = 0;
+    while (!hit && (m = CROSS_RE.exec(t))) hit = !NOT_BEFORE.test(t.slice(Math.max(0, m.index - 30), m.index));
+    CROSS_RE.lastIndex = 0;
+    return hit;
+  }
   // ---------- automatic transfers ----------
   // Money between your own accounts is never spending or income. Kharcha marks such entries Transfer by
-  // itself and records why in e.autoXfer = { why: 'self' | 'acct' | 'pair', with: partner id, prev:
-  // category before, unread, c: comment it added }. Every run re-checks the reason and undoes the mark
-  // when it no longer holds (name corrected, partner gone…). Entries whose category you chose yourself
-  // (e.userCat) are never touched, and a comment you wrote is never removed.
-  // "To SWIGGY" / "From Rohit Lahoti": a named person or shop on the other side
-  const partyOf = e => (String(e.note || e.desc || '').match(/^(?:To|From|Paid to|Received from)\s+([^·]+)/i) || [])[1] || '';
-  const namedParty = e => {
-    const p = partyOf(e).trim();
-    return !!p && !isSelf(p) && !ownAccountFor(payerKey(e)) && !/^[x*•\s\d]+$/i.test(p) && !/^bank account\s+[x*]/i.test(p);
-  };
+  // itself and records why in e.autoXfer = { why: 'self' | 'acct' | 'pair' | 'side', with: partner id,
+  // prev: category before, unread, c: comment it added } ('side': the other side of a transfer already
+  // known — yours, an app's "Self transfer", your name on it). Every run re-checks the reason and undoes
+  // the mark when it no longer holds (name corrected, partner gone…). Entries whose category you chose
+  // yourself (e.userCat) are never touched, and a comment you wrote is never removed.
+  // Who the other side is: "To SWIGGY" / "From Rohit Lahoti" (app statements, SMS); SBI's "TO TRANSFER-UPI/DR/…"
+  // is a bank narration, not "To <name>"
+  function appParty(note) {
+    if (/^(?:to|by)\s+(?:transfer|clearing|clg)\s*-/i.test(note)) return '';
+    return ((note.match(/^(?:To|From|Paid to|Received from)\s+([^·]+)/i) || [])[1] || '').trim();
+  }
+  // …or the name a bank narration gives: the one next to the UPI ID ("UPI-RAHUL SHARMA-rahul@okaxis-…",
+  // "UPI/DR/412345678901/RAHUL SH/ICIC/rahul@oki/…", "AIRP0000011/NITIN SEWANI/XXXXX85666/nitin@rxairtel /UPI/…"),
+  // else the first after UPI/NEFT/IMPS/RTGS, past references, IFSC and bank codes; on an NEFT credit that is
+  // the remitter ("NEFT CR-CITI0000001-ACME TECHNOLOGIES PVT LTD-ROHIT LAHOTI-…": the last name is you)
+  function nameIn(seg) {
+    if (/[\d@]/.test(seg)) return '';
+    const w = seg.toUpperCase().split(/[^A-Z&]+/).filter(x => x && !STOP.has(x) && !/^(?:REV|RET|OUT|NA|NETBANK|INET)$/.test(x));
+    return w.some(x => x.length >= 3) ? w.join(' ') : '';
+  }
+  function bankParty(note) {
+    const t = stripBranch(note);
+    const tr = t.match(/\bTRANSFER\s+(?:TO|FROM)\s+[X*\d]{6,}\s+([A-Z][A-Z .&]*[A-Z])\s*(?:\/|$)/i);   // "TRANSFER TO 97158047960 GIRNAR AUTOVENTURES /…"
+    if (tr && nameIn(tr[1])) return nameIn(tr[1]);
+    const m = t.match(/\b(?:UPI[A-Z]*|NEFT|IMPS[A-Z]*|RTGS)\b/i);
+    if (!m) return '';
+    const segs = t.split(/[\/\-*:|]+/), v = segs.findIndex(x => /\w@\w/.test(x));
+    for (let i = v - 1; v > 0 && i >= Math.max(0, v - 3); i--) { const w = nameIn(segs[i]); if (w && !/^[A-Z]{4}$/.test(w)) return w; }   // "PUNB": a bank code
+    for (const seg of t.slice(m.index + m[0].length).split(/[\/\-*:|]+/)) { const w = nameIn(seg); if (w) return w; }
+    return '';
+  }
+  // your own name as the other party: only the name a narration gives for the other side counts
+  // (an NEFT credit prints you as the beneficiary too)
+  function selfNamed(note) { const t = String(note || ''), p = appParty(t) || bankParty(t); return p ? isSelf(p) : isSelf(t); }
+  // a printed name that can be you: your name as banks shorten it ("RAHUL SH", "R SHARMA", "SHARMA RAHUL"),
+  // or the holder of one of your accounts (a clinic's account in its own name)
+  function nameWords(s) { return String(s || '').toUpperCase().replace(/[^A-Z ]+/g, ' ').split(/\s+/).filter(w => w && !/^(?:MR|MRS|MS|MISS|DR|SHRI|SMT)$/.test(w)); }
+  function nameFits(got, ref) {
+    const g = nameWords(got), r = nameWords(ref);
+    if (g.length < 2 || r.length < 2) return false;
+    const fits = o => g.length <= o.length && g.every((w, i) => o[i].startsWith(w)) && g.some((w, i) => w.length >= 3 && w === o[i]);
+    return fits(r) || fits(r.slice().reverse()) || fits([r[0], r[r.length - 1]]) || fits([r[r.length - 1], r[0]]);
+  }
+  function selfLike(p) { return isSelf(p) || nameFits(p, state.settings.selfName) || (state.accounts || []).some(a => a.holder && nameFits(p, a.holder)); }
+  // a payee you named as someone else ("ACCT 38" → "CA Sharma"): never one of your accounts
+  function givenOther(k) { const n = givenName(k); return !!n && !/\b(?:me|my|mine|self|own)\b/i.test(n) && !selfLike(n); }
+  // …someone other than you: a payee you named, a person or shop on an app statement or SMS (a masked
+  // phone number "******9880" is a contact; a masked account number may be yours), or the name on a bank
+  // narration once Kharcha knows yours (until then it may well be you: banks print your name on transfers
+  // between your own accounts)
+  function namedParty(e) {
+    const k = payerKey(e);
+    if (givenOther(k)) return true;
+    if (ownAccountFor(k)) return false;
+    const note = String(e.note || e.desc || ''), p = appParty(note);
+    if (p) return !selfLike(p) && !/^(?:self|own|myself)\b/i.test(p) && (!/^[x*•\s\d]+$/i.test(p) || /^\*{6}\d{4}$/.test(p)) && !/^bank account\s+[x*]/i.test(p);
+    const b = bankParty(note);
+    return !!b && !!String(state.settings.selfName || '').trim() && !selfLike(b) && !/^(?:SELF|OWN|MYSELF)\b/.test(b);
+  }
   // two sides of one transfer: neither names a third party ("To Rohit" ₹500 and "From Rohit" ₹500 is
-  // Rohit paying you back, not a transfer; your own name counts once Kharcha knows it)
-  const pairable = (d, c) => !namedParty(d) && !namedParty(c);
+  // Rohit paying you back, not a transfer; your own name counts once Kharcha knows it). Before it does,
+  // two different names on bank narrations can't both be you.
+  function pairable(d, c) {
+    if (namedParty(d) || namedParty(c)) return false;
+    if (String(state.settings.selfName || '').trim()) return true;
+    const narr = e => { const note = String(e.note || e.desc || ''); return appParty(note) ? '' : bankParty(note); };
+    const a = narr(d), b = narr(c);
+    return !a || !b || a === b || nameFits(a, b) || nameFits(b, a) || (selfLike(a) && selfLike(b));
+  }
   const isAutoComment = e => !!e.autoXfer && !!e.autoXfer.c && e.comment === e.autoXfer.c;
   const ownComment = e => !!e.comment && !isAutoComment(e);
   // Kharcha may (re)categorise it: not chosen by you, no comment of yours (a "cross entry" comment of
@@ -1081,7 +1182,7 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     if (!classifyMemo.has(k)) classifyMemo.set(k, classify(e.note, e.type, true));
     return classifyMemo.get(k);
   };
-  const autoEligible = e => !e.userCat && (!ownComment(e) || CROSS_RE.test(e.comment)) &&
+  const autoEligible = e => !e.userCat && (!ownComment(e) || isCrossText(e.comment)) &&
     (!!e.autoXfer || /^Other/.test(e.category) || e.category === ruleCat(e) || bizFiled(e));
   function autoMark(e, why, comment, withId) {
     if (!e.autoXfer) e.autoXfer = { prev: e.category, ...(e.unread ? { unread: true } : {}) };
@@ -1092,7 +1193,7 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
   function autoUnmark(e) {
     const a = e.autoXfer; delete e.autoXfer;
     if (a.c && e.comment === a.c) delete e.comment;
-    if (e.comment && CROSS_RE.test(e.comment)) return;   // your own "cross entry" comment keeps it a transfer
+    if (isCrossText(e.comment)) return;   // your own "cross entry" comment keeps it a transfer
     e.category = a.prev && a.prev !== 'Transfer' && catsFor(e.type).some(c => c.name === a.prev) ? a.prev : classify(e.note, e.type, true);
     if (!e.comment && (a.unread || (a.prev === undefined && needsReview(e)))) e.unread = true;   // a comment of yours means reviewed
   }
@@ -1125,33 +1226,69 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     });
     return n;
   }
-  function markCross(e) {
-    if (e.category !== 'Transfer' && catsFor(e.type).some(c => c.name === 'Transfer')) e.category = 'Transfer';
+  // a "cross entry" comment makes it a transfer; a category you chose stays, unless the comment is one
+  // you are writing on it now (mine)
+  function markCross(e, mine = false) {
+    if ((mine || !e.userCat) && e.category !== 'Transfer' && catsFor(e.type).some(c => c.name === 'Transfer')) e.category = 'Transfer';
     delete e.unread;
   }
+  // paired by amount: never a card payment or cash withdrawal, nor money in that Kharcha's rules filed
+  // as salary, interest or a refund
+  const pairKind = (e, cat) => !cardUse(e) && !(e.type === 'credit' && cat !== undefined && !/^Other/.test(cat) && isStdIncome(cat));
+  // a transfer already known (Transfer, a "cross entry" comment, or marked by your name or account
+  // number) that nothing is paired with yet can be the other side of a counted entry; never a refund,
+  // nor a failed payment and the bank's reversal of it (no money reached another account)
+  const knownXfer = p => !counted(p) && !refundTarget(p) && !fullyRefunded(p) && (p.category === 'Transfer' || isCrossText(p.comment)) &&
+    (!p.autoXfer || p.autoXfer.why === 'self' || p.autoXfer.why === 'acct');
+  // e can be its other side: on the account it names ("Cross entry ↔ …" by number, GPay's "To ICICI
+  // Bank 7238"), or on a wallet for a wallet top-up
+  function sideOk(x, e) {
+    if (/wallet top-?up/i.test(x.note || '')) { const w = acctById(e.account); return !!w && w.kind === 'wallet'; }
+    let to = selfTransferTo(x);
+    if (!to || to === true) {
+      const nums = String(x.note || '').match(/\b\d{4}\b/g) || [];
+      const hit = (state.accounts || []).filter(a => a.id !== x.account && (a.digits || []).some(z => z.length >= 4 && nums.includes(z.slice(-4))));
+      to = hit.length === 1 ? hit[0] : null;
+    }
+    return !to || to.id === e.account;
+  }
+  const sidesFit = (e, p) => p.type !== e.type && !!p.account && p.account !== e.account && Math.abs(p.amount - e.amount) < 0.005 && dayDiff(p.date, e.date) <= 3;
   function pairCrossEntries(res) {
-    const ok = e => e.account && counted(e) && e.amount >= 100 && autoEligible(e);
-    const debits = state.expenses.filter(e => e.type === 'debit' && ok(e));
-    const credits = state.expenses.filter(e => e.type === 'credit' && ok(e));
-    const used = new Set();
+    const ok = e => e.account && counted(e) && e.amount >= 100 && autoEligible(e) && pairKind(e, e.category);
+    const taken = new Set(state.expenses.map(e => e.autoXfer && e.autoXfer.with).filter(Boolean));
+    const open = state.expenses.filter(ok);
+    const known = new Set(state.expenses.filter(x => x.account && x.amount >= 100 && !taken.has(x.id) && knownXfer(x)));
     const byAmt = new Map();
-    credits.forEach(x => { const k = x.amount.toFixed(2); if (!byAmt.has(k)) byAmt.set(k, []); byAmt.get(k).push(x); });
-    debits.forEach(d => {
-      const c = (byAmt.get(d.amount.toFixed(2)) || []).find(x => !used.has(x.id) && x.account !== d.account && dayDiff(x.date, d.date) <= 3 && pairable(d, x));
-      if (!c) return;
-      used.add(c.id);
-      autoMark(d, 'pair', `Cross entry ↔ ${acctLabel(acctById(c.account))}`, c.id);
-      autoMark(c, 'pair', `Cross entry ↔ ${acctLabel(acctById(d.account))}`, d.id);
+    open.filter(x => x.type === 'credit').concat([...known]).forEach(x => { const k = x.amount.toFixed(2); if (!byAmt.has(k)) byAmt.set(k, []); byAmt.get(k).push(x); });
+    const pos = new Map(state.expenses.map((e, i) => [e, i]));
+    // every possible match, nearest dates first (then a known transfer before a guess), so a debit
+    // doesn't take a credit 3 days away that belongs to the next transfer of the same amount
+    const edges = [];
+    open.forEach(e => (byAmt.get(e.amount.toFixed(2)) || []).forEach(x => {
+      const side = known.has(x);
+      if (x.type === e.type || x.account === e.account || (!side && e.type !== 'debit') || dayDiff(x.date, e.date) > 3) return;
+      if (side) { if (namedParty(e) || !sideOk(x, e)) return; }
+      else if (!pairable(e, x)) return;
+      edges.push({ e, x, side, gap: dayDiff(x.date, e.date), i: pos.get(e), j: pos.get(x) });
+    }));
+    edges.sort((a, b) => a.gap - b.gap || (b.side - a.side) || a.i - b.i || a.j - b.j);
+    const used = new Set();
+    edges.forEach(({ e, x, side }) => {
+      if (used.has(e.id) || used.has(x.id)) return;
+      used.add(e.id); used.add(x.id);
+      autoMark(e, side ? 'side' : 'pair', `Cross entry ↔ ${acctLabel(acctById(x.account))}`, x.id);
+      if (side) { res.pair++; return; }
+      autoMark(x, 'pair', `Cross entry ↔ ${acctLabel(acctById(e.account))}`, e.id);
       res.pair += 2;
     });
   }
+  const AUTO_CROSS = /^Cross entry ↔ \S+ .+ ••\d+$/u;
   // Earlier versions marked transfers without recording why: adopt those marks so they can be
   // re-checked like new ones (a pair needs its partner: same amount, opposite side, within 3 days).
   function adoptLegacyMarks() {
-    // only Kharcha writes "Cross entry ↔ 🏦 ICICI Bank ••7238" (emoji + account label); a plain comment
-    // such as "Self transfer" may be yours and is never adopted
-    const LEGACY = /^Cross entry ↔ \S+ .+ ••\d+$/u;
-    const legacy = state.expenses.filter(e => !e.autoXfer && !e.userCat && e.category === 'Transfer' && LEGACY.test(e.comment || ''));
+    // only Kharcha writes "Cross entry ↔ 🏦 ICICI Bank ••7238" (AUTO_CROSS: emoji + account label); a
+    // plain comment such as "Self transfer" may be yours and is never adopted
+    const legacy = state.expenses.filter(e => !e.autoXfer && !e.userCat && e.category === 'Transfer' && AUTO_CROSS.test(e.comment || ''));
     legacy.forEach(e => {
       if (e.autoXfer) return;   // adopted as someone's partner
       const base = { prev: undefined, c: e.comment };
@@ -1161,6 +1298,8 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
       else e.autoXfer = { ...base, why: 'acct' };   // re-checked below; undone if it isn't one
     });
   }
+  // what tidyTransfers changed, for the end of a toast
+  const tidyNote = t => { const m = t.self + t.acct + t.pair; return (m ? ` · ${m} marked as transfers between your accounts` : '') + (t.undone ? ` · ${t.undone} transfer mark${t.undone > 1 ? 's' : ''} undone` : ''); };
   // Keep categories and review marks consistent with transfers, cross-entry comments and excluded
   // categories. Returns what changed: { total, self, acct, pair, undone }.
   function tidyTransfers() {
@@ -1174,19 +1313,28 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     // 1. re-check automatic marks; both sides of a broken pair are undone together
     const byId = new Map(state.expenses.map(e => [e.id, e]));
     const stale = new Set();
-    state.expenses.forEach(e => { if (e.autoXfer && (e.userCat || (ownComment(e) && CROSS_RE.test(e.comment)))) delete e.autoXfer; });   // yours now
+    state.expenses.forEach(e => { if (e.autoXfer && (e.userCat || (ownComment(e) && isCrossText(e.comment)))) delete e.autoXfer; });   // yours now
     state.expenses.forEach(e => {
       const a = e.autoXfer; if (!a) return;
       if (a.why === 'pair') {
         const p = byId.get(a.with);
-        if (!p || !p.autoXfer || p.autoXfer.with !== e.id || p.category !== 'Transfer' || !pairable(e.type === 'debit' ? e : p, e.type === 'debit' ? p : e)) stale.add(e);
-      } else if (!selfTransferTo(e)) stale.add(e);
+        // you confirmed the other side yourself (your "cross entry" comment): this one stays its partner
+        if (p && !p.autoXfer && knownXfer(p)) a.why = 'side';
+        else if (!p || !p.autoXfer || p.autoXfer.with !== e.id || p.category !== 'Transfer' || !pairKind(e, a.prev) ||
+          !pairable(e.type === 'debit' ? e : p, e.type === 'debit' ? p : e)) stale.add(e);
+      } else if (a.why !== 'side' && !selfTransferTo(e)) stale.add(e);
     });
     stale.forEach(e => {
       if (!e.autoXfer) return;   // already undone as its partner's other side
       const p = e.autoXfer.why === 'pair' && byId.get(e.autoXfer.with);
       autoUnmark(e); res.undone++;
       if (p && p.autoXfer && p.autoXfer.with === e.id) { autoUnmark(p); res.undone++; }
+    });
+    // the other side of a known transfer, once the marks it leans on are re-checked
+    state.expenses.forEach(e => {
+      const a = e.autoXfer; if (!a || a.why !== 'side') return;
+      const p = byId.get(a.with);
+      if (!p || !knownXfer(p) || !sidesFit(e, p) || !sideOk(p, e) || namedParty(e) || !pairKind(e, a.prev)) { autoUnmark(e); res.undone++; }
     });
     // 2. payments to/from your own name or one of your other accounts
     state.expenses.forEach(e => {
@@ -1199,7 +1347,7 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     // 3. your own "cross entry" comments, and review marks on excluded categories
     state.expenses.forEach(e => {
       if (e.userCat) { if (e.unread && !counted(e)) { delete e.unread; res.total++; } return; }
-      if (ownComment(e) && CROSS_RE.test(e.comment) && (e.category !== 'Transfer' || e.unread)) { markCross(e); res.total++; }
+      if (ownComment(e) && isCrossText(e.comment) && (e.category !== 'Transfer' || e.unread)) { markCross(e); res.total++; }
       else if (e.unread && !counted(e)) { delete e.unread; res.total++; }
     });
     // 4. a debit and the same amount credited to another of your accounts within 3 days
@@ -1229,7 +1377,10 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
   function applyCommentRule(e) {
     if (e.comment) return false;
     const c = ruleComment(e); if (!c) return false;
-    e.comment = c; delete e.unread; if (CROSS_RE.test(c)) markCross(e); return true;
+    // Kharcha's own "Cross entry ↔ …" (saved as a rule by an older version) is never reused, and a
+    // "self transfer" rule doesn't overrule a category you chose for this row
+    if (AUTO_CROSS.test(c) || (e.userCat && isCrossText(c))) return false;
+    e.comment = c; delete e.unread; if (isCrossText(c)) markCross(e); return true;
   }
   // existing uncommented entries matching e: same payer & type, and (optionally) the same amount
   const commentMatches = (e, sameAmount) => {
@@ -1239,7 +1390,7 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
   };
   function renderMatchOptions(e) {
     const k = e && payerKey(e);
-    $('fMatch').classList.toggle('hidden', !k);
+    $('fMatch').classList.toggle('hidden', !k || isAutoComment(e));   // Kharcha's own "Cross entry ↔ …" isn't a comment to copy
     if (!k) return;
     const same = commentMatches(e, true).length, any = commentMatches(e, false).length;
     $('fMatchAmtN').textContent = same; $('fMatchAnyN').textContent = any;
@@ -1277,7 +1428,10 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     const last = ds[ds.length - 1];
     let next;
     if (every === 'week') next = addDaysIso(last, 7);
-    else { const t = new Date(last + 'T00:00'); next = isoDate(new Date(t.getFullYear(), t.getMonth() + 1, Math.min(t.getDate(), 28))); }
+    else {   // the same day next month (the 31st → 30 Apr, 28 Feb)
+      const t = new Date(last + 'T00:00'), y = t.getFullYear(), m = t.getMonth() + 1;
+      next = isoDate(new Date(y, m, Math.min(t.getDate(), new Date(y, m + 1, 0).getDate())));
+    }
     return { every, last, next, day: +last.slice(8) };
   }
   const amtRange = a => { const lo = Math.min(...a), hi = Math.max(...a); return hi - lo < 1 ? fmt(lo) : `${fmt(lo)}–${fmt(hi)}`; };
@@ -1285,8 +1439,9 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
   function suggestFor(e) {
     if (!e || !(e.amount > 0)) return [];
     let past = pastLike(e), basis = 'payer';
-    if (!past.length && !isRound(e.amount)) {   // no payer name (e.g. "Paid to ******9880"): same exact amount, commented before
-      past = state.expenses.filter(x => x !== e && (!e.id || x.id !== e.id) && x.type === e.type && x.comment && Math.abs(x.amount - e.amount) < 0.005);
+    const k = payerKey(e);
+    if (!past.length && !isRound(e.amount) && (!k || /^ACCT /.test(k))) {   // no payer name (e.g. "Paid to ******9880"): same exact amount, commented before
+      past = state.expenses.filter(x => x !== e && (!e.id || x.id !== e.id) && x.type === e.type && x.comment && !x.autoXfer && Math.abs(x.amount - e.amount) < 0.005);
       basis = 'amount';
       if (past.length < 2) return [];
     }
@@ -1295,12 +1450,13 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     const day = +String(e.date || '').slice(8) || 0;
     const groups = new Map();
     past.forEach(x => {
+      if (x.autoXfer) return;   // Kharcha marked it a transfer itself: not something you chose
       const c = String(x.comment || '').trim();
       if (!c && /^Other/.test(x.category)) return;
       const key = c ? c.toLowerCase() : '#' + x.category;
       let w = 1;
       const r = Math.abs(x.amount - e.amount) / Math.max(e.amount, 1);
-      w += r < 0.005 ? 3 : r < 0.1 ? 1.5 : r < 0.3 ? 0.5 : 0;
+      if (basis === 'payer') w += r < 0.005 ? 3 : r < 0.1 ? 1.5 : r < 0.3 ? 0.5 : 0;   // by amount every one matches: only a repeat counts
       if (day) { const dd = Math.abs(+x.date.slice(8) - day); if (Math.min(dd, 31 - dd) <= 3) w += 0.7; }
       if (e.date && dayDiff(x.date, e.date) <= 120) w += 0.5;
       const g = groups.get(key) || { comment: c, cats: {}, n: 0, w: 0, amts: [], last: '' };
@@ -1320,18 +1476,25 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
   function recurringList() {
     const today = isoDate(new Date()), since = addDaysIso(today, -400);
     const seen = new Set(), out = [];
-    payerIndex().forEach(list => list.forEach(x => {
-      const k = payerKey(x), id = k + '|' + x.type;
-      if (seen.has(id) || x.date < since) return;
-      const grp = list.filter(y => y.type === x.type && y.date >= since && samePayer(payerKey(y), k));
-      grp.forEach(y => seen.add(payerKey(y) + '|' + y.type));
-      if (grp.every(y => y.category === 'Transfer')) return;
-      const rec = recurrence(grp); if (!rec) return;
-      if (dayDiff(rec.last, today) > (rec.every === 'month' ? 45 : 14)) return;   // stopped
-      const recent = grp.sort((a, b) => b.date.localeCompare(a.date)).slice(0, 3);
-      const amt = recent.map(y => y.amount).sort((a, b) => a - b)[1] ?? recent[0].amount;
-      out.push({ name: payerName(k), key: k, type: x.type, amt, rec, comment: (recent.find(y => y.comment) || {}).comment || '', count: grp.length, category: recent[0].category });
-    }));
+    const idOf = y => payerKey(y) + '|' + y.type;
+    payerIndex().forEach(all => {
+      const list = all.filter(y => y.date >= since);
+      // broadest name first ("SWIGGY" takes "SWIGGY INSTAMART" and "SWIGGY DINEOUT", as tapping it
+      // shows), and each payment in one row only
+      const ids = [...new Set(list.map(idOf))].sort((a, b) => a.split(' ').length - b.split(' ').length || a.length - b.length || (a < b ? -1 : 1));
+      ids.forEach(id => {
+        if (seen.has(id)) return;
+        const type = id.slice(id.lastIndexOf('|') + 1), k = id.slice(0, id.lastIndexOf('|'));
+        const grp = list.filter(y => y.type === type && !seen.has(idOf(y)) && samePayer(payerKey(y), k));
+        grp.forEach(y => seen.add(idOf(y)));
+        if (grp.every(y => y.category === 'Transfer')) return;
+        const rec = recurrence(grp); if (!rec) return;
+        if (dayDiff(rec.last, today) > (rec.every === 'month' ? 45 : 14)) return;   // stopped
+        const recent = grp.sort((a, b) => b.date.localeCompare(a.date)).slice(0, 3);
+        const amt = recent.map(y => y.amount).sort((a, b) => a - b)[1] ?? recent[0].amount;
+        out.push({ name: payerName(k), key: k, type, amt, rec, comment: (recent.find(y => y.comment) || {}).comment || '', count: grp.length, category: recent[0].category });
+      });
+    });
     return out.sort((a, b) => a.rec.next.localeCompare(b.rec.next));
   }
   function renderRecurring() {
@@ -1345,7 +1508,7 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     $('recList').innerHTML = list.map(r => {
       const late = r.rec.next < addDaysIso(today, -4), soon = !late && r.rec.next <= addDaysIso(today, 5);
       return `<div class="rec" data-rec="${esc(r.key)}" role="button">
-        <div>${esc(catOf(r.category).emoji || '')} ${esc(r.name)}<small>${r.rec.every === 'month' ? `Monthly, ~${ordinal(+r.rec.next.slice(8))}` : 'Weekly'} · ${r.count} payments${r.comment ? ' · ' + esc(r.comment) : ''}</small></div>
+        <div>${esc(catOf(r.category).emoji || '')} ${esc(r.name)}<small>${r.rec.every === 'month' ? `Monthly, ~${ordinal(r.rec.day)}` : 'Weekly'} · ${r.count} payments${r.comment ? ' · ' + esc(r.comment) : ''}</small></div>
         <div style="text-align:right;white-space:nowrap"><span class="amt ${r.type}">${r.type === 'credit' ? '+' : '−'}${fmt(r.amt)}</span>
           <small style="${late ? 'color:var(--warn)' : soon ? 'color:var(--accent)' : ''}">${late ? `expected ${short(r.rec.next)} — not seen` : `next ~${short(r.rec.next)}`}</small></div>
       </div>`;
@@ -1355,7 +1518,7 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
   let formSugs = [];
   document.addEventListener('click', e => {
     const r = e.target.closest('[data-rec]'); if (!r) return;
-    payerFilter = r.dataset.rec; view = 'list'; syncNav(); render(); window.scrollTo(0, 0);
+    openListWith(() => { payerFilter = r.dataset.rec; });
   });
   function fdsHtml(fds) {
     const today = isoDate(new Date());
@@ -1466,7 +1629,7 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
   }
   document.addEventListener('click', e => {
     const r = e.target.closest('[data-invtype]'); if (!r) return;
-    $('search').value = r.dataset.invtype; view = 'list'; syncNav(); render(); window.scrollTo(0, 0);
+    openListWith(() => { kindFilter = 'inv:' + r.dataset.invtype; });
   });
   function renderGroups(items) {
     const groups = allGroups();
@@ -1485,7 +1648,7 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
   }
   document.addEventListener('click', e => {
     const r = e.target.closest('[data-gotogroup]'); if (!r) return;
-    view = 'list'; syncNav(); setGroupFilter(r.dataset.gotogroup); window.scrollTo(0, 0);
+    openListWith(() => keepGroupFilter(r.dataset.gotogroup));
   });
   function renderFormSuggest(e) {
     formSugs = e && !e.comment ? suggestFor(e) : [];
@@ -1499,30 +1662,35 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     if (!e.comment || !payerKey(e)) return 0;
     const anyAmt = $('fMatchAny').checked, sameAmt = $('fMatchAmt').checked || anyAmt;
     let n = 0;
-    if (sameAmt) commentMatches(e, !anyAmt).forEach(x => { x.comment = e.comment; delete x.unread; if (CROSS_RE.test(e.comment)) markCross(x); n++; });
+    if (sameAmt) commentMatches(e, !anyAmt).forEach(x => { x.comment = e.comment; delete x.unread; if (isCrossText(e.comment)) markCross(x); n++; });
     if ($('fMatchFuture').checked) {
       const key = `${payerKey(e)}|${e.type}|${anyAmt ? 'any' : amtKey(e)}`;
       state.settings.commentRules = { ...(state.settings.commentRules || {}), [key]: { c: e.comment } };
     }
     return n;
   }
-  function renderAmtBar() {
+  function renderAmtBar(base) {
     const custom = minAmt && !AMT_PRESETS.includes(minAmt);
-    const toReview = inPeriod().filter(e => e.unread).length;
+    const toReview = base.filter(e => e.unread).length;
     $('amtBar').innerHTML = (toReview || reviewOnly ? `<button class="chip ${reviewOnly ? 'sel' : ''}" data-review="1">● To review ${toReview}</button>` : '') + AMT_PRESETS.map(v =>
       `<button class="chip ${minAmt === v ? 'sel' : ''}" data-min="${v}">${v ? 'Over ' + fmt(v).replace(/\.00$/, '') : 'All amounts'}</button>`).join('') +
       `<button class="chip ${custom ? 'sel' : ''}" data-min="custom">${custom ? 'Over ' + fmt(minAmt).replace(/\.00$/, '') : 'Custom…'}</button>`;
     const groups = allGroups();
-    if (groupFilter !== null && groupFilter !== '' && !groups.includes(groupFilter)) groupFilter = null;
     if (groups.length) $('amtBar').innerHTML = `<button class="chip ${groupFilter === null ? 'sel' : ''}" data-grp="*">All groups</button>` +
       groups.map(g => `<button class="chip ${groupFilter === g ? 'sel' : ''}" data-grp="${esc(g)}">🏷️ ${esc(g)}</button>`).join('') +
       `<button class="chip ${groupFilter === '' ? 'sel' : ''}" data-grp="">No group</button>` + $('amtBar').innerHTML;
-    if (kindFilter) $('amtBar').innerHTML = `<button class="chip sel" data-kindoff="1">${kindFilter === 'spent' ? '💸 Spending only' : '💰 Income only'} ✕</button>` + $('amtBar').innerHTML;
+    if (kindFilter) $('amtBar').innerHTML = `<button class="chip sel" data-kindoff="1">${esc(kindLabel())} ✕</button>` + $('amtBar').innerHTML;
   }
-  function setGroupFilter(g) {
+  function keepGroupFilter(g) {
     groupFilter = g;
     try { if (g === null) localStorage.removeItem('expense-tracker-v1:group'); else localStorage.setItem('expense-tracker-v1:group', g); } catch (e) {}
-    render();
+  }
+  function setGroupFilter(g) { keepGroupFilter(g); render(); }
+  // a group that was renamed or removed (here or on another device) stops filtering the list
+  function dropStaleGroup() {
+    if (groupFilter === null) return;
+    const groups = allGroups();
+    if (groupFilter === '' ? !groups.length : !groups.includes(groupFilter)) keepGroupFilter(null);
   }
   function setMinAmt(v) {
     minAmt = Math.max(0, v || 0);
@@ -1540,8 +1708,13 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     const mk = monthKey(d);
     return { from: mk + '-01', to: mk + '-31', label: d.toLocaleDateString(undefined, { month: 'long', year: 'numeric' }) };
   }
-  const inRange = r => state.expenses.filter(e => e.date >= r.from && e.date <= r.to && (!acctFilter || e.account === acctFilter));
+  const inRange = (r, all) => state.expenses.filter(e => e.date >= r.from && e.date <= r.to && (all || !acctFilter || e.account === acctFilter));
   const inPeriod = () => inRange(periodRange());
+  // after a save or an import: show the month (or year) with that date in it; one already shown stays
+  function showDate(iso) {
+    const r = periodRange();
+    if (iso < r.from || iso > r.to) { const d = new Date(iso + 'T00:00'); current = new Date(d.getFullYear(), d.getMonth(), 1); }
+  }
   const prevPeriodDate = () => period === 'fy' ? new Date(current.getFullYear() - 1, current.getMonth(), 1) : new Date(current.getFullYear(), current.getMonth() - 1, 1);
   const periodWord = () => period === 'fy' ? 'this financial year' : 'this month';
   function setPeriod(p) {
@@ -1570,6 +1743,7 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
   const BANKS = [
     [/\bhdfc\b/i, 'HDFC Bank'], [/\bicici\b/i, 'ICICI Bank'], [/\bsbi card\b/i, 'SBI Card'],
     [/\b(sbi|state bank of india)\b/i, 'SBI'], [/\baxis\b/i, 'Axis Bank'], [/\bkotak\b/i, 'Kotak Bank'],
+    [/\bsouth indian bank\b/i, 'South Indian Bank'], [/\bcity union bank\b/i, 'City Union Bank'],   // found before "Indian Bank" / "Union Bank" inside them
     [/\bindian bank\b/i, 'Indian Bank'], [/\bindian overseas\b|\biob\b/i, 'Indian Overseas Bank'],
     [/\bcanara\b/i, 'Canara Bank'], [/\bunion bank\b/i, 'Union Bank'], [/\bidfc\b/i, 'IDFC First Bank'],
     [/\byes bank\b/i, 'Yes Bank'], [/\bindusind\b/i, 'IndusInd Bank'], [/\bfederal bank\b/i, 'Federal Bank'],
@@ -1587,6 +1761,36 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     let best = null;
     BANKS.forEach(([re, name]) => { const i = String(t || '').search(re); if (i >= 0 && (!best || i < best.i)) best = { i, name }; });
     return best ? best.name : '';
+  }
+  const bankRe = name => (BANKS.find(b => b[1] === name) || [])[0];
+  // UPI IDs ("swiggy@icici", "x@okhdfcbank") name the other party's app or bank, never yours
+  const noVpa = t => String(t || '').replace(/[\w.\-]*@[\w.\-]*/g, ' ');
+  // the text names a bank, and not the one this account is at
+  function otherBank(a, text) {
+    if (!text) return false;
+    const t = noVpa(text), mine = bankFromText(a.name), named = bankFromText(t);
+    return !!mine && !!named && named !== mine && !bankRe(mine).test(t);
+  }
+  // How many final digits a number from a text shares with an account's saved digits z (0: none)
+  const digitFit = (z, c) => z && c && (c.endsWith(z) || z.endsWith(c)) ? Math.min(z.length, c.length) : 0;
+  // The accounts a number belongs to: those whose digits fit it best (several: can't tell, unless
+  // only one is at the bank `bank` names). A 2-digit PhonePe ending ("••38") fits only a clearly
+  // masked number ("XX5538", not a MICR or phone number), and not when the text names another bank;
+  // beside the real ending it learned ("7238") it says nothing more. min: digits that must fit.
+  function acctMatches(c, { masked = true, bank = '', min = 1 } = {}) {
+    let best = 0, hits = [];
+    (state.accounts || []).forEach(a => {
+      const ds = a.digits || [];
+      let f = 0;
+      ds.forEach(z => { if (!(z.length < 4 && ds.some(y => y.length > z.length && y.endsWith(z)))) f = Math.max(f, digitFit(z, c)); });
+      if (f < min || (f < 3 && (!masked || otherBank(a, bank)))) f = 0;
+      if (f && f > best) { best = f; hits = [a]; } else if (f && f === best) hits.push(a);
+    });
+    if (hits.length > 1 && bank) {
+      const at = hits.filter(a => { const b = bankFromText(a.name); return !!b && bankRe(b).test(noVpa(bank)); });
+      if (at.length === 1) hits = at;
+    }
+    return hits;
   }
   // Accounts found in imports but not yet in Settings are created automatically.
   function ensureAccounts(items) {
@@ -1607,7 +1811,10 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
       }
       if (!x.acctDigits) return;
       const d = x.acctDigits;
-      let a = (state.accounts || []).find(y => y.digits.some(z => (z.endsWith(d) || d.endsWith(z)) && (x.acctKind !== 'card' || (z.length >= 4 && d.length >= 4))));
+      // all the digits seen must fit (a "••38" account isn't "XX5538": that was checked when the text was read)
+      const hits = acctMatches(d, { bank: x.acctBank, min: x.acctKind === 'card' ? 4 : Math.min(4, d.length) });
+      if (hits.length > 1) return;   // several of your accounts end in these digits: left without one
+      let a = hits[0];
       if (!a) {
         const kind = x.acctKind || 'bank';
         const base = x.acctBank || (kind === 'card' ? 'Card' : 'Bank account');
@@ -1624,22 +1831,27 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
   // Finds the account a text refers to; changes nothing. `learn` is set when an account known only by
   // PhonePe's 2 visible digits could learn its real ending ("••38" → "••7238") from a clearly masked
   // number, or the only account number in the text; callers apply it once the import is confirmed.
+  // A message is about the first account number in it (later ones are the other side of the payment);
+  // a statement heading (longNumbers) may also show other numbers, and its own unmasked.
   function matchAccount(text, longNumbers) {
-    const cands = acctDigitsIn(text, longNumbers);
-    const masked = new Set(acctDigitsIn(text, false));
-    const longs = new Set(String(text || '').match(/\b\d{9,18}\b/g) || []);
-    for (const c of cands) for (const a of state.accounts || []) for (const d of a.digits || []) {
-      if (d && (c.endsWith(d) || (c.length >= 3 && d.endsWith(c)))) {
-        const sure = masked.has(c) || (longs.size === 1 && longs.has(c));
-        const learn = sure && c.length >= 4 && (a.digits || []).every(z => z.length < 4) ? c.slice(-4) : '';
-        return { id: a.id, digits: c.slice(-4), ...(learn ? { learn } : {}) };
-      }
+    const t = String(text || '');
+    const masked = new Set(acctDigitsIn(t, false));
+    const cands = longNumbers ? acctDigitsIn(t, true) : acctDigitsIn(t, false).slice(0, 1);
+    const longs = new Set(t.match(/\b\d{9,18}\b/g) || []);
+    for (const c of cands) {
+      const hits = acctMatches(c, { masked: masked.has(c), bank: t });
+      if (hits.length > 1) return { id: '', digits: '' };   // several of your accounts end in these digits
+      const a = hits[0]; if (!a) continue;
+      const sure = masked.has(c) || (longs.size === 1 && longs.has(c));
+      const learn = sure && c.length >= 4 && (a.digits || []).every(z => z.length < 4) ? c.slice(-4) : '';
+      return { id: a.id, digits: c.slice(-4), ...(learn ? { learn } : {}) };
     }
     return { id: '', digits: cands.length ? cands[0].slice(-4) : '' };
   }
+  // the real ending replaces PhonePe's 2 digits ("38" → "7238")
   function learnDigits(id, d) {
     const a = acctById(id);
-    if (a && d && (a.digits || []).every(z => z.length < 4) && a.digits.some(z => d.endsWith(z))) a.digits = [d, ...a.digits];
+    if (a && d && (a.digits || []).every(z => z.length < 4) && a.digits.some(z => d.endsWith(z))) a.digits = [d, ...a.digits.filter(z => !d.endsWith(z))];
   }
   function acctOptions(selected, firstLabel) {
     return `<option value="">${firstLabel}</option>` + (state.accounts || []).map(a =>
@@ -1950,7 +2162,8 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     });
     // 3. FDs booked in your bank statement without their FD advice
     const fdNos = new Set((state.fds || []).map(f => f.no));
-    state.expenses.filter(e => e.type === 'debit' && e.category === investCat() && investType(e)[1] === 'Fixed deposits' && !fdFor(e)).forEach(e => {
+    const RD_RE = /\brd\b|recurring deposit/i;   // RD instalments: the bank issues no FD advice for each
+    state.expenses.filter(e => e.type === 'debit' && e.category === investCat() && investType(e)[1] === 'Fixed deposits' && !fdFor(e) && !RD_RE.test(`${noteText(e)} ${e.comment || ''}`)).forEach(e => {
       const no = ((e.note || '').match(/\bFD\b\s*(?:no\.?|number)?\s*:?\s*(\d{6,})/i) || [])[1] || '';
       if (no && fdNos.has(no)) return;
       add({ id: `fd:${no || e.id}`, prio: 3, icon: '🏦', title: `FD advice${no ? ' for FD ••' + no.slice(-4) : ''}`,
@@ -2080,12 +2293,15 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
   const SETTLERS = [[/\bphone ?pe (?:limited|ltd|pvt|private)\b|\bphone ?pe\b.*\baggregat/i, 'PHONEPE LIMITED'],
     [/\bbharat ?pe(?![.@\w])|\bresilient innovations\b/i, 'BHARATPE']];
   const isPayout = t => /\b(?:neft|rtgs|imps)|aggregat|settle/i.test(t) && !/\bupi/i.test(t);
-  function merchantKey(desc, legacy = false) {
+  // Labels Kharcha adds after " · " (UTR, the app, the bank or email sender of an alert) are not the payee.
+  // keepBank: the key as versions before 2026-11 made it (the bank or sender's words counted)
+  function merchantKey(desc, legacy = false, keepBank = legacy) {
     if (!legacy && isPayout(String(desc))) {
       const t = String(desc).replace(/[\w.\-]*@[\w.\-]*/g, ' ');
       const s = SETTLERS.find(([re]) => re.test(t)); if (s) return s[1];
     }
-    const text = String(desc).replace(/\s·\s(?:UTR\s*\d+|PhonePe|GPay|Paytm)\b/gi, ' ').toUpperCase().replace(/[\w.\-]*@[\w.\-]*/g, ' ');
+    const text = (keepBank ? String(desc).replace(/\s·\s(?:UTR\s*\d+|PhonePe|GPay|Paytm)\b/gi, ' ') : String(desc).replace(/\s·\s[\s\S]*$/, ''))
+      .toUpperCase().replace(/[\w.\-]*@[\w.\-]*/g, ' ');
     const seen = [];
     text.split(/[^A-Z0-9&]+/).filter(t => !/\d/.test(t)).forEach(t => {
       if (t.length >= 3 && !/^X+$/.test(t) && !STOP.has(t) && !seen.includes(t)) seen.push(t);
@@ -2148,7 +2364,7 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     const allowed = new Set(catsFor(type).map(c => c.name));
     const learned = state.rules[merchantKey(desc)];
     if (learned && allowed.has(learned)) return learned;
-    if (!noSelf && allowed.has('Transfer') && isSelf(desc)) return 'Transfer';
+    if (!noSelf && allowed.has('Transfer') && selfNamed(desc)) return 'Transfer';
     const d = ' ' + stripBranch(desc).toLowerCase().replace(/[_/|*]+/g, ' ') + ' ';
     for (const [cat, re] of AUTO_RULES) { const nm = catAlias(cat); if (allowed.has(nm) && re.test(d)) return nm; }
     const fallback = type === 'credit' ? 'Other Income' : 'Other';
@@ -2162,6 +2378,7 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
 
   // ---------- render ----------
   function render() {
+    catchUpToday();
     const r = periodRange();
     $('monthTitle').textContent = r.label;
     $('nextM').style.visibility = r.to >= isoDate(new Date()) ? 'hidden' : 'visible';
@@ -2177,7 +2394,7 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     if (view === 'settings') renderSettings();
   }
 
-  function renderBudget(total) {
+  function renderBudget(total, allAccts) {
     const b = state.settings.budget * (period === 'fy' ? 12 : 1);
     const bar = $('budgetBar');
     if (!b) { bar.classList.add('hidden'); $('budgetText').textContent = 'Set a monthly budget in Settings'; return; }
@@ -2186,9 +2403,9 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     bar.firstElementChild.style.width = Math.min(100, pct) + '%';
     bar.classList.toggle('over', pct > 100);
     bar.classList.toggle('near', pct >= 80 && pct <= 100);
-    $('budgetText').textContent = pct > 100
+    $('budgetText').textContent = (pct > 100
       ? `${fmt(total - b)} over budget of ${fmt(b)}`
-      : `${fmt(b - total)} left of ${fmt(b)} (${Math.round(pct)}% used)`;
+      : `${fmt(b - total)} left of ${fmt(b)} (${Math.round(pct)}% used)`) + (allAccts ? ' · all accounts' : '');
   }
 
   function amtHtml(e) {
@@ -2197,21 +2414,31 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     return e.unread ? `<div class="amtwrap">${amt}<span class="rv">REVIEW</span></div>` : amt;
   }
 
-  document.addEventListener('click', e => {
-    if (!e.target.closest('[data-showinvest]')) return;
-    $('search').value = investCat();
-    if (view !== 'list') { view = 'list'; syncNav(); }
-    render(); window.scrollTo(0, 0);
-  });
-  // "Spent" / "Income" tapped: the list shows only the entries that make up that total
+  // "Spent" / "Income" tapped: the list shows only the entries that make up that total. "Invested"
+  // ('invest') or one kind of investment ('inv:Gold'): the Investment entries behind it.
   let kindFilter = '';
-  const kindOk = e => !kindFilter || (counted(e) && e.type === (kindFilter === 'spent' ? 'debit' : 'credit'));
-  document.addEventListener('click', e => {
-    const k = e.target.closest('[data-showkind]'); if (!k) return;
-    kindFilter = kindFilter === k.dataset.showkind && view === 'list' ? '' : k.dataset.showkind;
-    $('search').value = ''; reviewOnly = false; payerFilter = '';
+  const kindOk = e => !kindFilter || (kindFilter === 'spent' || kindFilter === 'income'
+    ? counted(e) && e.type === (kindFilter === 'spent' ? 'debit' : 'credit')
+    : e.category === investCat() && (kindFilter === 'invest' || investType(e)[1] === kindFilter.slice(4)));
+  const kindLabel = () => kindFilter === 'spent' ? '💸 Spending only' : kindFilter === 'income' ? '💰 Income only' : kindFilter === 'invest' ? '📈 Investments only'
+    : `${(INVEST_TYPES.find(t => t[1] === kindFilter.slice(4)) || ['💼'])[0]} ${kindFilter.slice(4)} only`;
+  // A shortcut to the list (Spent, Income, Invested, a kind of investment, a repeating payment, a group)
+  // turns the other filters off, so the list shows what was tapped
+  function openListWith(set) {
+    $('search').value = ''; reviewOnly = false; payerFilter = ''; kindFilter = '';
+    if (minAmt) { minAmt = 0; try { localStorage.setItem('expense-tracker-v1:minAmt', '0'); } catch (e) {} }
+    keepGroupFilter(null);
+    set();
     if (view !== 'list') { view = 'list'; syncNav(); }
     render(); window.scrollTo(0, 0);
+  }
+  function showKind(k) {
+    if (kindFilter === k && view === 'list') { kindFilter = ''; $('search').value = ''; reviewOnly = false; payerFilter = ''; render(); window.scrollTo(0, 0); return; }   // tapped again: off
+    openListWith(() => { kindFilter = k; });
+  }
+  document.addEventListener('click', e => {
+    const k = e.target.closest('[data-showkind]'); if (k) showKind(k.dataset.showkind);
+    else if (e.target.closest('[data-showinvest]')) showKind('invest');
   });
   document.addEventListener('click', e => {
     if (!e.target.closest('[data-gotoexcl]')) return;
@@ -2220,10 +2447,11 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
   });
   function renderList() {
     renderNeeds();
+    dropStaleGroup();
     const items = inPeriod();
     const spent = spentOf(items), income = incomeOf(items);
     $('monthTotal').textContent = fmt(spent);
-    renderBudget(spent);
+    renderBudget(acctFilter ? spentOf(inRange(periodRange(), true)) : spent, !!acctFilter);
     const fa = acctById(acctFilter);
     const inv = investedOf(items);
     $('incomeText').innerHTML = [income ? `<span data-showkind="income" role="button" style="cursor:pointer">Income <b style="color:var(--income)">${fmt(income)}</b> ›</span> · Net ${fmt(income - spent)}` : '',
@@ -2241,7 +2469,7 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
       $('payerBanner').innerHTML = `<div style="display:flex;justify-content:space-between;align-items:center;gap:10px">
           <div><div class="total-label">All transactions with</div><div style="font-weight:700;font-size:17px">${esc(payerName(payerFilter))}</div></div>
           <button class="iconbtn" id="payerClose" aria-label="Close history">✕</button></div>
-        <div class="sub">${base.length} transaction${base.length === 1 ? '' : 's'} · ${esc(span)}<br>
+        <div class="sub">${base.length} transaction${base.length === 1 ? '' : 's'} · ${esc(span)}${acctFilter ? ' · all accounts' : ''}<br>
           Paid <b style="color:var(--danger)">${fmt(paid)}</b> · Received <b style="color:var(--income)">${fmt(got)}</b> · Net <b>${fmt(got - paid)}</b></div>`;
     }
     const shown = base
@@ -2263,14 +2491,17 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
       })
       .sort((a, b) => b.date.localeCompare(a.date) || b.createdAt - a.createdAt);
 
-    renderAmtBar();
-    const filtering = minAmt || q || reviewOnly || kindFilter;
+    renderAmtBar(base);
+    const filtering = minAmt || q || reviewOnly || kindFilter || groupFilter !== null;
     const fd = shown.filter(e => e.type === 'debit' && counted(e)), fc = shown.filter(e => e.type === 'credit' && counted(e));
+    const invOnly = kindFilter && kindFilter !== 'spent' && kindFilter !== 'income', si = invOnly ? investedOf(shown) : null;
     $('filterSummary').innerHTML = filtering && shown.length
-      ? `${shown.length} transaction${shown.length > 1 ? 's' : ''}${minAmt ? ` over ${fmt(minAmt).replace(/\.00$/, '')}` : ''}${fd.length || !fc.length ? ` · spent <b>${fmt(sum(fd))}</b>` : ''}${fc.length ? ` · received <b style="color:var(--income)">${fmt(sum(fc))}</b>` : ''}`
+      ? `${shown.length} transaction${shown.length > 1 ? 's' : ''}${minAmt ? ` over ${fmt(minAmt).replace(/\.00$/, '')}` : ''}${si
+        ? ` · put in <b>${fmt(si.out)}</b>${si.back ? ` · came back <b style="color:var(--income)">${fmt(si.back)}</b>` : ''}`
+        : `${fd.length || !fc.length ? ` · spent <b>${fmt(sum(fd))}</b>` : ''}${fc.length ? ` · received <b style="color:var(--income)">${fmt(sum(fc))}</b>` : ''}`}`
       : '';
     if (!shown.length) {
-      $('list').innerHTML = `<div class="empty"><div>🪙</div>${filtering ? 'No transactions match this filter' : 'Nothing this month.<br>Tap <b>+</b> to add, or <b>📥</b> to import a bank statement.'}</div>`;
+      $('list').innerHTML = `<div class="empty"><div>🪙</div>${filtering ? 'No transactions match this filter' : fa && !payerFilter ? `Nothing in ${esc(acctName(fa))} ${periodWord()}.` : `Nothing ${periodWord()}.<br>Tap <b>+</b> to add, or <b>📥</b> to import a bank statement.`}</div>`;
       return;
     }
     const groups = {};
@@ -2285,10 +2516,10 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
       return `<div class="day"><span>${label}</span><span>${right}</span></div>
         <div class="list">${groups[d].map(e => {
           const c = catOf(e.category);
-          return `<div class="item ${e.unread ? 'unread' : ''}" data-id="${e.id}">
+          return `<div class="item ${e.unread ? 'unread' : ''}" data-id="${esc(e.id)}">
             <div class="emoji">${esc(c.emoji)}</div>
             <div class="info"><div class="cat">${esc(c.name)}${badgeFor(appCached(e))}</div>
-              <div class="note">${esc([noteText(e), !acctFilter && acctById(e.account) ? acctLabel(acctById(e.account)) : e.payment].filter(Boolean).join(' · '))}</div>
+              <div class="note">${esc([noteText(e), (!acctFilter || payerFilter) && acctById(e.account) ? acctLabel(acctById(e.account)) : e.payment].filter(Boolean).join(' · '))}</div>
               ${(f => f ? `<div class="comment">${esc(fdLine(f))}</div>` : '')(fdFor(e))}
               ${refundLine(e) ? `<div class="comment" style="color:var(--income)">${esc(refundLine(e))}</div>` : ''}
               ${(m => m ? `<div class="comment" style="color:var(--income)">✓ ${esc(m.f.dir === 'in' ? 'Received by' : 'Paid by')} ${esc(brokerByKey(m.broker).name)} (its ledger, ${esc(new Date(m.f.date + 'T00:00').toLocaleDateString(undefined, { day: 'numeric', month: 'short' }))})</div>` : '')(brokerMatches().byEntry.get(e.id))}
@@ -2317,13 +2548,13 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     'Kotak Bank': '18002740110', 'PNB': '18001802223', 'Bank of Baroda': '8468001111', 'Canara Bank': '09015483483',
     'Indian Bank': '180042500000', 'Union Bank': '09223008586', 'Yes Bank': '09223920000'
   };
-  const enquiryFor = a => a.enquiry || (a.kind === 'bank' ? ENQUIRY[bankFromText(a.name) || ''] || '' : '');
+  const enquiryFor = a => typeof a.enquiry === 'string' ? a.enquiry : a.kind === 'bank' ? ENQUIRY[bankFromText(a.name) || ''] || '' : '';   // '': you cleared it
   // last confirmed balance, then every entry dated after it moves the estimate
   function estimate(a) {
     if (!a.bal) return null;
     let v = a.bal.amount, n = 0;
     state.expenses.forEach(e => {
-      if (e.account !== a.id || e.date <= a.bal.date) return;
+      if (e.account !== a.id || e.date < a.bal.date || (e.date === a.bal.date && !(a.bal.at && (e.createdAt || 0) > a.bal.at))) return;
       v += e.type === 'credit' ? e.amount : -e.amount; n++;
     });
     return { amount: Math.round(v * 100) / 100, n };
@@ -2338,7 +2569,7 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
       const est = estimate(a), num = enquiryFor(a);
       if (est) { total += est.amount; known++; }
       return `<div class="balrow">
-        <div><div class="nm">${esc(a.emoji || '🏦')} ${esc(acctName(a))} <small style="color:var(--muted)">••${esc(a.digits[0] || '')}</small></div>
+        <div><div class="nm">${esc(a.emoji || '🏦')} ${esc(acctName(a))} <small style="color:var(--muted)">${a.digits[0] ? '••' + esc(a.digits[0]) : ''}</small></div>
           <div class="when">${a.bal ? `Confirmed ${esc(fmt(a.bal.amount))} on ${short(a.bal.date)}` : 'No balance yet'}</div></div>
         <div><div class="v">${est ? esc(fmt(est.amount)) : '—'}</div>
           <div class="est">${est && est.n ? `estimated · ${est.n} entr${est.n > 1 ? 'ies' : 'y'} since` : est ? 'up to date' : ''}</div></div>
@@ -2357,6 +2588,9 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     const r = periodRange();
     const items = inPeriod();
     const spent = spentOf(items), income = incomeOf(items);
+    const fa = acctById(acctFilter);   // the account chosen on Expenses: everything below covers only it
+    $('sAcct').classList.toggle('hidden', !fa);
+    $('sAcct').innerHTML = fa ? `<button class="chip sel" data-acct="">${esc(acctLabel(fa))} only ✕</button>` : '';
     const today = isoDate(new Date());
     const end = r.to < today ? r.to : today;
     const lastDay = period === 'fy' ? end : (r.to < today ? isoDate(new Date(current.getFullYear(), current.getMonth() + 1, 0)) : today);
@@ -2433,7 +2667,7 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     $('autoAdd').checked = !!state.settings.autoAddShared;
     const accts = state.accounts || [];
     $('acctChips').innerHTML = accts.length ? accts.map(a =>
-      `<span class="chip" data-editacct="${esc(a.id)}" role="button">${esc(a.emoji || '🏦')} ${esc(acctName(a))}${a.business ? ` <small>💼 ${esc(a.business.group)}</small>` : ''}${a.nick && a.nick !== a.name ? ` <small>${esc(a.name)}</small>` : ''} <small>••${esc(a.digits.join(', ••'))}${a.bal ? ' · ' + esc(fmt(a.bal.amount)) + ' (' + esc(new Date(a.bal.date + 'T00:00').toLocaleDateString(undefined, { day: 'numeric', month: 'short' })) + ')' : ''}</small><span class="x" data-delacct="${esc(a.id)}" role="button" aria-label="Remove">✕</span></span>`).join('')
+      `<span class="chip" data-editacct="${esc(a.id)}" role="button">${esc(a.emoji || '🏦')} ${esc(acctName(a))}${a.business ? ` <small>💼 ${esc(a.business.group)}</small>` : ''}${a.nick && a.nick !== a.name ? ` <small>${esc(a.name)}</small>` : ''} <small>${a.digits.length ? '••' + esc(a.digits.join(', ••')) : ''}${a.bal ? ' · ' + esc(fmt(a.bal.amount)) + ' (' + esc(new Date(a.bal.date + 'T00:00').toLocaleDateString(undefined, { day: 'numeric', month: 'short' })) + ')' : ''}</small><span class="x" data-delacct="${esc(a.id)}" role="button" aria-label="Remove">✕</span></span>`).join('')
       : '<span class="sub" style="margin:0">No accounts yet.</span>';
     const used = {}; state.expenses.forEach(e => { used[e.category] = (used[e.category] || 0) + 1; });
     const chip = (c, i) => `<button type="button" class="chip" data-editcat="${i}">${esc(c.emoji)} ${esc(c.name)}${c.kind === 'both' ? ' <small>±</small>' : ''}${c.group ? ` <small>· ${esc(c.group)}</small>` : ''}${c.exclude ? ' <small>not counted</small>' : ''} <small>${used[c.name] || 0}</small></button>`;
@@ -2460,7 +2694,7 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
   function showBg() { $('sheetBg').style.display = 'block'; }
   function closeAll() {
     imp.tagOnImport = null;
-    setTimeout(() => runFolderQueue(), 500);   // statements from the folder wait while a sheet is open
+    setTimeout(() => { runFolderQueue(); inboxRetry(); }, 500);   // statements from the folder and the app's inbox wait while a sheet is open
     $('sheet').classList.remove('open'); $('impSheet').classList.remove('open'); $('smsSheet').classList.remove('open'); $('mailSheet').classList.remove('open'); $('catSheet').classList.remove('open');
     $('sheetBg').style.display = 'none';
     document.activeElement && document.activeElement.blur();
@@ -2572,11 +2806,14 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     save(); render(); renderRefund(e);
     toast(fullyRefunded(debit) ? `Linked · the ${fmt(debit.amount)} payment came back in full: neither counts as spending or income` : `Linked · the payment now counts ${fmt(amtOf(debit))} (${fmt(refundedOf(debit))} came back)`, 5000);
   });
-  let pendingRef = '', returnToMail = false, pendingTidy = false, pendingLearn = null;
+  let pendingRef = '', preCat = null, returnToMail = false, pendingTidy = false, pendingLearn = null, pendingAcct = null;
   function openSheet(exp, pre) {
     const src = exp || pre;
     pendingRef = !exp && pre && pre.ref ? pre.ref : '';
+    preCat = !exp && pre ? pre.category || null : null;
     pendingLearn = !exp && pre && pre.learn && pre.account ? { id: pre.account, d: pre.learn } : null;
+    // an alert from an account not in Kharcha yet: offered in the list, created when you save
+    pendingAcct = !exp && pre && !pre.account && pre.acctDigits ? { acctDigits: pre.acctDigits, acctBank: pre.acctBank, acctKind: pre.acctKind } : null;
     editingId = exp ? exp.id : null;
     editingOrigCat = exp ? exp.category : null;
     formType = src ? src.type : 'debit';
@@ -2597,16 +2834,18 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     if (exp && exp.bankAmt) $('fAppAmt').textContent = `One payment of ${fmt(exp.amount)}: ${fmt(exp.bankAmt)} from the bank account (its statement) and ${fmt(Math.max(0, exp.amount - exp.bankAmt))} ${exp.app === 'phonepe' ? 'from your PhonePe wallet' : `from ${appLabel(exp.app)} (balance, offer or reward)`} — ${appLabel(exp.app)}'s statement lists the whole amount.`;
     let pay = 'Cash'; try { pay = localStorage.getItem(KEY + ':pay') || pay; } catch (e) {}
     $('fPay').value = src ? (src.payment || 'Other') : pay;
-    const today = new Date();
-    $('fDate').value = src && src.date ? src.date : (monthKey(current) === monthKey(today) ? isoDate(today) : isoDate(current));
+    if (catchUpToday()) render();
+    // a new entry is dated today when the month (or year) shown has today in it, else the 1st of what's shown
+    const pr = periodRange(), today = isoDate(new Date());
+    $('fDate').value = src && src.date ? src.date : today >= pr.from && today <= pr.to ? today : period === 'fy' ? pr.from : isoDate(current);
     selectedCat = src && src.category ? src.category : (catsFor(formType)[0] || {}).name;
     formGroup = exp && exp.group !== undefined ? exp.group : null;
     catEditMode = false; catAllFor = '';
     $('fDelete').classList.toggle('hidden', !exp);
     let lastAcct = ''; try { lastAcct = localStorage.getItem(KEY + ':acct') || ''; } catch (e) {}
     const defAcct = src ? (src.account || '') : (acctFilter || (acctById(lastAcct) ? lastAcct : ''));
-    $('fAcct').innerHTML = acctOptions(defAcct, 'No account');
-    $('fAcctWrap').classList.toggle('hidden', !(state.accounts || []).length);
+    $('fAcct').innerHTML = acctOptions(defAcct, 'No account') + (pendingAcct ? `<option value="+new" selected>${esc(newAcctLabel(pendingAcct))} (new)</option>` : '');
+    $('fAcctWrap').classList.toggle('hidden', !(state.accounts || []).length && !pendingAcct);
     renderFormCats();
     showBg();
     requestAnimationFrame(() => $('sheet').classList.add('open'));
@@ -2617,6 +2856,11 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     formType = b.dataset.type;
     if (!catsFor(formType).some(c => c.name === selectedCat)) selectedCat = (catsFor(formType)[0] || {}).name;
     renderFormCats();
+  });
+  // the copy options are for a comment of yours: hidden while the box holds Kharcha's own transfer note
+  $('fComment').addEventListener('input', () => {
+    const e = editingId && state.expenses.find(x => x.id === editingId);
+    if (e && isAutoComment(e) && payerKey(e)) $('fMatch').classList.toggle('hidden', $('fComment').value.trim() === e.comment);
   });
   $('sheet').addEventListener('submit', ev => {
     ev.preventDefault();
@@ -2629,6 +2873,8 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
       account: $('fAcct').value || '',
       comment: $('fComment').value.trim()
     };
+    if (data.account === '+new') { const x = { ...pendingAcct }; ensureAccounts([x]); data.account = x.account || ''; }
+    pendingAcct = null;
     if (!data.comment) delete data.comment;
     const ownGroup = formGroup !== null && formGroup !== formDefGroup();
     if (ownGroup) data.group = formGroup;
@@ -2672,17 +2918,20 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
         if (data.comment) { delete e.unread; msg = 'Reviewed ✓'; }
         else msg = 'Saved · still to review until you add a comment';
       }
-      if (data.comment) {
+      if (data.comment && !isAutoComment(e)) {   // the comment Kharcha added when it marked the transfer isn't yours to copy
         const n = learnComment(e);
         if (n) extra += ` · same comment added to ${n} other transaction${n > 1 ? 's' : ''}`;
       }
-      if (data.comment && CROSS_RE.test(data.comment)) markCross(e);
+      if (data.comment && isCrossText(data.comment)) markCross(e, data.category === editingOrigCat);   // a category you just picked stays
       if (!counted(e)) delete e.unread;
       if (e.category !== wasCat) extra += ' · moved to Transfer (not counted)';
       toast(msg + extra, extra ? 5000 : undefined);
     } else {
-      state.expenses.push({ id: uid(), createdAt: Date.now(), ...data, ...(pendingRef ? { ref: pendingRef } : {}),
-        ...(pendingRef && !data.comment && needsReview(data) ? { unread: true } : {}) });
+      const added = { id: uid(), createdAt: Date.now(), ...data, ...(pendingRef ? { ref: pendingRef } : {}),
+        ...(!pendingRef || data.category !== preCat ? { userCat: true } : {}),   // a category you picked: transfer detection leaves it alone
+        ...(pendingRef && !data.comment && needsReview(data) ? { unread: true } : {}) };
+      if (data.comment && isCrossText(data.comment)) markCross(added, true);
+      state.expenses.push(added);
       if (pendingRef.startsWith('mail|')) { const m = mailCfg(); m.seen = [...new Set([...(m.seen || []), pendingRef.slice(5)])].slice(-1000); }
       toast((data.type === 'credit' ? 'Added income ' : 'Added ') + fmt(data.amount));
     }
@@ -2690,7 +2939,7 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     if (!editingId && pendingLearn && data.account === pendingLearn.id) learnDigits(pendingLearn.id, pendingLearn.d);
     pendingLearn = null;
     save();
-    const d = new Date(data.date + 'T00:00'); current = new Date(d.getFullYear(), d.getMonth(), 1);
+    showDate(data.date);
     closeAll(); render();
     if (returnToMail) { returnToMail = false; openMailSheet(); }
   });
@@ -2742,9 +2991,20 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     if (name) names[k] = name; else delete names[k];
     state.settings.payeeNames = names;
     const n = state.expenses.filter(x => samePayer(payerKey(x), k)).length;
-    save(); render(); renderPayeeBtn(state.expenses.find(x => x.id === editingId));
+    // a payee you say is someone else is not one of your accounts (nor you): its transfer marks are re-checked
+    const cur = state.expenses.find(x => x.id === editingId), was = cur && { cat: cur.category, c: cur.comment || '' };
+    const t = tidyTransfers();
+    if (cur && cur.category !== was.cat) {   // the open entry was (un)marked: the form follows
+      selectedCat = editingOrigCat = cur.category;
+      if ($('fComment').value.trim() === was.c) $('fComment').value = cur.comment || '';
+      $('fReviewBanner').classList.toggle('hidden', !cur.unread);
+      renderMatchOptions(cur); renderFormCats();
+    }
+    save(); render(); renderPayeeBtn(cur);
     $('fHistory').textContent = `🕘 All transactions with ${payerName(k)} (${n})`;
-    toast(name ? `${n} transaction${n === 1 ? '' : 's'} now show “${name}”` : 'Name removed');
+    const marked = t.self + t.acct + t.pair;
+    toast((name ? `${n} transaction${n === 1 ? '' : 's'} now show “${name}”` : 'Name removed') +
+      (t.undone ? ` · ${t.undone} transfer mark${t.undone > 1 ? 's' : ''} undone` : '') + (marked ? ` · ${marked} marked as transfers between your accounts` : ''), t.undone || marked ? 4000 : undefined);
   });
   // The entries one import added (a file from the folder or 📥 Import): to take a wrong file back out
   function importOf(e) {
@@ -2872,7 +3132,7 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     return lines;
   }
   // Account a UPI-app payment used: "XXXXXX9226", "XXXXXXXXXX38" (only 2 digits shown), "0007", "Wallet".
-  function upiAccount(instrument) {
+  function upiAccount(instrument, bank = '') {
     const ins = String(instrument || '').trim();
     if (/wallet/i.test(ins)) {
       const w = (state.accounts || []).find(a => a.kind === 'wallet' && /phonepe/i.test(a.name));
@@ -2880,8 +3140,9 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     }
     const d = ins.replace(/\D/g, '');
     if (d.length < 2) return { account: '', acctDigits: '', walletName: '' };
-    const hits = (state.accounts || []).filter(a => (a.digits || []).some(z => z.endsWith(d) || (d.length >= 3 && d.endsWith(z))));
-    return { account: hits.length === 1 ? hits[0].id : '', acctDigits: d.slice(-4), walletName: '' };
+    const hits = acctMatches(d, { bank });
+    // several of your accounts end in these digits: left without one (not a new account)
+    return { account: hits.length === 1 ? hits[0].id : '', acctDigits: hits.length > 1 ? '' : d.slice(-4), walletName: '' };
   }
   const APP_LABEL = { phonepe: 'PhonePe', gpay: 'GPay', paytm: 'Paytm' };
   // One payment from a UPI app statement (PhonePe, Google Pay). transfer: money between your own
@@ -2890,7 +3151,7 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     details = String(details || '').replace(/\s+/g, ' ').trim();
     utr = String(utr || '').replace(/\D/g, '');
     const party = (details.match(/^(?:Paid to|Received from|Sent to|Payment to|Transfer(?:red)? (?:to|from))\s+(.+)$/i) || [])[1] || '';
-    const acct = upiAccount(instrument);
+    const acct = upiAccount(instrument, bank);
     let category = classify(party || details, type);
     if ((transfer || /wallet top-?up/i.test(details)) && catsFor(type).some(c => c.name === 'Transfer')) category = 'Transfer';   // e.g. bank → PhonePe wallet
     const note = (party ? `${type === 'credit' ? 'From' : 'To'} ${party}` : details || APP_LABEL[app]) + (utr ? ` · UTR ${utr}` : '') + ' · ' + APP_LABEL[app];
@@ -3182,13 +3443,16 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     const byUtr = new Map();   // every entry per UPI reference (an SMS and the app's entry can share one)
     state.expenses.forEach(e => utrsOf(e).forEach(u => { const k = u + '|' + e.type; byUtr.set(k, (byUtr.get(k) || []).concat(e)); }));
     const withUtr = x => utrsOf(x).flatMap(u => byUtr.get(u + '|' + x.type) || []);
+    // the time a bank SMS printed (kept in its reference when it has no reference number of its own)
+    const smsTime = r => (/^sms\|/.test(r || '') && (String(r).match(/\|(\d{1,2}:\d{2}(?::\d{2})?)(?:\||$)/) || [])[1]) || '';
     const used = new Set();
     items.forEach(x => {
       x.match = null;
       if (refs.has(x.ref)) { x.dup = 'exact'; x.include = false; return; }
       if (x.ref && gone.has(refHash(x.ref))) { x.dup = 'deleted'; x.include = false; return; }
       // same UPI reference number, same direction and amount: the same payment seen from another source
-      const viaUtr = withUtr(x).find(e => !used.has(e.id) && amtIs(e, x.amount));
+      // (a few days apart at most: a 12-digit account or phone number in the text repeats every month)
+      const viaUtr = withUtr(x).find(e => !used.has(e.id) && amtIs(e, x.amount) && dayDiff(e.date, x.date) <= 4);
       if (viaUtr) { x.dup = 'utr'; x.match = viaUtr.id; used.add(viaUtr.id); x.include = false; return; }
       // an account number the app doesn't know yet (x.acctDigits) is a different account from every existing one
       const otherAcct = e => x.account ? (e.account && e.account !== x.account)
@@ -3201,12 +3465,14 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
       // (only references both sources printed as the UPI reference — PhonePe/GPay statements, SMS
       // "RRN/UTR/Ref" — count; a stray 12-digit number in a narration might be something else)
       const otherRef = e => x.utrSure && e.utrSure && x.utr && e.utr && x.utr !== e.utr;
+      // two bank alerts printed at different times are two payments (₹250 at Starbucks at 10:30 and at 18:45)
+      const xTime = smsTime(x.ref), otherTime = e => !!xTime && refsOf(e).some(r => { const t = smsTime(r); return !!t && t !== xTime; });
       const sameAmt = state.expenses.filter(e => !used.has(e.id) && e.type === x.type && amtIs(e, x.amount) && !otherAcct(e));
       const hasBal = v => v != null && !isNaN(v);
       let m = hasBal(x.balance) && sameAmt.find(e => hasBal(e.balance) && Math.abs(e.balance - x.balance) < 0.011 && dayDiff(e.date, x.date) <= 4);
       if (m) x.dup = 'balance';
       else {
-        m = sameAmt.find(e => e.date === x.date && !(hasBal(x.balance) && hasBal(e.balance)) && !otherRef(e));
+        m = sameAmt.find(e => e.date === x.date && !(hasBal(x.balance) && hasBal(e.balance)) && !otherRef(e) && !otherTime(e));
         x.dup = m ? 'maybe' : false;
       }
       if (m) { used.add(m.id); x.match = m.id; }
@@ -3577,16 +3843,21 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
   // ---------- bank SMS ----------
   const SMS_SKIP = /\b(otp|one time password|will be (debited|credited|deducted)|is due|due (date|on|by)|minimum (amount )?due|total (amount )?due|declined|failed|unsuccessful|could not be|has been blocked|requested (money|rs|inr)|collect request|payment request|mandate (has been )?(created|registered|set up)|e-?mandate)\b/i;
   const SMS_PROMO = /\b(up ?to|at ?least|earn|win|won|chance|offers?|apply( now)?|eligible|pre-?approved|instant loan|loan (of|up)|credit limit|reward points?|voucher|coupon|discount|sale|shop now|click|download|unsubscribe|t&c|terms (and|&) conditions|newsletter|webinar|invest now|hurry|limited period)\b/i;
-  const SMS_DEBIT = /\b(debited|debit(ed)? by|debit\s*(of\s*)?(inr|rs\.?|₹)|dr\.?\s*(inr|rs\.?|₹)|sent|spent|paid|withdrawn|withdrawal|purchase|txn of|transferred to|trf to|used (at|for)|charged|deducted)\b/i;
-  const SMS_CREDIT = /\b(credited|credit\s*(of\s*)?(inr|rs\.?|₹)|cr\.?\s*(inr|rs\.?|₹)|received|deposited|refunded|refund of|added to|has been credited|reversed)\b/i;
-  const AMT = /(?:rs\.?|inr|₹|usd|us\$|\$)\s*([\d,]+(?:\.\d{1,2})?)/gi;
+  const SMS_DEBIT = /\b(debited|debit(ed)? by|debit\s*(of\s*)?(inr|rs\.?|₹)|dr\.?\s*(inr|rs\.?|₹)|dr\.?\s*from|sent|spent|paid|withdrawn|withdrawal|purchase|txn of|transferred to|trf to|used (at|for)|thank you for using (?:\w+ ){0,5}card|charged|deducted)\b/i;
+  const SMS_CREDIT = /\b(credited|credit\s*(of\s*)?(inr|rs\.?|₹)|cr\.?\s*(inr|rs\.?|₹)|cr\.?\s*to|received|deposited|refunded|refund of|added to|has been credited|reversed)\b/i;
+  const AMT = /(?:rs\.?|inr|₹|usd|us\$|\$)\s*:?\s*([\d,]+(?:\.\d{1,2})?)/gi;
+  // Footers and side remarks in real alerts that must not make Kharcha skip them ("Never share your OTP,
+  // PIN or CVV", "Bank never asks for your OTP", "Reward points will be credited…"). An OTP message still
+  // names its OTP elsewhere ("123456 is your OTP…").
+  const SMS_FOOTER = /\b(?:never|do not|don[’']?t)\s+(?:share|disclose|reveal|asks?(?:\s+(?:you\s+)?for)?)\s+(?:your\s+|the\s+|this\s+|any\s+)?(?:otp|one time password|pin|cvv|password)(?:\s*(?:,|\/|or|and|&)\s*(?:otp|one time password|pin|cvv|card details|passwords?))*(?![\s:]*(?:is\s+)?\d{4,8}\b)|\b(?:(?:reward\s+)?points?|cash ?back)\b[^.]{0,40}?\bwill be credited\b/gi;
+  const smsSkipText = (t, email) => { const s = t.replace(SMS_FOOTER, ' '); return email ? s.replace(/\b(otp|one time password)\b/gi, '') : s; };
   const BAD_PARTY = /^(a\/?c\b|ac\b|acct|account|your|xx|\*|card\b|bank\b|you\b|sms\b|block\b|call\b|the\b|upi\b|imps\b|neft\b|rs\b|inr\b)/i;
 
   function smsAmount(t) {
     let m; AMT.lastIndex = 0;
     while ((m = AMT.exec(t))) {
       const before = t.slice(Math.max(0, m.index - 22), m.index);
-      if (/bal|balance|limit|avl|avail/i.test(before)) continue;
+      if (/\b(?:bal(?:ance)?|limit|lmt|avl|avail(?:able)?)\b|avlbal/i.test(before)) continue;
       const n = parseFloat(m[1].replace(/,/g, ''));
       if (n > 0) return n;
     }
@@ -3595,10 +3866,20 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
   }
   function smsDate(t, fallback) {
     const re = /\b(\d{4}-\d{2}-\d{2}|\d{1,2}[-\/.]\d{1,2}[-\/.]\d{2,4}|\d{1,2}[- ]?[A-Za-z]{3}[a-z]*[- ,']?\d{2,4}|[A-Za-z]{3}[a-z]* \d{1,2},? \d{4})\b/g;
+    const tomorrow = isoDate(new Date(Date.now() + 864e5));
+    const fmt = state.settings.currency === 'USD' ? 'mdy' : 'dmy';   // US banks write 11/06/2026 for 6 Nov
     let m;
     while ((m = re.exec(t))) {
-      const d = parseDate(m[1], 'dmy');
-      if (d && d <= isoDate(new Date(Date.now() + 864e5))) return d;
+      const noYear = t[re.lastIndex] === ':' && m[1].match(/^(\d{1,2})[- ]?([A-Za-z]{3})[a-z]* \d{2}$/);
+      if (noYear) {   // "05 Nov 10:15": the time, not the year: this year's (or last year's) 5 Nov
+        const mi = MONTHS.indexOf(noYear[2].toLowerCase()), y = new Date().getFullYear();
+        let d = mi < 0 ? null : mkDate(y, mi + 1, noYear[1]);
+        if (d && d > tomorrow) d = mkDate(y - 1, mi + 1, noYear[1]);
+        if (d) return d;
+        continue;
+      }
+      const d = parseDate(m[1], fmt) || parseDate(m[1], fmt === 'mdy' ? 'dmy' : 'mdy');
+      if (d && d <= tomorrow) return d;
     }
     return fallback || isoDate(new Date());
   }
@@ -3607,8 +3888,10 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     if (m && type === 'debit') return m[1].trim();
     const re = /\b(?:to|at|towards|by|from|in favou?r of|info)\s*[:-]?\s+(?:vpa\s+)?(.+?)(?=\s*(?:\.\s|\.?\s*rrn|\.?\s*ref|\.?\s*utr|\bon\s+\d|\bon\s+[a-z]{3}\b|\bvia\b|\bupi\b|\(|;|,|\bavl|\bavail|\bbal\b|\.\s*$|\.[A-Z]|$|\s-\s))/gi;
     while ((m = re.exec(t))) {
-      const c = m[1].replace(/\S+@\S+/g, ' ').replace(/\s+/g, ' ').trim().replace(/^(neft|imps|upi|rtgs|ach|inft)[\/-]+/i, '').replace(/[.\-]+$/, '');
-      if (c.length < 2 || /^\d/.test(c) || BAD_PARTY.test(c) || /a\/c|\*\d|x{2,}\d/i.test(c)) { re.lastIndex = m.index + 2; continue; }
+      let c = m[1].replace(/\S+@\S+/g, ' ').replace(/\s+/g, ' ').trim().replace(/^(neft|imps|upi|rtgs|ach|inft)[\/-]+/i, '').replace(/[.\-]+$/, '');
+      const vpa = c.length < 2 && (m[1].match(/(?:^|\s)([a-z][a-z._-]{2,})@[a-z]/i) || [])[1];
+      if (vpa) c = vpa;
+      if (c.length < 2 || /^\d/.test(c) || BAD_PARTY.test(c) || /a\/c|\bac\s*[x*]*\d|\*\d|\bx+\d/i.test(c) || /^(clearing|realisation|realization|revers\w*|refund)\b/i.test(c)) { re.lastIndex = m.index + 2; continue; }
       return c.slice(0, 60);
     }
     return '';
@@ -3624,14 +3907,17 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     return words.join(' ').slice(0, 60);
   }
   function bankName(t) {
-    const m = t.match(/-\s*([A-Z][A-Za-z ]{2,25}Bank)\s*$/) || t.match(/\b(HDFC|ICICI|SBI|Axis|Kotak|Indian|Canara|Union|IDFC|Yes|IndusInd|Federal|PNB|Bank of Baroda|BOB)\s*Bank\b/i);
+    const m = t.match(/-\s*([A-Z][A-Za-z ]{2,25}Bank)\s*$/) || t.match(/\b(HDFC|ICICI|SBI|Axis|Kotak|South Indian|Indian|Canara|City Union|Union|IDFC|Yes|IndusInd|Federal|PNB|Bank of Baroda|BOB)\s*Bank\b/i);
     return m ? m[1].replace(/\s*bank$/i, '').trim() + ' Bank' : '';
   }
   // opts.email: text is an excerpt of an alert email (bank footers often mention OTPs, so don't skip on that)
   function parseSms(raw, opts = {}) {
     const t = String(raw).replace(/\s+/g, ' ').trim();
     if (!t) return null;
-    const skip = opts.email ? t.replace(/\b(otp|one time password)\b/gi, '') : t;
+    let skip = smsSkipText(t, opts.email);
+    // money given back for a failed payment ("credited … towards reversal of failed UPI txn") did arrive
+    const giveBack = /\b(revers\w*|refund\w*)\b/i.test(skip) && /\b(credited|reversed|refunded)\b/i.test(skip) && !/\b(will|would|shall) be\b/i.test(skip);
+    if (giveBack) skip = skip.replace(/\b(failed|unsuccessful|declined)\b/gi, '');
     if (SMS_SKIP.test(skip)) return null;
     // Real alerts carry an account/card reference (XX8810, *9226, UPI/RRN/UTR). Emails must have one;
     // anything with promotional wording must have one too.
@@ -3640,54 +3926,82 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     const di = t.search(SMS_DEBIT), ci = t.search(SMS_CREDIT);
     if (di < 0 && ci < 0) return null;
     const type = ci < 0 || (di >= 0 && di < ci) ? 'debit' : 'credit';
+    if (giveBack && type !== 'credit' && SMS_SKIP.test(smsSkipText(t, opts.email))) return null;   // "txn of Rs 500 failed … reversed"
     const amount = Math.round(smsAmount(t) * 100) / 100;
     if (!(amount > 0)) return null;
     const date = smsDate(t, opts.fallbackDate);
     const party = smsParty(t, type) || narrationParty(raw);
-    const bank = bankName(t);
-    const acctKind = /credit ?card|card (no\.?|number|ending|x+|\*)|\bcard x+\d|\bcc\s*\d*x+/i.test(t) ? 'card' : 'bank';
+    const bank = bankName(t);   // the sender's own signature ("- Axis Bank"), not a payee such as "HDFC ERGO"
+    // a debit card spends from the bank account; "HDFC Bank Card 1234" is HDFC's credit card
+    const debitCard = /\bdebit\s*card\b/i.test(t) && !/\bcredit\s*card\b/i.test(t);
+    const acctKind = !debitCard && /credit ?card|card (no\.?|number|ending|x+|\*)|\bcard x+\d|\bcc\s*\d*x+|\bbank card\s*[x*]*\d{4}\b/i.test(t) ? 'card' : 'bank';
     const balM = acctKind === 'card' ? null :
-      t.match(/\b(?:avl\.?|avail(?:able)?|a\/c|clear|closing|total)?\s*bal(?:ance)?\.?(?:\s+(?:is|of))?\s*[:\-]?\s*(?:rs\.?|inr|₹)\s*([\d,]+(?:\.\d{1,2})?)/i);
+      t.match(/\b(?:avl\.?|avail(?:able)?|a\/c|clear|closing|total)?\s*bal(?:ance)?\.?(?:\s+(?:is|of))?\s*[:\-]?\s*(?:rs\.?|inr|₹)\s*:?\s*([\d,]+(?:\.\d{1,2})?)/i);
     const smsBalance = balM ? parseFloat(balM[1].replace(/,/g, '')) : null;
-    const rrn = (t.match(/\b(?:rrn|ref(?:erence)?(?:\s*no)?|utr|upi ref(?: no)?|txn id|upi)[\s.:#-]*([A-Za-z0-9]{6,})/i) || [])[1] || '';
-    // UPI reference (UTR/RRN) is 12 digits; it is what PhonePe/GPay statements show too
-    const utr = /^\d{12}$/.test(rrn) ? rrn : ((t.match(/\b\d{12}\b/) || [])[0] || '');
+    // a reference has digits ("UPI AutoPay", "UPI transfer", "Info: UPI-SWIGGY" are words) and isn't an account (XX1234)
+    const rrn = (t.match(/\b(?:rrn|ref(?:erence)?(?:\s*no)?|utr|upi ref(?: no)?|txn id|upi)[\s.:#-]*(?!x+\d)((?=[A-Za-z]*\d)[A-Za-z0-9]{6,})/i) || [])[1] || '';
+    // UPI reference (UTR/RRN) is 12 digits; it is what PhonePe/GPay statements show too. Otherwise only a
+    // 12-digit number right after a reference word ("UPI/P2M/631012345678", "Ref. No. 631012345678"),
+    // never a beneficiary's account number or a 91… phone number in the footer.
+    const utr = /^\d{12}$/.test(rrn) ? rrn : (() => {
+      const re = /\b(?:upi|imps|rrn|utr|ref|txn|transaction|p2[am])\b([^\d]{0,12})(\d{12})\b/gi; let m;
+      while ((m = re.exec(t))) if (!/call|sms|a\/c|acc|\bto\b|mob|ph/i.test(m[1])) return m[2];
+      return '';
+    })();
     const payment = /\bupi\b|vpa|@/i.test(t) ? 'UPI' : /\batm\b|cash withdrawal|withdrawn/i.test(t) ? 'Cash' : /\bcard\b/i.test(t) ? 'Card' : 'Bank';
     const desc = party ? `${type === 'credit' ? 'From' : 'To'} ${party}${bank ? ' · ' + bank : ''}` : t.slice(0, 120);
     let cat = classify(party || t, type);
-    // "We have received your payment … towards your credit card" is a bill payment, not income
-    if (type === 'credit' && /credit ?card|card (ending|no\.?|number|x+|\*)|towards (your )?\w*\s*card/i.test(t) &&
-        /payment|received|thank/i.test(t) && catsFor('credit').some(c => c.name === 'Transfer')) cat = 'Transfer';
+    // "We have received your payment … towards your credit card" is a bill payment, not income; a refund
+    // or cashback on the card is money back (as in card statements)
+    const cardCredit = type === 'credit' && /credit ?card|card (ending|no\.?|number|x+|\*)|towards (your )?\w*\s*card/i.test(t);
+    const moneyBack = /\b(refund\w*|cash ?back|revers\w*|chargeback)\b/i.test(t);
+    if (cardCredit && !moneyBack && /payment|received|thank/i.test(t) && catsFor('credit').some(c => c.name === 'Transfer')) cat = 'Transfer';
+    else if (cardCredit && moneyBack && /^Other/.test(cat) && catsFor('credit').some(c => c.name === 'Refund')) cat = 'Refund';
+    // without a reference, the time and balance tell two same-day payments of one amount apart
+    const time = (t.match(/\b(?:[01]?\d|2[0-3]):[0-5]\d(?::[0-5]\d)?\b/) || [])[0] || '';
+    const tail = party ? party.toLowerCase() + (time ? '|' + time : '') + (smsBalance != null ? '|' + smsBalance.toFixed(2) : '') : t.toLowerCase();
     const acct = matchAccount(t);
     return { date, desc, type, amount, payment, category: cat, touched: false, account: acct.id, acctDigits: acct.digits, ...(acct.learn ? { learn: acct.learn } : {}),
-      acctBank: bankFromText(t) || bank, acctKind, balance: smsBalance, seq: 0, utr, utrSure: !!utr && utr === rrn, app: appFrom(t),
-      ref: rrn ? `sms|${rrn}|${type}|${amount.toFixed(2)}` : `sms|${date}|${type}|${amount.toFixed(2)}|${(party || t).toLowerCase()}` };
+      acctBank: bankFromText(bank) || bankFromText(noVpa(t)) || bank, acctKind, balance: smsBalance, seq: 0, utr, utrSure: !!utr && utr === rrn, app: appFrom(t),
+      ref: rrn ? `sms|${rrn}|${type}|${amount.toFixed(2)}` : `sms|${date}|${type}|${amount.toFixed(2)}|${tail}` };
   }
   // "Avl bal in A/c XX8810 as on 06-NOV-26: INR 1,23,456.78" — a balance reply without a transaction
-  function parseBalanceSms(raw) {
+  // Not a balance: a minimum / average balance to keep, a card's or loan's outstanding amount.
+  const BAL_NOT = /\b(?:minimum|min|average|avg|monthly|maintain\w*|required|below|shortfall|outstanding|due|loan|charges?|penalty|credit\s*card)\b/i;
+  function parseBalanceSms(raw, fallbackDate) {
     const t = String(raw).replace(/\s+/g, ' ').trim();
-    if (!t || SMS_SKIP.test(t)) return null;
-    const m = t.match(/\bbal(?:ance)?\b.{0,60}?(?:rs\.?|inr|₹)\s*([\d,]+(?:\.\d{1,2})?)(\s*(?:dr|cr)\b)?/i);
+    if (!t || SMS_SKIP.test(smsSkipText(t)) || /\bcredit\s*card\b/i.test(t)) return null;
+    const re = /(?:\bavl\.?\s*|\bavail(?:able)?\s*|\b)bal(?:ance)?\b(.{0,60}?)(?:rs\.?|inr|₹)\s*:?\s*([\d,]+(?:\.\d{1,2})?)(\s*(?:dr|cr)\b)?/gi;
+    let m;
+    while ((m = re.exec(t)) && BAL_NOT.test(t.slice(Math.max(0, m.index - 40), m.index) + ' ' + m[1])) re.lastIndex = m.index + 3;
     if (!m) return null;
+    m = [m[0], m[2], m[3]];
     const acct = matchAccount(t);
     if (!acct.digits && !acct.id) return null;
     let amount = parseFloat(m[1].replace(/,/g, ''));
     if (/dr/i.test(m[2] || '')) amount = -amount;
-    return { balance: amount, date: smsDate(t), account: acct.id, acctDigits: acct.digits, ...(acct.learn ? { learn: acct.learn } : {}), acctBank: bankFromText(t) || bankName(t), acctKind: 'bank' };
+    return { balance: amount, date: smsDate(t, fallbackDate), account: acct.id, acctDigits: acct.digits, ...(acct.learn ? { learn: acct.learn } : {}), acctBank: (b => bankFromText(b) || bankFromText(t) || b)(bankName(t)), acctKind: 'bank' };
   }
   let lastBalanceReplies = [];
-  function parseSmsBatch(text) {
+  // fallbackDate / a "kharcha:on:2026-11-07" line before a message (the day the iPhone app got it): the date
+  // of messages that print none
+  function parseSmsBatch(text, fallbackDate) {
     const chunks = String(text).replace(/\r/g, '').split(/\n\s*\n/).map(c => c.trim()).filter(Boolean);
-    const out = [];
+    const out = [], seen = new Set();
     lastBalanceReplies = [];
+    let on = /^\d{4}-\d{2}-\d{2}$/.test(fallbackDate || '') ? fallbackDate : '';
+    const keep = x => { if (seen.has(x.ref)) return; seen.add(x.ref); out.push(x); };   // the same message twice (automation and Share)
     chunks.forEach(c => {
+      const mk = c.match(/^kharcha:on:(\d{4}-\d{2}-\d{2})[ \t]*(?:\n|$)/);
+      if (mk) { on = mk[1]; c = c.slice(mk[0].length).trim(); if (!c) return; }
+      const o = on ? { fallbackDate: on } : {};
       const lines = c.split('\n').map(l => l.trim()).filter(Boolean);
-      const each = lines.map(l => parseSms(l));
-      if (lines.length > 1 && each.filter(Boolean).length >= 2) each.forEach(x => x && out.push(x));
+      const each = lines.map(l => parseSms(l, o));
+      if (lines.length > 1 && each.filter(Boolean).length >= 2) each.forEach(x => x && keep(x));
       else {
-        const x = parseSms(c);
-        if (x) out.push(x);
-        else { const b = parseBalanceSms(c); if (b) lastBalanceReplies.push(b); }
+        const x = parseSms(c, o);
+        if (x) keep(x);
+        else { const b = parseBalanceSms(c, on); if (b) lastBalanceReplies.push(b); }
       }
     });
     return out;
@@ -3696,22 +4010,24 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
   function applyBalanceReplies() {
     if (!lastBalanceReplies.length) return '';
     ensureAccounts(lastBalanceReplies);
-    const done = [];
+    const done = [], older = [];
     lastBalanceReplies.forEach(b => {
-      const a = acctById(b.account); if (!a) return;
+      const a = acctById(b.account); if (!a || a.kind === 'card') return;   // a card's "balance" is what you owe
       if (b.learn) learnDigits(a.id, b.learn);
-      if (!a.bal || b.date >= a.bal.date) a.bal = { amount: b.balance, date: b.date, seq: 1e9 };
-      done.push(`${acctName(a)} ••${a.digits[0]} ${fmt(b.balance)}`);
+      // the balance as of now (at): a later SMS or statement row of the same day replaces it, and entries
+      // added after it move the estimate
+      if (!a.bal || b.date >= a.bal.date) { a.bal = { amount: b.balance, date: b.date, seq: 0, at: Date.now() }; done.push(`${acctName(a)} ••${a.digits[0]} ${fmt(b.balance)}`); }
+      else older.push(`${acctName(a)} ••${a.digits[0]}`);
     });
     lastBalanceReplies = [];
     save(); render();
-    return done.length ? 'Balance updated: ' + done.join(', ') : '';
+    return done.length ? 'Balance updated: ' + done.join(', ') : older.length ? `Not updated: Kharcha has a newer balance for ${older.join(', ')}` : '';
   }
   function openSmsPreview(text, source) {
     const items = parseSmsBatch(text);
     const msg = applyBalanceReplies();
     if (msg) toast(msg);
-    return openItemsPreview(items, source) || !!msg;
+    return openItemsPreview(items, source) ? 'review' : !!msg;
   }
   // PhonePe statement: open the review, or (nothing new) tag the matching entries straight away.
   // When the review opens, matching entries are tagged only once the user taps Import.
@@ -3758,8 +4074,9 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
   $('smsGo').addEventListener('click', () => {
     const t = $('smsText').value.trim();
     if (!t) { toast('Paste a bank SMS first'); return; }
-    if (!openSmsPreview(t)) { if (aiOn()) { closeAll(); aiReadLines([t], 'the pasted text'); } else toast('No transaction or balance found. Is this a bank message?'); }
-    else if (!$('impSheet').classList.contains('open')) closeAll();
+    const opened = openSmsPreview(t);
+    if (!opened) { if (aiOn()) { closeAll(); aiReadLines([t], 'the pasted text'); } else toast('No transaction or balance found. Is this a bank message?'); }
+    else if (opened !== 'review') closeAll();
   });
 
   $('impMap').addEventListener('change', e => {
@@ -3838,7 +4155,7 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     // undone if your name changes (review mark worked out for the category it would otherwise have)
     let selfRows = 0;
     add.forEach(e => {
-      if (e.userCat || e.category !== 'Transfer' || !isSelf(e.note)) return;
+      if (e.userCat || e.category !== 'Transfer' || !selfNamed(e.note)) return;
       selfRows++;
       const prev = classify(e.note, e.type, true);
       e.autoXfer = { why: 'self', prev, ...(!e.comment && needsReview({ ...e, category: prev }) ? { unread: true } : {}) };
@@ -3863,7 +4180,7 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     save();
     const latest = add.reduce((m, x) => x.date > m ? x.date : m, '');
     if (quiet) return;
-    if (latest) { const d = new Date(latest + 'T00:00'); current = new Date(d.getFullYear(), d.getMonth(), 1); }
+    if (latest) showDate(latest);
     closeAll();
     view = 'list'; syncNav(); render();
     toast(label || `Imported ${add.length} transactions`);
@@ -3924,32 +4241,36 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     const b = e.target.closest('[data-acct]'); if (!b) return;
     acctFilter = b.dataset.acct; render();
   });
+  $('sAcct').addEventListener('click', e => { if (e.target.closest('[data-acct]')) { acctFilter = ''; render(); } });
   $('impAcct').addEventListener('change', e => { imp.acctOverride = e.target.value; renderImport(); });
   $('addAcct').addEventListener('click', () => {
     const name = $('newAcctName').value.trim();
     const digits = $('newAcctDigits').value.split(/[^0-9]+/).filter(d => d.length >= 3).map(d => d.slice(-6));
-    if (!name) { toast('Give the account a name'); return; }
-    if (!digits.length) { toast('Enter at least the last 3–4 digits'); return; }
-    const clash = (state.accounts || []).find(a => a.digits.some(d => digits.some(n => d.endsWith(n) || n.endsWith(d))));
-    if (clash) { toast(`Those digits already belong to ${acctName(clash)}`); return; }
     const kind = $('newAcctKind').value;
+    if (!name) { toast('Give the account a name'); return; }
+    if (!digits.length && kind !== 'cash' && kind !== 'wallet') { toast('Enter at least the last 3–4 digits'); return; }   // cash and wallets need none
+    // PhonePe's 2-digit endings ("••38") don't clash: the account with the full number is matched first
+    const clash = (state.accounts || []).find(a => a.digits.some(d => d.length >= 3 && digits.some(n => d.endsWith(n) || n.endsWith(d))));
+    if (clash) { toast(`Those digits already belong to ${acctName(clash)}`); return; }
     const emoji = $('newAcctEmoji').value.trim() || ({ bank: '🏦', card: '💳', wallet: '📱', cash: '👛' })[kind];
     const nick = $('newAcctNick').value.trim().slice(0, 24);
     state.accounts = (state.accounts || []).concat({ id: uid(), name, emoji, kind, digits, ...(nick ? { nick } : {}) });
-    // attach existing imported entries that mention these digits
+    // attach SMS and email alerts about these digits (a statement's or UPI app's narration names the
+    // other side of the payment, never the account it came from)
     let n = 0;
     const a = state.accounts[state.accounts.length - 1];
-    state.expenses.forEach(e => { if (!e.account && e.ref && matchAccount(e.note).id === a.id) { e.account = a.id; n++; } });
+    if (digits.length) state.expenses.forEach(e => { if (!e.account && /^(sms|mail)\|/.test(e.ref || '') && matchAccount(e.note).id === a.id) { e.account = a.id; n++; } });
     ['newAcctName', 'newAcctNick', 'newAcctDigits', 'newAcctEmoji'].forEach(id => $(id).value = '');
-    save(); render(); toast(n ? `Account added · ${n} existing entr${n > 1 ? 'ies' : 'y'} matched` : 'Account added');
+    const t = tidyTransfers();
+    save(); render(); toast((n ? `Account added · ${n} existing entr${n > 1 ? 'ies' : 'y'} matched` : 'Account added') + tidyNote(t), tidyNote(t) ? 4000 : undefined);
   });
   $('acctChips').addEventListener('click', e => {
     const x = e.target.closest('[data-delacct]');
     if (!x) {
       const c = e.target.closest('[data-editacct]'); if (!c) return;
       const a = acctById(c.dataset.editacct); if (!a) return;
-      const done = () => { save(); render(); toast(`Saved · ${acctLabel(a)}`); };
-      const nick = prompt(`Short name for ${a.name} ••${a.digits.join('/')}\n(e.g. Salary, Joint, Savings, Dad) — shown everywhere instead of the bank name. Leave empty to show the bank name.`, a.nick || '');
+      const done = () => { const t = tidyTransfers(); save(); render(); toast(`Saved · ${acctLabel(a)}` + tidyNote(t), tidyNote(t) ? 4000 : undefined); };
+      const nick = prompt(`Short name for ${a.name}${a.digits.length ? ' ••' + a.digits.join('/') : ''}\n(e.g. Salary, Joint, Savings, Dad) — shown everywhere instead of the bank name. Leave empty to show the bank name.`, a.nick || '');
       if (nick === null) return;
       a.nick = nick.trim().slice(0, 24);
       if (a.business || (a.holder && !isSelf(a.holder))) {
@@ -3968,8 +4289,8 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
       const list = digits.split(/[^0-9]+/).filter(d => d.length >= 2).map(d => d.slice(-6));
       if (list.length) a.digits = list;
       if (a.kind !== 'card') {
-        const num = prompt('Balance-enquiry (missed call) number — leave empty for none', enquiryFor(a));
-        if (num !== null) a.enquiry = num.replace(/[^0-9+]/g, '');
+        const was = enquiryFor(a), num = prompt('Balance-enquiry (missed call) number — leave empty for none', was);
+        if (num !== null && num.replace(/[^0-9+]/g, '') !== was) a.enquiry = num.replace(/[^0-9+]/g, '');   // empty: none, not the bank's usual number
       }
       done();
       return;
@@ -3978,7 +4299,8 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     if (!a || !confirm(`Remove "${acctName(a)}"? Its transactions stay, without an account.`)) return;
     state.accounts = state.accounts.filter(y => y.id !== a.id);
     state.expenses.forEach(e => { if (e.account === a.id) e.account = ''; });
-    save(); render();
+    const t = tidyTransfers();
+    save(); render(); toast('Account removed' + tidyNote(t), tidyNote(t) ? 4000 : undefined);
   });
   function syncNav() {
     document.querySelectorAll('nav button').forEach(x => x.classList.toggle('active', x.dataset.view === view));
@@ -4172,8 +4494,24 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
         .map(e => [e.date, e.type === 'credit' ? 'Credit' : 'Debit', e.category, groupOf(e), e.amount, state.settings.currency, e.payment || '', (acctById(e.account) || {}).name || '', payeeAlias(payerKey(e)), e.note, e.comment || '']));
     download(`transactions-${isoDate(new Date())}.csv`, rows.map(r => r.map(q).join(',')).join('\n'), 'text/csv');
   });
-  $('backup').addEventListener('click', () =>
-    download(`expenses-backup-${isoDate(new Date())}.json`, JSON.stringify({ ...state, settings: { ...state.settings, ai: undefined } }, null, 2), 'application/json'));
+  // Keys stay out of the file: the DeepSeek key, and the Gmail bridge address and key (together they let
+  // anyone read your bank alert emails). Restoring keeps this device's own (see keepDeviceSettings).
+  $('backup').addEventListener('click', () => {
+    const m = state.settings.mail;
+    const settings = { ...state.settings, ai: undefined, mail: m ? { ...m, url: undefined, key: undefined } : undefined };
+    download(`expenses-backup-${isoDate(new Date())}.json`, JSON.stringify({ ...state, settings }, null, 2), 'application/json');
+  });
+  // Restoring a backup: this device's DeepSeek key and Gmail bridge stay (a backup file has neither), and
+  // so does whether it syncs with iCloud, unless its own data couldn't be read (the backup then has it).
+  function keepDeviceSettings(next, prev, unreadable) {
+    const s = next.settings, p = prev.settings || {};
+    if (p.ai) s.ai = p.ai;
+    if (p.mail && p.mail.url) s.mail = { ...(s.mail || {}), url: p.mail.url, key: p.mail.key };
+    if (!unreadable) { if (p.cloudOn === false) s.cloudOn = false; else delete s.cloudOn; }
+    return next;
+  }
+  // with iCloud sync on, a restore replaces the iCloud copy too (see restoreSync)
+  const restoreReplacesCloud = () => NATIVE && state.settings.cloudOn !== false && !loadProblem;
   // Automatic backups kept by the iPhone app (daily, and before any save that halves the data)
   $('autoBackups').addEventListener('click', () => { $('backupList').classList.remove('hidden'); $('backupList').textContent = 'Loading…'; native({ type: 'backups' }); });
   window.expensesBackups = list => {
@@ -4186,20 +4524,22 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
   };
   $('backupList').addEventListener('click', e => {
     const b = e.target.closest('[data-backup]'); if (!b) return;
-    if (!confirm('Restore this backup? Entries added since then will be replaced.')) return;
+    if (!confirm(`Restore this backup? Entries added since then will be replaced${restoreReplacesCloud() ? ', here and in iCloud' : ''}.`)) return;
     native({ type: 'backupRead', name: b.dataset.backup });
   });
   window.expensesBackupData = (name, json) => {
     let s = null; try { s = JSON.parse(json); } catch (e) {}
     if (!s || !Array.isArray(s.expenses)) { toast('That backup couldn’t be read'); return; }
-    state = migrate(s); loadProblem = '';
-    try { localStorage.removeItem(CLOUD_BASE); } catch (e) {}   // next iCloud sync merges instead of deleting
+    const unreadable = !!loadProblem;
+    state = keepDeviceSettings(migrate(s), state, unreadable); loadProblem = '';
+    restoreSync(unreadable);
     save(); render(); renderSettings();
     toast(`Restored ${state.expenses.length} entries from the backup`, 5000);
   };
   $('restoreBtn').addEventListener('click', () => $('restoreFile').click());
   $('restoreFile').addEventListener('change', async e => {
-    const f = e.target.files[0]; if (!f) return;
+    const f = e.target.files[0]; e.target.value = '';   // so the same file can be picked again
+    if (!f) return;
     try {
       const data = JSON.parse(await f.text());
       if (!Array.isArray(data.expenses)) throw new Error('bad file');
@@ -4210,17 +4550,20 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
           ...(typeof x.balance === 'number' ? { balance: x.balance } : {}),
           ...(Array.isArray(x.refs) ? { refs: x.refs.map(String) } : {}),
           ...(x.comment ? { comment: String(x.comment) } : {}), ...(x.unread ? { unread: true } : {}) }));
-      if (!confirm(`Replace current data with ${valid.length} transactions from backup?`)) return;
-      state = migrate({ ...data, expenses: valid }); loadProblem = '';
-      try { localStorage.removeItem(CLOUD_BASE); } catch (e) {}   // next iCloud sync merges instead of deleting
+      if (!confirm(`Replace current data${restoreReplacesCloud() ? ' here and in iCloud' : ''} with ${valid.length} transactions from backup?`)) return;
+      const unreadable = !!loadProblem;
+      state = keepDeviceSettings(migrate({ ...data, expenses: valid }), state, unreadable); loadProblem = '';
+      restoreSync(unreadable);
       save(); $('currency').innerHTML = ''; render(); toast('Restored');
     } catch (err) { toast('Not a valid backup file'); }
-    e.target.value = '';
   });
   $('wipe').addEventListener('click', () => {
-    if (!confirm('Delete ALL transactions, rules and settings? This cannot be undone.')) return;
+    const cloud = NATIVE && state.settings.cloudOn !== false, off = state.settings.cloudOn === false;
+    if (!confirm(cloud ? 'Delete ALL transactions, rules and settings, on this iPhone and in iCloud? Your other devices that sync with iCloud lose them too. This cannot be undone.'
+      : 'Delete ALL transactions, rules and settings? This cannot be undone.')) return;
     // marked so the iCloud safety net knows this emptiness is on purpose and syncs it
     state = defaultState(); state.settings.wipedAt = Date.now(); loadProblem = '';
+    if (off) state.settings.cloudOn = false;   // iCloud sync stays off
     save(); $('currency').innerHTML = ''; render();
     try { localStorage.removeItem(FOLDER_LOG); } catch (e) {}
     if (NATIVE && folderInfo.name) { native({ type: 'folderRescan' }); toast('All data deleted · importing the statements in your folder again…', 4000); }
@@ -4228,27 +4571,33 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
   });
 
   selfRe = selfPatterns();
-  // When Kharcha's rules improve, entries it categorised itself are re-checked once (never ones you set,
-  // commented, or that are transfers): today "Other" that a rule now recognises, and UPI payments that a
-  // branch name ("ATM SERVICE BRANCH") had wrongly filed as Cash.
-  const RULES_VERSION = 5;   // 5: loans
-  if ((state.settings.rulesV || 1) < 3) {
-    // 3: payouts from PhonePe / BharatPe got one payee key each (see SETTLERS). A name, category or
-    // comment rule saved under an old key moves to the new one, when every entry with the old key moved.
+  // A name, category or comment rule saved under an old payee key moves to the new one, when every
+  // entry with the old key moved.
+  function carryKeys(oldKey) {
     const to = new Map(), bad = new Set();
+    let moved = 0;
     state.expenses.forEach(e => {
-      const o = merchantKey(e.note || e.desc || '', true), nk = payerKey(e);
+      const o = oldKey(e.note || e.desc || ''), nk = payerKey(e);
       if (o.length < 3 || !nk || o === nk) { if (o) bad.add(o); return; }
       if (to.has(o) && to.get(o) !== nk) bad.add(o); else to.set(o, nk);
     });
     to.forEach((nk, o) => {
       if (bad.has(o)) return;
       const names = state.settings.payeeNames || {};
-      const carry = (obj, from, to) => { if (obj[from] === undefined) return; if (obj[to] === undefined) obj[to] = obj[from]; if (JSON.stringify(obj[to]) === JSON.stringify(obj[from])) delete obj[from]; };
+      const carry = (obj, from, to) => { if (obj[from] === undefined) return; moved++; if (obj[to] === undefined) obj[to] = obj[from]; if (JSON.stringify(obj[to]) === JSON.stringify(obj[from])) delete obj[from]; };
       carry(names, o, nk); carry(state.rules, o, nk);
       const cr = state.settings.commentRules || {};
       Object.keys(cr).forEach(r => { if (r.startsWith(o + '|')) carry(cr, r, nk + r.slice(o.length)); });
     });
+    return moved;
+  }
+  // When Kharcha's rules improve, entries it categorised itself are re-checked once (never ones you set,
+  // commented, or that are transfers): today "Other" that a rule now recognises, and UPI payments that a
+  // branch name ("ATM SERVICE BRANCH") had wrongly filed as Cash.
+  const RULES_VERSION = 5;   // 5: loans
+  if ((state.settings.rulesV || 1) < 3) {
+    // 3: payouts from PhonePe / BharatPe got one payee key each (see SETTLERS)
+    carryKeys(d => merchantKey(d, true));
     // A business account set up with a made-up "Clinic income" / "Business income" while you had
     // already chosen your own money-in category for it: its collections move to yours, and the
     // made-up category goes once nothing uses it.
@@ -4263,6 +4612,18 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
       if (!state.expenses.some(e => e.category === old) && !Object.values(state.rules).includes(old) &&
           !(state.accounts || []).some(b => b.business && b.business.incomeCat === old)) state.categories = state.categories.filter(x => x.name !== old);
     });
+  }
+  if (!state.settings.bankLabelKeys) {   // an alert's bank or sender ("To SWIGGY · Indian Bank") is no longer part of the payee
+    const moved = carryKeys(d => merchantKey(d, false, true));
+    state.settings.bankLabelKeys = 1; if (moved) save();
+  }
+  if (!state.settings.stubsDropped) {   // PhonePe's 2 digits ("38") kept beside the real ending they learned ("7238")
+    let n = 0;
+    (state.accounts || []).forEach(a => {
+      const ds = a.digits || [], keep = ds.filter(z => !(z.length < 4 && ds.some(y => y.length > z.length && y.endsWith(z))));
+      if (keep.length < ds.length) { a.digits = keep; n++; }
+    });
+    state.settings.stubsDropped = 1; if (n) save();
   }
   if ((state.settings.rulesV || 1) < 4) {
     FIXED_KEYS.forEach(k => {
@@ -4467,8 +4828,7 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     const it = mailBrowse.items[+b.dataset.madd];
     returnToMail = true;
     closeAll();
-    if (!it.x.account && it.x.acctDigits) { ensureAccounts([it.x]); save(); }
-    openSheet(null, { ...it.x, note: it.x.desc, ref: 'mail|' + it.e.id });
+    openSheet(null, { ...it.x, note: it.x.desc, ref: 'mail|' + it.e.id });   // a new account is made only when you save
   });
   $('mailFilter').addEventListener('input', renderMailList);
   $('mailClose').addEventListener('click', closeAll);
@@ -4492,48 +4852,171 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
   });
 
   // ---------- iCloud sync (iOS app) ----------
-  // Three-way merge: what this device last synced (base), this device now (local), iCloud now (remote).
-  // Local additions/edits win; remote additions/edits are kept; deletions on either side are applied
-  // unless the other side changed that item meanwhile.
-  const CLOUD_BASE = KEY + ':cloudBase';
-  const sameJ = (a, b) => JSON.stringify(a) === JSON.stringify(b);
-  function mergeList(b = [], l = [], r = [], k) {
-    const B = new Map(b.map(x => [x[k], x])), L = new Map(l.map(x => [x[k], x])), R = new Map(r.map(x => [x[k], x]));
+  // Three-way merge: the last copy this device and iCloud had in common (base), this device now (local),
+  // iCloud now (remote). Local additions/edits win; remote additions/edits are kept; deletions on either
+  // side are applied unless the other side changed that item meanwhile.
+  // The base is kept as one fingerprint per entry and setting, not as a second copy of all the data (web
+  // storage on iPhone has no room for two). iCloud keeps only the latest upload, so each upload carries
+  // the ids of the uploads it was made from (settings.syncTag): a copy another device made without this
+  // device's last upload is merged against the copy both had, or this device's newest entries would look
+  // deleted. An upload iCloud refused never counts as shared.
+  const CLOUD_BASE = KEY + ':cloudBase';   // older versions: all the data as last synced
+  const SYNC_KEY = KEY + ':sync';          // { n, seen, pushed } fingerprints, or { replace } after a restore
+  const SYNC_LISTS = [['expenses', 'id'], ['accounts', 'id'], ['categories', 'name'], ['fds', 'no']];
+  const SYNC_OBJS = ['brokers', 'rules'];
+  const hasKey = (o, k) => Object.prototype.hasOwnProperty.call(o, k);
+  const plainObj = v => !!v && typeof v === 'object' && !Array.isArray(v);
+  function fpr(v) {   // fingerprint: a 53-bit hash of the JSON
+    const s = JSON.stringify(v) || '';
+    let h1 = 0xdeadbeef, h2 = 0x41c6ce57;
+    for (let i = 0; i < s.length; i++) { const c = s.charCodeAt(i); h1 = Math.imul(h1 ^ c, 2654435761); h2 = Math.imul(h2 ^ c, 1597334677); }
+    h1 = Math.imul(h1 ^ (h1 >>> 16), 2246822507) ^ Math.imul(h2 ^ (h2 >>> 13), 3266489909);
+    h2 = Math.imul(h2 ^ (h2 >>> 16), 2246822507) ^ Math.imul(h1 ^ (h1 >>> 13), 3266489909);
+    return (4294967296 * (2097151 & h2) + (h1 >>> 0)).toString(36);
+  }
+  // (a value left undefined is no value: it isn't in the uploaded JSON either)
+  const fprMap = (o, skip) => { const m = new Map(); Object.keys(o || {}).forEach(k => { if (o[k] !== undefined && !(skip && skip(k))) m.set(k, fpr(o[k])); }); return m; };
+  function digestOf(s) {
+    const d = { l: {}, o: {}, s: fprMap(s.settings, k => k === 'syncTag'), x: {}, t: fprMap(s, k => k === 'settings' || SYNC_OBJS.includes(k) || SYNC_LISTS.some(([n]) => n === k)) };
+    SYNC_LISTS.forEach(([name, k]) => { const m = new Map(); (s[name] || []).forEach(v => { if (v) m.set(v[k], fpr(v)); }); d.l[name] = m; });
+    SYNC_OBJS.forEach(name => { d.o[name] = fprMap(s[name]); });
+    const st = s.settings || {};
+    Object.keys(st).forEach(k => { if (k !== 'syncTag' && plainObj(st[k])) d.x[k] = fprMap(st[k]); });
+    return d;
+  }
+  // same data, in whatever order (two devices list entries added at the same time in different orders)
+  const sameMap = (a, b) => !!a && !!b && a.size === b.size && [...a].every(([k, v]) => b.get(k) === v);
+  const sameDigest = (a, b) => SYNC_LISTS.every(([n]) => sameMap(a.l[n], b.l[n])) && SYNC_OBJS.every(n => sameMap(a.o[n], b.o[n])) && sameMap(a.s, b.s) && sameMap(a.t, b.t);
+  // b: the base's fingerprints (a Map), or none
+  function mergeList(b, l = [], r = [], k) {
+    b = b || new Map();
+    const L = new Map(l.map(x => [x[k], x])), R = new Map(r.map(x => [x[k], x]));
     const out = new Map(R);
-    L.forEach((v, id) => { if (!B.has(id) || !sameJ(v, B.get(id))) out.set(id, v); });
-    B.forEach((v, id) => { if (!L.has(id) && (!R.has(id) || sameJ(R.get(id), v))) out.delete(id); });
+    L.forEach((v, id) => { if (!b.has(id) || fpr(v) !== b.get(id)) out.set(id, v); });
+    b.forEach((h, id) => { if (!L.has(id) && (!R.has(id) || fpr(R.get(id)) === h)) out.delete(id); });
     // keep this device's order, then anything new from iCloud
     const ordered = l.filter(x => out.has(x[k])).map(x => out.get(x[k]));
     out.forEach((v, id) => { if (!L.has(id)) ordered.push(v); });
     return ordered;
   }
-  function mergeObj(b = {}, l = {}, r = {}) {
+  function mergeObj(b, l = {}, r = {}) {
+    b = b || new Map();
     const out = { ...r };
-    Object.keys(l).forEach(k => { if (!(k in b) || !sameJ(l[k], b[k])) out[k] = l[k]; });
-    Object.keys(b).forEach(k => { if (!(k in l) && (!(k in r) || sameJ(r[k], b[k]))) delete out[k]; });
+    Object.keys(l).forEach(k => { if (!b.has(k) || fpr(l[k]) !== b.get(k)) out[k] = l[k]; });
+    b.forEach((h, k) => { if (!hasKey(l, k) && (!hasKey(r, k) || fpr(r[k]) === h)) delete out[k]; });
     return out;
   }
-  function merge3(base, local, remote) {
-    base = base || {};
-    const bs = base.settings || {}, ls = local.settings || {}, rs = remote.settings || {};
-    const settings = mergeObj(bs, ls, rs);
-    settings.commentRules = mergeObj(bs.commentRules, ls.commentRules, rs.commentRules);
-    return {
-      ...remote, ...local,
-      v: Math.max(local.v || 0, remote.v || 0),
-      expenses: mergeList(base.expenses, local.expenses, remote.expenses, 'id'),
-      accounts: mergeList(base.accounts, local.accounts, remote.accounts, 'id'),
-      categories: mergeList(base.categories, local.categories, remote.categories, 'name'),
-      fds: mergeList(base.fds || [], local.fds || [], remote.fds || [], 'no'),
-      brokers: mergeObj(base.brokers || {}, local.brokers || {}, remote.brokers || {}),
-      rules: mergeObj(base.rules, local.rules, remote.rules),
-      settings
-    };
+  // The same statement row, SMS or email imported on two devices before either had the other's upload:
+  // one entry is kept (the earlier import, so both devices keep the same one) with the other's comment
+  // and category.
+  function sameAcross(list, b, l, r) {
+    b = b || new Map();
+    const L = new Set(l.map(x => x.id)), R = new Set(r.map(x => x.id)), theirs = new Map();
+    list.forEach(y => { if (!b.has(y.id) && !L.has(y.id)) refsOf(y).forEach(ref => { const k = y.type + '|' + ref; if (!theirs.has(k)) theirs.set(k, y); }); });
+    if (!theirs.size) return list;
+    const drop = new Set(), keep = new Map();
+    list.forEach(x => {
+      if (b.has(x.id) || R.has(x.id) || !L.has(x.id)) return;
+      const y = refsOf(x).map(ref => theirs.get(x.type + '|' + ref)).find(y => y && !drop.has(y.id) && !keep.has(y.id));
+      if (!y) return;
+      const xFirst = (x.createdAt || 0) !== (y.createdAt || 0) ? (x.createdAt || 0) < (y.createdAt || 0) : x.id < y.id;
+      const w = xFirst ? x : y, o = xFirst ? y : x, m = { ...w };
+      if (!m.comment && o.comment) { m.comment = o.comment; delete m.unread; }
+      if (o.userCat && !m.userCat) { m.category = o.category; m.userCat = true; }
+      if (m.group === undefined && o.group !== undefined) m.group = o.group;
+      const refs = [...new Set(refsOf(w).concat(refsOf(o)))].filter(ref => ref !== m.ref);
+      if (refs.length) m.refs = refs;
+      drop.add(o.id); keep.set(w.id, m);
+    });
+    return drop.size ? list.filter(x => !drop.has(x.id)).map(x => keep.get(x.id) || x) : list;
   }
+  function merge3(base, local, remote) {
+    // never synced: settings and categories still as Kharcha starts them give way to iCloud's
+    const B = base || digestOf(defaultState());
+    const ls = local.settings || {}, rs = remote.settings || {};
+    const settings = mergeObj(B.s, ls, rs);
+    // settings holding one value per payee, category or rule (payee names, renamed categories, comment
+    // rules, Gmail…) are merged value by value: what two devices changed at the same time is all kept
+    Object.keys(settings).forEach(k => { if (plainObj(ls[k]) && plainObj(rs[k])) settings[k] = mergeObj((B.x || {})[k], ls[k], rs[k]); });
+    delete settings.syncTag;
+    const out = { ...remote, ...local, v: Math.max(local.v || 0, remote.v || 0), settings };
+    SYNC_LISTS.forEach(([name, k]) => { out[name] = mergeList(B.l[name], local[name] || [], remote[name] || [], k); });
+    SYNC_OBJS.forEach(name => { out[name] = mergeObj(B.o[name], local[name] || {}, remote[name] || {}); });
+    out.expenses = sameAcross(out.expenses, B.l.expenses, local.expenses || [], remote.expenses || []);
+    joinTwinAccounts(out);
+    return out;
+  }
+  // Two devices that found the same new account before syncing each made their own copy ("HDFC Bank
+  // ••1234" twice): they become one again, the older id kept, on every device alike.
+  function joinTwinAccounts(s) {
+    if (!Array.isArray(s.accounts) || s.accounts.length < 2) return;
+    const accts = s.accounts.map(a => ({ ...a, digits: Array.isArray(a.digits) ? a.digits : [] }));   // copies: the merge's inputs stay as they were
+    const bank = a => bankFromText(a.name);
+    const twins = (a, b) => a.kind === b.kind && (bank(a) === bank(b) || !bank(a) || !bank(b)) && (a.digits.length
+      ? a.digits.some(z => b.digits.includes(z))
+      : !b.digits.length && String(a.name).toLowerCase() === String(b.name).toLowerCase());   // wallets: by name
+    const into = new Map();
+    accts.slice().sort((a, b) => (a.id < b.id ? -1 : 1)).forEach(b => {
+      if (into.has(b.id)) return;
+      accts.forEach(c => {
+        if (c === b || into.has(c.id) || c.id < b.id || !twins(b, c)) return;
+        into.set(c.id, b);
+        c.digits.forEach(z => { if (!b.digits.includes(z)) b.digits = b.digits.concat(z); });
+        if (!bank(b) && bank(c)) b.name = c.name;
+        ['nick', 'enquiry', 'holder', 'business'].forEach(k => { if (b[k] === undefined && c[k] !== undefined) b[k] = c[k]; });
+        if (c.bal && (!b.bal || c.bal.date > b.bal.date)) b.bal = c.bal;
+      });
+    });
+    if (!into.size) return;
+    s.accounts = accts.filter(a => !into.has(a.id));
+    if (Array.isArray(s.expenses)) s.expenses = s.expenses.map(e => e && into.has(e.account) ? { ...e, account: into.get(e.account).id } : e);
+  }
+  // Puts merged data into `state` keeping its objects: code still waiting for an answer (DeepSeek
+  // categorising entries, a Gmail check) holds them, and what it writes must land in the data.
+  function adopt(next) {
+    const into = (cur, nxt) => { if (cur === nxt) return cur; Object.keys(cur).forEach(k => { delete cur[k]; }); return Object.assign(cur, nxt); };
+    SYNC_LISTS.forEach(([name, k]) => {
+      const cur = state[name];
+      if (!Array.isArray(cur) || !Array.isArray(next[name])) return;
+      const old = new Map(cur.map(x => [x && x[k], x]));
+      const items = next[name].map(x => { const o = old.get(x && x[k]); return plainObj(o) && plainObj(x) ? into(o, x) : x; });
+      cur.length = 0; items.forEach(x => cur.push(x));
+      next[name] = cur;
+    });
+    const s = state.settings;
+    if (plainObj(s) && plainObj(next.settings)) {
+      Object.keys(next.settings).forEach(k => { if (plainObj(s[k]) && plainObj(next.settings[k])) next.settings[k] = into(s[k], next.settings[k]); });
+      next.settings = into(s, next.settings);
+    }
+    into(state, next);
+  }
+  function readSync() {
+    try {
+      const j = localStorage.getItem(SYNC_KEY);
+      if (j) { const r = JSON.parse(j, (k, v) => v && Array.isArray(v.$m) ? new Map(v.$m) : v); if (plainObj(r)) return r; }
+    } catch (e) {}
+    // older versions kept all the data as last synced
+    try { const old = JSON.parse(localStorage.getItem(CLOUD_BASE) || 'null'); if (old && Array.isArray(old.expenses)) return { legacy: digestOf(old) }; } catch (e) {}
+    return {};
+  }
+  function writeSync(rec) {
+    try { localStorage.removeItem(CLOUD_BASE); } catch (e) {}
+    try { localStorage.setItem(SYNC_KEY, JSON.stringify(rec, (k, v) => v instanceof Map ? { $m: [...v] } : v)); }
+    catch (e) { try { localStorage.removeItem(SYNC_KEY); } catch (e2) {} }   // no base rather than an old one: the next sync only adds
+  }
+  // the next sync adds both sides together (nothing missing on either side counts as deleted)
+  function forgetSync() { syncQueue = []; try { localStorage.removeItem(SYNC_KEY); localStorage.removeItem(CLOUD_BASE); } catch (e) {} }
+  // After a restore, iCloud gets the restored data as it is (not merged with iCloud's copy, which would
+  // bring back the entries the backup replaced). When this device's own data couldn't be read, the
+  // backup is merged with iCloud's copy instead: iCloud may have newer entries.
+  function restoreSync(unreadable) { if (unreadable) forgetSync(); else writeSync({ n: readSync().n || 0, replace: true }); }
+  let syncQueue = [];   // uploads waiting for the app to say whether iCloud took them
   let cloudInfo = { available: null, at: 0, error: '' };
   function renderCloudStatus() {
     if (!NATIVE) return;
     $('cloudOn').checked = state.settings.cloudOn !== false;
+    $('dataWhere').textContent = state.settings.cloudOn === false ? 'Your data is stored only on this iPhone. Back it up now and then.'
+      : 'Your data is on this iPhone and in your iCloud. Back it up now and then.';
     const when = cloudInfo.at ? new Date(cloudInfo.at * 1000).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' }) : '';
     $('cloudStatus').textContent = state.settings.cloudOn === false ? 'Off — data stays on this iPhone only.'
       : cloudInfo.available === false ? 'Not signed in to iCloud. Open iPhone Settings › your name › iCloud, then come back.'
@@ -4541,36 +5024,61 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
       : cloudInfo.at ? `✓ Synced · ${when}` : 'Waiting for iCloud…';
   }
   window.expensesCloudData = (json, available, at) => {
+    if (catchUpToday()) render();   // the iOS app sends this whenever it comes back to the screen
     cloudInfo.available = !!available; cloudInfo.at = at || cloudInfo.at;
-    if (state.settings.cloudOn === false || !available) { renderCloudStatus(); return; }
-    let base = null; try { base = JSON.parse(localStorage.getItem(CLOUD_BASE) || 'null'); } catch (e) {}
+    if (state.settings.cloudOn === false || !available || loadProblem) { renderCloudStatus(); return; }
     let remote = null; try { remote = json ? JSON.parse(json) : null; } catch (e) {}
-    if (loadProblem) { renderCloudStatus(); return; }
-    const before = JSON.stringify(state);
-    let restored = 0;
-    if (remote && Array.isArray(remote.expenses)) {
-      // This device suddenly holds far fewer entries than were last synced (data lost or reset here):
-      // treat iCloud as the safe copy — bring everything back instead of deleting it from iCloud too.
-      const baseN = base && Array.isArray(base.expenses) ? base.expenses.length : 0, localN = state.expenses.length;
-      const wiped = (state.settings.wipedAt || 0) > ((base && base.settings && base.settings.wipedAt) || 0);
-      if (!wiped && baseN > 20 && localN < baseN / 2) { base = null; restored = Math.max(0, remote.expenses.length - localN); }
-      state = migrate(merge3(base, state, migrate(remote)));
-      if (JSON.stringify(state) !== before) { saveLocal(); render(); }
+    remote = remote && Array.isArray(remote.expenses) ? migrate(remote) : null;
+    const rec = readSync(), n = (rec.n || 0) + 1, next = { n };
+    let tag = null;
+    if (remote) {
+      tag = remote.settings.syncTag;
+      tag = Array.isArray(tag) && tag.length && tag.every(x => typeof x === 'string') ? tag : null;
+      let base = null;
+      if (rec.replace) base = digestOf(remote);   // a restored backup replaces iCloud's copy
+      else if (rec.legacy) base = rec.legacy;
+      else {
+        // the newest copy shared with iCloud that iCloud's copy was made from (no tag: an older Kharcha's)
+        const known = [rec.pushed, rec.seen].filter(d => d && d.l && d.s).sort((a, b) => b.n - a.n);
+        base = (tag ? known.find(d => tag.indexOf(d.id) >= 0) : known[0]) || null;
+      }
+      // This device holds far fewer entries than were last synced, and already did when Kharcha opened
+      // (data lost or reset here, not deleted on purpose): treat iCloud as the safe copy — bring
+      // everything back instead of deleting it from iCloud too.
+      const baseN = base && !rec.replace ? base.l.expenses.size : 0;
+      const wiped = !!state.settings.wipedAt && !!base && base.s.get('wipedAt') !== fpr(state.settings.wipedAt);
+      let restored = 0;
+      if (!wiped && baseN > 20 && loadN < baseN / 2) { base = null; restored = Math.max(0, remote.expenses.length - state.expenses.length); }
+      const merged = migrate(merge3(base, state, remote));
+      if (JSON.stringify(merged) !== JSON.stringify(state)) { adopt(merged); saveLocal(); render(); }
       if (restored) toast(`☁️ This iPhone had lost entries — restored ${restored} from iCloud`, 6000);
+      next.seen = digestOf(remote); next.seen.id = tag ? tag[0] : ''; next.seen.n = n;
+      if (rec.pushed && !rec.replace && !rec.legacy) next.pushed = rec.pushed;
     }
-    const merged = JSON.stringify(state);
-    if (!remote || JSON.stringify(migrate(remote)) !== merged) native({ type: 'cloudPush', data: merged });
-    else cloudInfo.error = '';
-    try { localStorage.setItem(CLOUD_BASE, merged); } catch (e) {}
+    loadN = Infinity;
+    const d = digestOf(state);
+    if (!next.seen || !sameDigest(d, next.seen)) {
+      d.id = uid(); d.n = n + 0.5;
+      syncQueue = syncQueue.slice(-9).concat(d);
+      native({ type: 'cloudPush', data: JSON.stringify({ ...state, settings: { ...state.settings, syncTag: [d.id].concat(tag || []).slice(0, 12) } }) });
+    } else cloudInfo.error = '';
+    writeSync(next);
     renderCloudStatus();
   };
   window.expensesCloudPushed = (error, at) => {
+    const d = syncQueue.shift();
     cloudInfo.error = error || ''; if (!error) cloudInfo.at = at || Date.now() / 1000;
+    if (d && !error) {
+      const rec = readSync();
+      if (!rec.replace && !rec.legacy && !(rec.pushed && rec.pushed.n >= d.n)) { rec.pushed = d; writeSync(rec); }
+    }
     renderCloudStatus();
   };
   if (NATIVE) {
     $('cloudOn').addEventListener('change', e => {
       state.settings.cloudOn = e.target.checked; saveLocal();
+      // what changed on either side while sync was off is added together, never taken as deleted
+      forgetSync();
       if (e.target.checked) native({ type: 'cloudPull' });
       renderCloudStatus();
     });
@@ -4629,7 +5137,7 @@ Rules: include only completed transactions — skip OTPs, offers, ads, due/bill 
       const party = String(t.party || '').replace(/\s+/g, ' ').trim().slice(0, 60);
       const bank = String(t.bank || '').trim().slice(0, 30);
       const digits = String(t.account || '').replace(/\D/g, '');
-      const acct = digits.length >= 2 ? upiAccount(digits) : { account: '', acctDigits: '' };
+      const acct = digits.length >= 2 ? upiAccount(digits, bank) : { account: '', acctDigits: '' };
       const utr = /^\d{12}$/.test(String(t.utr || '').trim()) ? String(t.utr).trim() : '';
       let category = classify(party || bank, type);
       if ((category === 'Other' || category === 'Other Income') && catsFor(type).some(c => c.name === t.category)) category = t.category;
@@ -4644,7 +5152,7 @@ Rules: include only completed transactions — skip OTPs, offers, ads, due/bill 
   }
   let aiBusy = false;
   // lines: text lines (SMS, PDF lines or spreadsheet rows); context: statement header sent with every part
-  async function aiReadLines(lines, label, context = '') {
+  async function aiReadLines(lines, label, context = '', comment = '') {
     if (aiBusy) { toast('DeepSeek is still working…'); return; }
     lines = lines.map(l => String(l).trim()).filter(Boolean);
     const parts = [];
@@ -4660,6 +5168,7 @@ Rules: include only completed transactions — skip OTPs, offers, ads, due/bill 
     catch (e) { aiBusy = false; toast(e.message, 5000); return; }
     aiBusy = false;
     $('toast').classList.remove('show');
+    if (comment) uniq.forEach(x => { x.comment = comment; });   // spoken to Siri with the message
     if (!openItemsPreview(uniq, `🤖 DeepSeek · ${label}`, true)) toast(uniq.length ? 'Everything here is already in Kharcha' : 'DeepSeek found no transactions in it', 3500);
   }
   function aiSplit(lines) {
@@ -4853,7 +5362,8 @@ Rules: include only completed transactions — skip OTPs, offers, ads, due/bill 
   window.expensesFolderInfo = (name, msg) => { folderInfo.name = name; folderInfo.msg = msg || ''; renderFolder(); };
   window.expensesFolderFiles = (files, pending, error) => {
     folderInfo.pending = pending || 0; folderInfo.error = error || ''; folderInfo.checked = Date.now(); folderInfo.msg = '';
-    (files || []).forEach(f => { if (!folderQ.some(q => q.key === f.key)) folderQ.push(f); });
+    // nothing can be saved until the data is restored: leave the files to be imported then
+    if (!loadProblem) (files || []).forEach(f => { if (!folderQ.some(q => q.key === f.key)) folderQ.push(f); });
     renderFolder();
     runFolderQueue();
   };
@@ -4899,14 +5409,14 @@ Rules: include only completed transactions — skip OTPs, offers, ads, due/bill 
   // Text from the Share Extension or the "Add Bank Message" Shortcuts action (iOS app).
   // "Hey Siri, add this transaction to Kharcha": copied message + spoken comment. Already in Kharcha
   // (statement, SMS, PhonePe…)? The comment goes on that entry; otherwise it is added, already reviewed.
-  function addMessageWithComment(text, comment) {
-    comment = String(comment || '').trim().slice(0, 300);
-    if (/^(no|none|nothing|skip|no comment)\.?$/i.test(comment)) comment = '';
-    const items = parseSmsBatch(text);
+  const sirisComment = c => { c = String(c || '').trim().slice(0, 300); return /^(no|none|nothing|skip|no comment)\.?$/i.test(c) ? '' : c; };
+  function addMessageWithComment(text, comment, date) {
+    comment = sirisComment(comment);
+    const items = parseSmsBatch(text, date);
     const bal = applyBalanceReplies();
     if (!items.length) return bal ? 0 : -1;
     markDups(items);
-    linkDuplicates(items);
+    if (linkDuplicates(items)) updateBalances(items.filter(x => x.match));
     const commentCat = type => {   // category you used before with the same comment
       const cnt = {};
       state.expenses.forEach(e => { if (e.type === type && e.comment && !/^Other/.test(e.category) && e.comment.toLowerCase() === comment.toLowerCase()) cnt[e.category] = (cnt[e.category] || 0) + 1; });
@@ -4916,10 +5426,10 @@ Rules: include only completed transactions — skip OTPs, offers, ads, due/bill 
     items.forEach(x => {
       const ex = x.dup === 'exact' ? state.expenses.find(e => refsOf(e).includes(x.ref)) : x.match ? state.expenses.find(e => e.id === x.match) : null;
       if (ex) {
-        if (comment) { ex.comment = comment; delete ex.unread; if (CROSS_RE.test(comment)) markCross(ex); const c = commentCat(ex.type); if (c && /^Other/.test(ex.category)) ex.category = c; }
+        if (comment) { ex.comment = comment; delete ex.unread; if (isCrossText(comment)) markCross(ex, true); const c = commentCat(ex.type); if (c && /^Other/.test(ex.category)) ex.category = c; }
         updated++;
       } else {
-        if (comment) { x.comment = comment; const c = commentCat(x.type); if (c && /^Other/.test(x.category)) x.category = c; if (CROSS_RE.test(comment) && catsFor(x.type).some(k => k.name === 'Transfer')) x.category = 'Transfer'; }
+        if (comment) { x.comment = comment; const c = commentCat(x.type); if (c && /^Other/.test(x.category)) x.category = c; if (isCrossText(comment) && catsFor(x.type).some(k => k.name === 'Transfer')) x.category = 'Transfer'; }
         fresh.push(x);
       }
     });
@@ -4929,13 +5439,22 @@ Rules: include only completed transactions — skip OTPs, offers, ads, due/bill 
     else { save(); render(); toast(msg, 4000); }
     return items.length;
   }
+  // What may go to DeepSeek when Kharcha can't read a message itself: never the OTPs, mandates and failed
+  // payments it skips on purpose.
+  const aiShareText = text => String(text || '').replace(/^kharcha:on:.*$/gm, '').split(/\n\s*\n/).map(c => c.trim())
+    .filter(c => c && !SMS_SKIP.test(smsSkipText(c.replace(/\s+/g, ' ')))).join('\n\n');
+  // The iPhone app asks before handing over its inbox (shared messages, Siri, statement files): not while a
+  // sheet is open (that would close it, losing what you typed) nor while nothing can be saved. The page asks
+  // for it again once that's over (inboxRetry).
+  window.expensesCanReceive = () => { const ok = !loadProblem && !sheetOpen(); if (!ok) inboxWaiting = true; return ok; };
   window.expensesReceiveShared = text => {
     // copied message + comment from Siri ("Add this transaction to Kharcha")
     const withComment = [];
     text = String(text).replace(/^kharcha:msg:(\{.*\})\s*$/gm, (_m, j) => { try { withComment.push(JSON.parse(j)); } catch (e) {} return ''; }).trim();
     withComment.forEach(m => {
-      if (addMessageWithComment(m.text, m.comment) < 0) {
-        if (aiOn()) aiReadLines([m.text], 'the message from Siri');
+      if (addMessageWithComment(m.text, m.comment, m.date) < 0) {
+        const ai = aiShareText(m.text);
+        if (aiOn() && ai) aiReadLines([ai], 'the message from Siri', '', sirisComment(m.comment));
         else toast('Siri sent a message Kharcha couldn’t read as a transaction', 4000);
       }
     });
@@ -4958,17 +5477,21 @@ Rules: include only completed transactions — skip OTPs, offers, ads, due/bill 
     }
     const items = parseSmsBatch(text);
     const balMsg = applyBalanceReplies();
-    if (!items.length) { if (!balMsg && aiOn()) aiReadLines([text], 'the shared message'); else toast(balMsg || 'No transaction found in the shared message'); return; }
+    const ai = !items.length && !balMsg && aiOn() && aiShareText(text);
+    if (!items.length) { if (ai) aiReadLines([ai], 'the shared message'); else toast(balMsg || 'No transaction found in the shared message'); return; }
     if (balMsg) toast(balMsg);
     if (state.settings.autoAddShared) {
       markDups(items);
-      const merged = linkDuplicates(items);
-      if (merged) { updateBalances(items.filter(x => x.match)); save(); }
+      // only the date, type and amount match an entry ("possible duplicate"): you decide in the review
+      const unsure = items.filter(x => x.dup === 'maybe'), sure = items.filter(x => x.dup !== 'maybe');
+      const merged = linkDuplicates(sure);
+      if (merged) { updateBalances(sure.filter(x => x.match)); save(); }
       const fresh = items.filter(x => !x.dup);
-      const skipped = items.length - fresh.length;
-      if (!fresh.length) { toast(`Skipped ${skipped} message${skipped > 1 ? 's' : ''} already recorded`); return; }
+      const skipped = sure.length - fresh.length;
       const total = fresh.reduce((t, x) => t + (x.type === 'debit' ? x.amount : 0), 0);
-      addItems(fresh, `Added ${fresh.length} from messages${total ? ' · spent ' + fmt(total) : ''}${skipped ? ` · ${skipped} duplicate skipped` : ''}`);
+      if (fresh.length) addItems(fresh, `Added ${fresh.length} from messages${total ? ' · spent ' + fmt(total) : ''}${skipped ? ` · ${skipped} duplicate skipped` : ''}`);
+      if (unsure.length) openItemsPreview(unsure, `${unsure.length} message${unsure.length > 1 ? 's' : ''} that may already be in Kharcha`);
+      else if (!fresh.length) toast(`Skipped ${skipped} message${skipped > 1 ? 's' : ''} already recorded`);
     } else {
       openItemsPreview(items, `${items.length} shared message${items.length > 1 ? 's' : ''}`);
     }
@@ -4985,7 +5508,8 @@ Rules: include only completed transactions — skip OTPs, offers, ads, due/bill 
     if (m && m.url && Date.now() - (m.checked || 0) > 36e5 && !$('impSheet').classList.contains('open')) checkMail(true);
   };
   setTimeout(autoMail, 800);
-  document.addEventListener('visibilitychange', () => { if (!document.hidden) autoMail(); });
+  document.addEventListener('visibilitychange', () => { if (document.hidden) return; if (catchUpToday()) render(); autoMail(); });
+  window.addEventListener('pageshow', () => { if (catchUpToday()) render(); });
   if ('serviceWorker' in navigator && /^https?:$/.test(location.protocol)) {
     navigator.serviceWorker.register('sw.js').catch(() => {});
   }

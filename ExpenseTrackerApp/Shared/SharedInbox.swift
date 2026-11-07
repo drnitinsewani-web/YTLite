@@ -67,6 +67,21 @@ enum SharedInbox {
         return ok && error == nil
     }
 
+    /// A message for the app to read (a bank SMS…), headed by the day it arrived, for messages that print no date.
+    @discardableResult
+    static func appendMessage(_ text: String) -> Bool {
+        return append("kharcha:on:" + today() + "\n" + text)
+    }
+
+    /// Today as yyyy-MM-dd, with Latin digits whatever the phone's language.
+    static func today() -> String {
+        let f = DateFormatter()
+        f.calendar = Calendar(identifier: .gregorian)
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.dateFormat = "yyyy-MM-dd"
+        return f.string(from: Date())
+    }
+
     static func takeAll() -> [String] {
         guard let url = fileURL else { return [] }
         var items: [String] = []
