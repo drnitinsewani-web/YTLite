@@ -768,22 +768,27 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
 
   // Keyword rules used to auto-categorise statement lines. First match wins.
   const AUTO_RULES = [
-    ['Investment', /indian cle\b|paytm ?money|\bmf\d*@|\.mf\d*\b|mutual ?fund|safe ?gold|digital gold|augmont|mmtc|jar app|eq trade|upstox|zerodha|groww|angel ?one|angel broking|icici ?sec|icicidirect|hdfc ?sec|kotak ?sec|5paisa|\bdhan\b|paytm money|indmoney|kuvera|smallcase|mutual fund|\bmf\b|\bsip\b|bse limited|bse star|nse clearing|indian clearing|\bfd\b|fixed deposit|fd booking|rd instal|recurring deposit|\bppf\b|\bnps\b|sukanya|vanguard|fidelity|schwab|robinhood|brokerage/],
-    ['Fees & Charges', /mtf inte|mtf pledge|pledge chg|\bchg\b|charges|annual fee|\bamc\b|gst on|sms alert|penalty|late fee|min(imum)? bal|non ?maint|processing fee|convenience fee|overdraft fee|service fee/],
-    ['Transfer', /payment received.*thank|thank you for (your )?payment|autopay si|auto ?debit cc|\batd\b.*\bcc|cc ?billpay|credit ?card|cc ?(payment|pymt|bill)|card ?(payment|pymt)|cred club|\bcred\b|\bself\b|own a\/?c|own account|sweep/],
-    ['Loan', /\bloan\b|\bln ?a\/?c\b/],
+    // tax taken from interest (TDS) is a charge, and the interest an FD pays out is income: only the deposit
+    // itself (made, matured, closed) is an investment
+    ['Fees & Charges', /\btds\b/],
+    ['Interest', /^(?!.*\b(matur|mat\b|clos|clsd|proceed|proc\b|princ|prin\b|redee?m|repay|premat|renew))(?=.*\b(fd|fixed deposit|term deposit|s?tdr?|rd|recurring deposit)\b).*\b(interest|int)\b/],
+    ['Investment', /indian cle\b|paytm ?money|\bmf\d*@|\.mf\d*\b|mutual ?fund|safe ?gold|digital gold|augmont|mmtc|jar app|eq trade|upstox|zerodha|groww|angel ?one|angel broking|icici ?sec|icicidirect|hdfc ?sec|kotak ?sec|5paisa|\bdhan\b|paytm money|indmoney|kuvera|smallcase|mutual fund|\bmf\b|\bsip\b|bse limited|bse star|nse clearing|indian clearing|\bfd\b|fixed deposit|fd booking|rd instal|recurring deposit|\bppf\b|\bnps\b|sukanya|vanguard|fidelity|schwab|robinhood|brokerage|term deposit|\bs?tdr\b|\bamc (ltd|limited)\b|asset manag|\bcams\b|kfin|karvy|ppfas|parag parikh/],
+    ['Fees & Charges', /mtf inte|mtf pledge|pledge chg|^(?!.*\b(society|apartments?|rwa|electricity|water|parking|toll)\b).*(\bchg\b|charges)|(card|issuance|renewal|joining|replacement|reissue|chq ?book|cheque ?book|demat|folio|atm|decline|return|bounce|nach|ecs|mandate|imps|neft|rtgs|locker|statement|closure|stop payment|transaction|txn) ?fees?\b|annual fee|\bamc\b|gst on|sms alert|penalty|late fee|min(imum)? bal|non ?maint|processing fee|convenience fee|overdraft fee|service fee/],   // a society's, electricity or parking charges: under what they are for
+    ['Cash', /cash ?(wdl|wd|withdrawal)\b|\b(chq|cheque)\b.*\bself\b|\bself\b.*\b(chq|cheque)\b/],   // cash taken by a cheque to SELF
+    ['Transfer', /payment received.*thank|thank you for (your )?payment|autopay si|auto ?debit cc|\batd\b.*\bcc|cc ?billpay|credit ?card|cc ?(payment|pymt|bill)|card ?(payment|pymt)|cred club|\bcred\b|\bself\b|own a ?c\b|own account|sweep/],
+    ['Loan', /\bloan\b|\bln ?a ?c\b/],
     ['Salary', /salary|\bsal\b|payroll|stipend|wages/],
     ['Interest', /interest|\bint\.? ?(pd|paid|cr|credit)|\bint pd\b|savings int|\bsb int/],
     ['Refund', /refund|reversal|reversed|\brev\b|cashback|cash back|chargeback/],
-    ['Food', /swiggy|zomato|restaurant|resto|cafe|coffee|starbucks|chaayos|mcdonald|kfc|domino|pizza|burger|subway|eatsure|eat ?fit|haldiram|food|dine|dining|bakery|barbeque|biryani|dhaba/],
+    ['Food', /swiggy|zomato|restaurant|resto|cafe|coffee|starbucks|chaayos|mcdonald|kfc|domino|pizza|burger|subway|eatsure|eat ?fit|haldiram|food|\bdine( ?out| ?in)?\b|dining|bakery|barbeque|biryani|dhaba/],
     ['Groceries', /bigbasket|big basket|blinkit|grofers|zepto|instamart|dmart|d ?mart|avenue supermarts|reliance (fresh|smart|retail)|jiomart|more retail|spencer|nature.?s basket|grocery|groceries|supermarket|kirana|milk|dairy|walmart|kroger|aldi|tesco|costco|whole foods|safeway|sainsbury|lidl/],
     ['Transport', /\buber\b|\bola\b|olacabs|rapido|irctc|metro|petrol|diesel|fuel|hpcl|bpcl|indian ?oil|iocl|filling station|fastag|parking|\btoll\b|redbus|lyft|taxi|\bcab\b|railway|namma yatri|blusmart/],
     ['Travel', /makemytrip|goibibo|cleartrip|yatra|ixigo|airbnb|\boyo\b|booking\.com|indigo|interglobe|air ?india|vistara|spicejet|akasa|airline|airways|hotel|resort|expedia|agoda|thomas cook/],
-    ['Shopping', /amazon|amzn|flipkart|myntra|ajio|meesho|nykaa|tata ?cliq|croma|reliance digital|decathlon|ikea|lifestyle|shoppers stop|westside|trends|zara|h ?& ?m|uniqlo|ebay|etsy|target|apple store|lenskart|firstcry|pepperfry|urban ?company/],
-    ['Entertainment', /netflix|spotify|hotstar|disney|prime ?video|primevideo|sonyliv|zee5|jiocinema|youtube|google ?play|bookmyshow|paytm ?movies|\bpvr\b|inox|cinepolis|gaming|steam|playstation|xbox|apple\.com|itunes|audible|kindle/],
-    ['Bills', /electricity|bescom|msedcl|mseb|tneb|tangedco|tata power|adani (elec|power)|torrent power|bses|cesc|water (bill|board)|gas bill|indane|hp ?gas|bharat ?gas|mahanagar gas|igl\b|airtel|\bjio\b|vodafone|\bvi\b|bsnl|act fibernet|hathway|broadband|recharge|\bdth\b|tata ?play|postpaid|prepaid|insurance|\blic\b|premium|policy|\bemi\b|loan|bill ?pay|billdesk|bbps|utility|municipal|property tax/],
+    ['Shopping', /amazon|amzn|flipkart|myntra|ajio|meesho|nykaa|tata ?cliq|croma|reliance digital|decathlon|ikea|lifestyle|shoppers stop|westside|trends|\bzara (india|store|retail|fashion|home)\b|zara\.com|inditex|h ?& ?m|uniqlo|ebay|etsy|target|apple store|lenskart|firstcry|pepperfry|urban ?company/],
+    ['Entertainment', /netflix|spotify|hotstar|disney|prime ?video|primevideo|sonyliv|zee5|jiocinema|youtube|google ?play|book ?my ?show|paytm ?movies|\bpvr\b|inox|cinepolis|gaming|steam|playstation|xbox|apple\.com|itunes|audible|kindle/],
+    ['Bills', /electricity|bescom|msedcl|mseb|tneb|tangedco|tata power|adani (elec|power)|torrent power|bses|cesc|water (bill|board|charges?)|gas bill|indane|hp ?gas|bharat ?gas|mahanagar gas|igl\b|airtel|\bjio\b|vodafone|\bvi\b|bsnl|act fibernet|hathway|broadband|recharge|\bdth\b|tata ?play|postpaid|prepaid|insurance|\blic\b|premium|policy|\bemi\b|loan|bill ?pay|billdesk|bbps|utility|municipal|property tax/],
     ['Health', /pharma|pharmacy|chemist|apollo|medplus|netmeds|1mg|tata 1mg|pharmeasy|hospital|clinic|diagnostic|pathlab|lal path|thyrocare|doctor|dental|medical|medicine|health|practo|cult\.?fit|gym/],
-    ['Education', /school|college|university|tuition|coaching|course|udemy|coursera|byju|unacademy|vedantu|upgrad|books?\b|exam|fees?\b/],
+    ['Education', /school|college|university|tuition|coaching|course|udemy|coursera|byju|unacademy|vedantu|upgrad|\bbooks?\b(?! ?my ?show)|exam|\bfees?\b/],
     ['Rent', /\brent\b|nobroker|nestaway|landlord|housing society|society maint|maintenance charge/],
     ['Cash', /\batm\b|cash ?wdl|cash withdrawal|\bnwd\b|\bawb\b|\batw\b|cash wd/]
   ];
@@ -886,7 +891,7 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
   let view = 'list';
   let editingId = null, editingOrigCat = null;
   let selectedCat = null, formType = 'debit';
-  let catEditing = -1, catFromForm = false;   // the category editor, and whether it is on top of a transaction
+  let catEditing = null, catFromForm = false;   // the name of the category in the editor (null: a new one), and whether it is on top of a transaction
 
   const fmt = n => {
     try { return new Intl.NumberFormat(undefined, { style: 'currency', currency: state.settings.currency }).format(n); }
@@ -1351,6 +1356,9 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     const x = e.target.closest('[data-forgetfd]'); if (!x) return;
     const f = (state.fds || []).find(y => y.no === x.dataset.forgetfd);
     if (!f || !confirm(`Remove FD ••${f.no.slice(-4)} (${fmt(f.principal)}) from the list? Its bank entry stays.`)) return;
+    // its bank entry no longer asks for the advice you just removed
+    const its = state.expenses.filter(e => e.type === 'debit' && (fdFor(e) || {}).no === f.no);
+    if (its.length) state.settings.dismissedNeeds = { ...(state.settings.dismissedNeeds || {}), ...Object.fromEntries(its.map(e => [fdNeedId(e), Date.now()])) };
     state.fds = state.fds.filter(y => y !== f); save(); render();
   });
   function renderBrokers(items) {
@@ -1636,8 +1644,10 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
   }
   const sum = arr => arr.reduce((a, e) => a + amtOf(e), 0);   // a payment counts net of money that came back for it
   const spentOf = arr => sum(arr.filter(e => e.type === 'debit' && counted(e)));
-  // Investments (SIPs, stocks, gold…) are not spending; shown on their own, net of withdrawals
-  const investCat = () => catAlias('Investment');
+  // Investments (SIPs, stocks, gold…) are not spending; shown on their own, net of withdrawals.
+  // The Investment category, or what you renamed it to. None once you deleted it: its entries went to the
+  // category you chose (a built-in one such as Other, before this was noted), whose other entries are not investments.
+  const investCat = () => { const n = catAlias('Investment'); return n !== 'Investment' && (state.settings.noInvest || DEFAULT_CATS.some(c => c.name === n)) ? '' : n; };
   // ---------- brokers: ledgers and P&L / tax reports (Angel One, Upstox, …) ----------
   // state.brokers[key] = { key, name, client, ledger: { from, to, wallet, hasFunds, funds: [{ date, dir: 'in'|'out', amount, what }] },
   //   pnl: { [fy]: { sections: { Equity: { gross, net }, 'F&O': {…} }, interest, charges, dividends, from, to } },
@@ -1930,9 +1940,9 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     // 3. FDs booked in your bank statement without their FD advice
     const fdNos = new Set((state.fds || []).map(f => f.no));
     state.expenses.filter(e => e.type === 'debit' && e.category === investCat() && investType(e)[1] === 'Fixed deposits' && !fdFor(e)).forEach(e => {
-      const no = ((e.note || '').match(/\bFD\b\s*(?:no\.?|number)?\s*:?\s*(\d{6,})/i) || [])[1] || '';
+      const no = fdNoIn(e);
       if (no && fdNos.has(no)) return;
-      add({ id: `fd:${no || e.id}`, prio: 3, icon: '🏦', title: `FD advice${no ? ' for FD ••' + no.slice(-4) : ''}`,
+      add({ id: fdNeedId(e), prio: 3, icon: '🏦', title: `FD advice${no ? ' for FD ••' + no.slice(-4) : ''}`,
         why: `${fmt(e.amount)} went into a fixed deposit on ${shortD(e.date)}. Its advice adds the rate, maturity date and amount.`,
         how: 'The FD advice / receipt PDF from the bank (net banking → Deposits, or the bank’s email).', from: e.date, to: e.date });
     });
@@ -1954,6 +1964,8 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     });
     return out.sort((a, b) => b.prio - a.prio);
   }
+  const fdNoIn = e => ((e.note || '').match(/\bFD\b\s*(?:no\.?|number)?\s*:?\s*(\d{6,})/i) || [])[1] || '';
+  const fdNeedId = e => `fd:${fdNoIn(e) || e.id}`;   // "FD advice" in Statements to add, for this bank entry
   let needsMemo = { key: '', needs: [] };
   function renderNeeds() {
     const key = `${dataStamp}|${state.expenses.length}|${Object.keys(state.settings.dismissedNeeds || {}).length}|${isoDate(new Date())}`;
@@ -2028,7 +2040,7 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
   // Kind of investment, from the description, payee name and comment
   const INVEST_TYPES = [
     ['🏦', 'Fixed deposits', /\bfd\b|fixed deposit|term deposit|\btdr?\b|\brd\b|recurring deposit|deposit a\/?c/i],
-    ['📈', 'Mutual funds & SIP', /mutual fund|\bmf\b|\bsip\b|kuvera|bse star|\bcams\b|kfin|\bamc\b|nippon|axis mf|sbi mf/i],
+    ['📈', 'Mutual funds & SIP', /mutual fund|\bmf\b|\bsip\b|kuvera|bse star|\bcams\b|kfin|karvy|\bamc\b|asset manag|ppfas|parag parikh|nippon|axis mf|sbi mf/i],
     ['🪙', 'Gold', /gold|augmont|mmtc|jar app/i],
     ['🏛️', 'PPF / NPS', /\bppf\b|\bnps\b|sukanya|provident/i],
     ['📊', 'Stocks & brokers', /upstox|zerodha|groww|angel|hdfc ?sec|icici ?sec|kotak ?sec|5paisa|\bdhan\b|\bnse\b|\bbse\b|clearing|brok|eq trade|smallcase|indmoney|\bmtf\b|securities/i]];
@@ -2115,10 +2127,11 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     }
     return '';
   }
-  // Built-in rule names follow renames ("Food" → "Eating out"); a deleted category maps to its replacement.
+  // Built-in rule names follow renames ("Food" → "Eating out"); a deleted category maps to its replacement,
+  // until a category of that name is made again.
   function catAlias(name) {
     const al = state.settings.catAlias || {};
-    for (let i = 0; i < 10 && al[name] && al[name] !== name; i++) name = al[name];
+    for (let i = 0; i < 10 && al[name] && al[name] !== name && !state.categories.some(c => c.name === name); i++) name = al[name];
     return name;
   }
   // "…/BRANCH : ATM SERVICE BRANCH" (Indian Bank) names the bank's branch, not what the money was for
@@ -2185,6 +2198,7 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
 
   document.addEventListener('click', e => {
     if (!e.target.closest('[data-showinvest]')) return;
+    if (!investCat()) { toast('There is no Investment category: it was deleted'); return; }
     $('search').value = investCat();
     if (view !== 'list') { view = 'list'; syncNav(); }
     render(); window.scrollTo(0, 0);
@@ -4115,7 +4129,7 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
   const FIXED_CATS = new Set(['Transfer', 'Other', 'Other Income']);   // names used in Kharcha's own logic
   let catSnap = null;   // the open transaction as it was when the editor opened on top of it
   function openCatSheet(i, fromForm = false) {
-    catEditing = i; catFromForm = fromForm;
+    catEditing = i >= 0 ? state.categories[i].name : null; catFromForm = fromForm;
     const fe = fromForm && editingId ? state.expenses.find(x => x.id === editingId) : null;
     catSnap = fe ? { category: fe.category, comment: fe.comment || '' } : null;
     const c = i >= 0 ? state.categories[i] : { emoji: '', name: '', kind: fromForm ? formType : 'debit' };
@@ -4182,8 +4196,12 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     al[from] = to; delete al[to];
     state.settings.catAlias = al;
   }
+  // The category in the editor as it is now (found by name: an iCloud sync may have moved or removed it meanwhile)
+  const catInEditor = () => catEditing == null ? null : state.categories.find(c => c.name === catEditing) || null;
+  const catGoneMeanwhile = () => { closeCatSheet(); render(); toast('This category was renamed or removed meanwhile, so your changes weren’t saved', 5000); };
   $('catSave').addEventListener('click', () => {
-    const old = catEditing >= 0 ? state.categories[catEditing] : null;
+    const old = catInEditor();
+    if (catEditing != null && !old) { catGoneMeanwhile(); return; }
     const name = $('catName').value.replace(/\s+/g, ' ').trim();
     const emoji = $('catEmoji').value.trim() || '🏷️';
     const kind = $('catKind').value, exclude = $('catExclude').checked;
@@ -4200,29 +4218,45 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
       if ((catsFor('debit').length <= 1 && old.kind !== 'credit' && kind === 'credit') || (catsFor('credit').length <= 1 && old.kind !== 'debit' && kind === 'debit')) { toast('Keep at least one expense and one income category'); return; }
       if (name !== old.name) renameCategory(old.name, name);   // an open transaction follows when the editor closes
       const { exclude: _x, group: _g, ...rest } = old;
-      state.categories[catEditing] = { ...rest, emoji, name, kind, ...(exclude ? { exclude: true } : {}), ...(group ? { group } : {}) };
+      state.categories[state.categories.indexOf(old)] = { ...rest, emoji, name, kind, ...(exclude ? { exclude: true } : {}), ...(group ? { group } : {}) };
     } else {
       state.categories.push({ emoji, name, kind, ...(exclude ? { exclude: true } : {}), ...(group ? { group } : {}) });
     }
+    // a name deleted or renamed earlier ("Groceries", "investment") is this category now: built-in rules file under it
+    const al = { ...(state.settings.catAlias || {}) }, same = Object.keys(al).filter(k => k.toLowerCase() === name.toLowerCase());
+    same.forEach(k => { if (k === name) delete al[k]; else al[k] = name; });
+    if (same.length) state.settings.catAlias = al;
+    if (name.toLowerCase() === 'investment') delete state.settings.noInvest;   // investments are shown again
     tidyTransfers();   // review marks follow the "not counted" setting
     save(); render();
     const note = closeCatSheet(old ? undefined : name);
     toast((old ? (old.name !== name ? `Renamed to ${emoji} ${name}` : 'Category saved') : `Added ${emoji} ${name}`) + note);
   });
   $('catDelete').addEventListener('click', () => {
-    const c = state.categories[catEditing]; if (!c) return;
+    const c = catInEditor(); if (!c) { catGoneMeanwhile(); return; }
     const others = t => state.categories.filter(x => x !== c && (x.kind === t || x.kind === 'both'));
     if ((c.kind !== 'credit' && !others('debit').length) || (c.kind !== 'debit' && !others('credit').length)) { toast('Keep at least one expense and one income category'); return; }
-    const n = state.expenses.filter(e => e.category === c.name).length;
+    const its = state.expenses.filter(e => e.category === c.name), n = its.length;
     const to = $('catMoveTo').value;
-    if (n && !to) { toast('Choose where its transactions go'); return; }
-    if (!confirm(n ? `Delete ${c.emoji} ${c.name} and move its ${n} transaction${n === 1 ? '' : 's'} to ${to}?` : `Delete ${c.emoji} ${c.name}?`)) return;
     // entries of a type the target can't hold fall back to Other / Other Income
-    const target = state.categories.find(x => x.name === to);
-    state.expenses.forEach(e => {
-      if (e.category !== c.name) return;
-      e.category = target && (target.kind === 'both' || target.kind === e.type) ? to : (e.type === 'credit' ? 'Other Income' : 'Other');
-    });
+    const target = state.categories.find(x => x.name === to && x !== c);
+    if (n && !target) {   // none chosen, or the one chosen was renamed or removed meanwhile (iCloud): the list is shown again
+      if (to) openCatSheet(state.categories.indexOf(c), catFromForm);
+      toast(to ? 'Categories changed meanwhile: choose again where its transactions go' : 'Choose where its transactions go', 4000); return;
+    }
+    const dest = e => target && (target.kind === 'both' || target.kind === e.type) ? to : (e.type === 'credit' ? 'Other Income' : 'Other');
+    const moves = {}; its.forEach(e => { const d = dest(e); (moves[d] = moves[d] || []).push(e); });
+    const word = (k, t) => t === 'credit' ? `${k} income entr${k === 1 ? 'y' : 'ies'}` : `${k} expense${k === 1 ? '' : 's'}`;
+    const dests = Object.keys(moves).sort((a, b) => (b === to) - (a === to));   // the one you chose first
+    const parts = dests.map(d => `${word(moves[d].length, moves[d][0].type)} to ${d}`);
+    const where = dests.length > 1 ? parts.join(' and ') : `${n} transaction${n === 1 ? '' : 's'} to ${dests[0]}`;
+    // not counted before (like Investment), counted where they go
+    const now = new Set(its.filter(e => !catOf(dest(e)).exclude).map(e => e.type));
+    const counts = !c.exclude || !now.size ? '' : now.size > 1 ? ' They will count as spending and income.'
+      : now.has('debit') ? ' The expenses will count as spending.' : ' The income entries will count as income.';
+    if (!confirm(n ? `Delete ${c.emoji} ${c.name} and move its ${where}?${counts}` : `Delete ${c.emoji} ${c.name}?`)) return;
+    if (c.name === investCat()) state.settings.noInvest = 1;   // no category is "Investment" now (see investCat)
+    its.forEach(e => { e.category = dest(e); });
     Object.keys(state.rules).forEach(k => { if (state.rules[k] === c.name) { if (to) state.rules[k] = to; else delete state.rules[k]; } });
     (state.accounts || []).forEach(a => {   // a business account's collections follow to an income category, else stay where they land
       if (!a.business || a.business.incomeCat !== c.name) return;
@@ -4232,12 +4266,12 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     Object.keys(al).forEach(k => { if (al[k] === c.name) al[k] = to || undefined; });
     if (to) al[c.name] = to;
     state.settings.catAlias = JSON.parse(JSON.stringify(al));
-    state.categories.splice(catEditing, 1);
+    state.categories = state.categories.filter(x => x !== c);
     tidyTransfers();
     save(); render();
     // a transaction open under the editor goes where its entries of that type went
     closeCatSheet(selectedCat === c.name ? (target && (target.kind === 'both' || target.kind === formType) ? to : (formType === 'credit' ? 'Other Income' : 'Other')) : undefined);
-    toast(n ? `Deleted · ${n} moved to ${to}` : 'Category deleted');
+    toast(n ? `Deleted · ${dests.length > 1 ? parts.join(', ') : `${n} moved to ${dests[0]}`}` : 'Category deleted', dests.length > 1 ? 4000 : undefined);
   });
   $('payeeChips').addEventListener('click', e => {
     const x = e.target.closest('[data-payee]'); if (!x) return;
@@ -4330,9 +4364,9 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
 
   selfRe = selfPatterns();
   // When Kharcha's rules improve, entries it categorised itself are re-checked once (never ones you set,
-  // commented, or that are transfers): today "Other" that a rule now recognises, and UPI payments that a
-  // branch name ("ATM SERVICE BRANCH") had wrongly filed as Cash.
-  const RULES_VERSION = 5;   // 5: loans
+  // commented, or that are transfers, except cash taken by a SELF cheque): today "Other" that a rule now recognises, UPI payments that a
+  // branch name ("ATM SERVICE BRANCH") had wrongly filed as Cash, and imported entries older rules filed wrongly.
+  const RULES_VERSION = 6;   // 5: loans; 6: FD interest, TDS, term deposits, fund houses, charges, own a/c, SELF cheques, names
   if ((state.settings.rulesV || 1) < 3) {
     // 3: payouts from PhonePe / BharatPe got one payee key each (see SETTLERS). A name, category or
     // comment rule saved under an old key moves to the new one, when every entry with the old key moved.
@@ -4376,12 +4410,21 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
   }
   if ((state.settings.rulesV || 1) < RULES_VERSION) {
     let n = 0;
+    // 6: what rules before it filed wrongly, and (when only some moves are right) where such an entry may go:
+    // FD interest and TDS as Investment, a fund house or a society's maintenance as Fees, cash taken by a SELF
+    // cheque as Transfer, "Dinesh" as Food, "Zara Khan" as Shopping, "Facebook" or a card fee as Education
+    const MISFILED = [['Investment', /\btds\b|\bint(erest)?\b/, ['Interest', 'Fees & Charges']], ['Fees & Charges', /\bamc\b|charges|\bchg\b/],
+      ['Transfer', /\bself\b/, ['Cash']], ['Food', /dine/], ['Shopping', /zara/], ['Education', /fee|book/]]
+      .map(([c, re, to]) => [catAlias(c), re, to && to.map(catAlias)]).filter(([c]) => !/^Other/.test(c));   // deleted into Other: checked as Other
     state.expenses.forEach(e => {
-      if (e.userCat || e.autoXfer || e.category === 'Transfer' || (e.comment && !isAutoComment(e))) return;
+      if (e.userCat || e.autoXfer || (e.comment && !isAutoComment(e))) return;
+      const d = ' ' + stripBranch(e.note).toLowerCase().replace(/[_/|*]+/g, ' ') + ' ';
+      const old = e.ref && MISFILED.find(([c, re]) => c === e.category && re.test(d));
+      if (e.category === 'Transfer' && !old) return;
       const wrongCash = e.category === 'Cash' && /\batm service branch\b/i.test(e.note || '') && !/\b(atm|cash) ?(wdl|withdrawal|wd)\b|\bnwd\b|\batw\b/i.test(stripBranch(e.note));
-      if (!/^Other/.test(e.category) && !wrongCash) return;
+      if (!/^Other/.test(e.category) && !wrongCash && !old) return;
       const c = classify(e.note, e.type, true);
-      if (c !== e.category && (wrongCash || !/^Other/.test(c))) { e.category = c; n++; }
+      if (c !== e.category && (old ? !old[2] || old[2].includes(c) : wrongCash || !/^Other/.test(c))) { e.category = c; n++; }
     });
     state.expenses.forEach(e => { if (e.unread && bizIncome(e)) delete e.unread; });   // a business's collections need no comment each
     state.settings.rulesV = RULES_VERSION;
@@ -4627,6 +4670,18 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
       settings
     };
   }
+  // A category renamed or deleted on one device: entries and learned rules another device made under the old
+  // name meanwhile arrive with it. They follow the rename, or go where the deleted category's entries went.
+  function followCatAliases() {
+    const names = new Set(state.categories.map(c => c.name)), al = state.settings.catAlias || {};
+    const to = n => { if (!n || names.has(n) || !al[n]) return ''; const t = catAlias(n); return names.has(t) ? t : ''; };
+    state.expenses.forEach(e => {
+      const t = to(e.category); if (!t) return;
+      const c = state.categories.find(x => x.name === t);
+      e.category = c.kind === 'both' || c.kind === e.type ? t : e.type === 'credit' ? 'Other Income' : 'Other';
+    });
+    Object.keys(state.rules).forEach(k => { const t = to(state.rules[k]); if (t) state.rules[k] = t; });
+  }
   let cloudInfo = { available: null, at: 0, error: '' };
   function renderCloudStatus() {
     if (!NATIVE) return;
@@ -4652,6 +4707,7 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
       const wiped = (state.settings.wipedAt || 0) > ((base && base.settings && base.settings.wipedAt) || 0);
       if (!wiped && baseN > 20 && localN < baseN / 2) { base = null; restored = Math.max(0, remote.expenses.length - localN); }
       state = migrate(merge3(base, state, migrate(remote)));
+      followCatAliases();
       if (JSON.stringify(state) !== before) { saveLocal(); render(); }
       if (restored) toast(`☁️ This iPhone had lost entries — restored ${restored} from iCloud`, 6000);
     }
