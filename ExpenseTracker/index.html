@@ -348,20 +348,26 @@
   }
 
   /* ================= Analysis charts ================= */
-  /* Chart colours, checked with a colour-vision validator against the cards' light and dark surfaces:
-     income / spending / net pass all-pairs (they differ in lightness, so red–green colour blindness
-     still separates them); the 8 category colours pass for neighbours (a fixed order, never cycled).
-     Every chart also has a legend or labels, so colour is never the only key. */
+  /* Chart colours, checked with a colour-vision validator against the cards' light and dark surfaces.
+     Meaning colours: income green, spending coral, net (saved) in ink: they differ in lightness, so
+     red–green colour blindness still separates them. The 7 category colours (blue, aqua, violet, cyan,
+     yellow, magenta, brown: a fixed order, never cycled) pass for neighbours, including the donut's
+     wrap-around (colour-vision ΔE ≥ 12, normal ≥ 19), any two differ by ≥ 10 for normal vision, and
+     every one sits clear of the meaning colours and the grey of "Others" (OKLab ΔE ≥ 15), so no
+     category looks like "spending", "income" or "net" on the cards beside it. Every chart also has a
+     legend or labels, so colour is never the only key. */
   :root {
-    --vz-inc: #0e6e3a; --vz-spend: #e8644a; --vz-net: #2a78d6; --vz-ctx: #9aa4b2; --vz-other: #a8b0bc;
-    --vz-c1: #2a78d6; --vz-c2: #eb6834; --vz-c3: #1baf7a; --vz-c4: #eda100; --vz-c5: #e87ba4; --vz-c6: #008300; --vz-c7: #6250d6; --vz-c8: #e34948;
+    --vz-inc: #0e6e3a; --vz-spend: #e8644a; --vz-net: #334155; --vz-ctx: #9aa4b2; --vz-other: #a8b0bc;
+    --vz-c1: #2f79d6; --vz-c2: #23ac74; --vz-c3: #6044cd; --vz-c4: #079cba; --vz-c5: #cfaf02; --vz-c6: #a82fae; --vz-c7: #8e4208;
     --vz-grid: rgba(15,23,42,.08); --vz-axis: rgba(15,23,42,.24); --vz-surface: #f3f6f9; --vz-hover: rgba(15,23,42,.06); --vz-cell: rgba(15,23,42,.06);
+    --vz-heat-hi: var(--text); --an-warn: #b45309;
   }
   @media (prefers-color-scheme: dark) {
     :root {
-      --vz-inc: #37ab6b; --vz-spend: #c94a2e; --vz-net: #3987e5; --vz-ctx: #5f6b80; --vz-other: #566175;
-      --vz-c1: #3987e5; --vz-c2: #d95926; --vz-c3: #199e70; --vz-c4: #c98500; --vz-c5: #d55181; --vz-c6: #008300; --vz-c7: #9085e9; --vz-c8: #e66767;
+      --vz-inc: #4cc38a; --vz-spend: #e05d40; --vz-net: #cbd5e1; --vz-ctx: #5f6b80; --vz-other: #566175;
+      --vz-c1: #3c86e4; --vz-c2: #228f61; --vz-c3: #8f7ffd; --vz-c4: #0097ac; --vz-c5: #967f06; --vz-c6: #bc45c1; --vz-c7: #944e00;
       --vz-grid: rgba(255,255,255,.07); --vz-axis: rgba(255,255,255,.2); --vz-surface: #141d2f; --vz-hover: rgba(255,255,255,.07); --vz-cell: rgba(255,255,255,.07);
+      --vz-heat-hi: #0f172a; --an-warn: var(--warn);
     }
   }
   .vz { display: block; overflow: visible; font-family: inherit; -webkit-user-select: none; user-select: none; max-width: 100%; }
@@ -381,7 +387,9 @@
   .vz .cell { fill: var(--vz-cell); }
   .vz .cell.fut { fill: none; stroke: var(--vz-grid); }
   .vz .cell.today { stroke: var(--text); stroke-width: 1.5; }
-  .vz .cell[data-go]:hover, .vz .cell.hot, .vz .cell:focus { stroke: var(--text); stroke-width: 2; }
+  .vz .cell[data-go]:hover, .vz .cell[data-pick]:hover, .vz .cell.hot, .vz .cell:focus { stroke: var(--text); stroke-width: 2; }
+  .vz .cell.pick { stroke: var(--text); stroke-width: 2; }
+  .vz[data-heat] { cursor: pointer; }
   .vz [data-go]:focus-visible { stroke: var(--accent); stroke-width: 2; }
   .an-chart { margin-top: 4px; touch-action: pan-y; }
   .an-legend { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; font-size: 12px; color: var(--muted); margin: 10px 0 2px; }
@@ -392,16 +400,18 @@
   .an-scale i { margin: 0; width: 14px; height: 14px; }
   .an-scale .an-bands { margin-left: 8px; font-variant-numeric: tabular-nums; }
   .an-tip { font-size: 12px; color: var(--text); min-height: 32px; margin: 4px 0 2px; line-height: 16px; font-variant-numeric: tabular-nums; }
+  .an-tip .chip { padding: 4px 12px; font-size: 13px; margin-left: 6px; vertical-align: middle; }
   .an-head { display: grid; grid-template-columns: 132px minmax(0, 1fr); gap: 14px; align-items: center; margin-top: 8px; }
-  .an-big { font-size: 26px; font-weight: 700; line-height: 1.15; margin: 2px 0 4px; overflow-wrap: anywhere; }
+  /* a headline amount stays on one line: when it is wider than its column it is drawn smaller (anFit) */
+  .an-big { font-size: 26px; font-weight: 700; line-height: 1.15; margin: 2px 0 4px; white-space: nowrap; overflow: hidden; }
   .an-status { font-size: 12px; font-weight: 600; margin-bottom: 4px; }
   .an-d { display: block; font-size: 12px; color: var(--muted); margin-top: 3px; }
   .an-d b { font-weight: 650; }
-  .an-good { color: var(--income); } .an-bad { color: var(--danger); } .an-warn { color: var(--warn); }
+  .an-good { color: var(--income); } .an-bad { color: var(--danger); } .an-warn { color: var(--an-warn); }
   .an-kpis { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 14px; }
   .an-kpi { padding: 10px 12px; border-radius: 16px; background: var(--vz-hover); cursor: pointer; min-width: 0; }
   .an-kpi:active { transform: scale(.98); }
-  .an-kpi .v { font-size: 17px; font-weight: 700; margin: 2px 0 2px; overflow-wrap: anywhere; }
+  .an-kpi .v { font-size: 17px; font-weight: 700; margin: 2px 0 2px; white-space: nowrap; overflow: hidden; }
   .an-ins { display: grid; grid-template-columns: 24px minmax(0, 1fr) 12px; gap: 8px; align-items: start; padding: 10px 0; border-top: 1px solid var(--glass-line); font-size: 14px; line-height: 1.4; }
   .an-ins:first-of-type { border-top: 0; }
   .an-ins .ic { font-size: 16px; line-height: 1.25; text-align: center; }
@@ -429,6 +439,15 @@
   .an-tbl th { color: var(--muted); font-weight: 600; text-align: right; font-size: 11px; text-transform: uppercase; letter-spacing: .04em; padding: 4px 0; }
   .an-tbl td { text-align: right; padding: 9px 0 9px 6px; border-top: 1px solid var(--glass-line); white-space: nowrap; }
   .an-tbl th:first-child, .an-tbl td:first-child { text-align: left; padding-left: 0; white-space: normal; }
+  .an-tbl .c { display: none; }
+  .an-tbl.short .f { display: none; } .an-tbl.short .c { display: inline; }   /* too wide for the card: ₹36L instead of ₹35,98,056 */
+  /* small phones (iPhone SE, 320pt): a smaller gauge; donut legends under the donut, at full width */
+  @media (max-width: 359px) {
+    .an-head { grid-template-columns: 108px minmax(0, 1fr); gap: 10px; }
+    .an-head > .vz { width: 108px; height: auto; }
+    .an-donut { grid-template-columns: minmax(0, 1fr); justify-items: center; }
+    .an-dleg { width: 100%; }
+  }
   @media (prefers-reduced-motion: no-preference) {
     .an-fade .an-grow { animation: anIn .5s ease-out; }
     .vz .hit, .vz .slice, .vz .cell { transition: fill .15s, opacity .15s; }
@@ -1809,6 +1828,7 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
       `<button class="chip ${groupFilter === '' ? 'sel' : ''}" data-grp="">No group</button>` + $('amtBar').innerHTML;
     if (kindFilter) $('amtBar').innerHTML = `<button class="chip sel" data-kindoff="1">${esc(kindLabel())} ✕</button>` + $('amtBar').innerHTML;
     if (catFilter) $('amtBar').innerHTML = `<button class="chip sel" data-catoff="1">${esc(catOf(catFilter).emoji || '')} ${esc(catFilter)} ✕</button>` + $('amtBar').innerHTML;
+    if (idFilter) $('amtBar').innerHTML = `<button class="chip sel" data-idsoff="1">💥 ${idFilter.size === 1 ? 'The large payment' : `${idFilter.size} large payments`} ✕</button>` + $('amtBar').innerHTML;
     if (dayFilter) $('amtBar').innerHTML = `<button class="chip sel" data-dayoff="1">📅 ${esc(new Date(dayFilter + 'T00:00').toLocaleDateString(undefined, { weekday: 'short', day: 'numeric', month: 'short' }))} ✕</button>` + $('amtBar').innerHTML;
   }
   function keepGroupFilter(g) {
@@ -1848,7 +1868,7 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
   const prevPeriodDate = () => period === 'fy' ? new Date(current.getFullYear() - 1, current.getMonth(), 1) : new Date(current.getFullYear(), current.getMonth() - 1, 1);
   const periodWord = () => period === 'fy' ? 'this financial year' : 'this month';
   function setPeriod(p) {
-    period = p === 'fy' ? 'fy' : 'month'; dayFilter = '';
+    period = p === 'fy' ? 'fy' : 'month'; dayFilter = ''; idFilter = null;
     try { localStorage.setItem('expense-tracker-v1:period', period); } catch (e) {}
     render();
   }
@@ -2561,8 +2581,9 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
   // "Spent" / "Income" tapped: the list shows only the entries that make up that total. "Invested"
   // ('invest') or one kind of investment ('inv:Gold'): the Investment entries behind it.
   let kindFilter = '';
-  // a category or a day opened from Analysis (the list shows only it; ✕ on its chip turns it off)
-  let catFilter = '', dayFilter = '';
+  // a category, a day or a handful of payments (an insight's) opened from Analysis: the list shows only
+  // those; ✕ on its chip turns it off. None of them is remembered.
+  let catFilter = '', dayFilter = '', idFilter = null;
   const kindOk = e => !kindFilter || (kindFilter === 'spent' || kindFilter === 'income'
     ? counted(e) && e.type === (kindFilter === 'spent' ? 'debit' : 'credit')
     : e.category === investCat() && (kindFilter === 'invest' || investType(e)[1] === kindFilter.slice(4)));
@@ -2571,7 +2592,7 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
   // A shortcut to the list (Spent, Income, Invested, a kind of investment, a repeating payment, a group)
   // turns the other filters off, so the list shows what was tapped
   function openListWith(set) {
-    $('search').value = ''; reviewOnly = false; payerFilter = ''; kindFilter = ''; catFilter = ''; dayFilter = '';
+    $('search').value = ''; reviewOnly = false; payerFilter = ''; kindFilter = ''; catFilter = ''; dayFilter = ''; idFilter = null;
     if (minAmt) { minAmt = 0; try { localStorage.setItem('expense-tracker-v1:minAmt', '0'); } catch (e) {} }
     keepGroupFilter(null);
     set();
@@ -2579,7 +2600,7 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     render(); window.scrollTo(0, 0);
   }
   function showKind(k) {
-    if (kindFilter === k && view === 'list') { kindFilter = ''; catFilter = ''; dayFilter = ''; $('search').value = ''; reviewOnly = false; payerFilter = ''; render(); window.scrollTo(0, 0); return; }   // tapped again: off
+    if (kindFilter === k && view === 'list') { kindFilter = ''; catFilter = ''; dayFilter = ''; idFilter = null; $('search').value = ''; reviewOnly = false; payerFilter = ''; render(); window.scrollTo(0, 0); return; }   // tapped again: off
     openListWith(() => { kindFilter = k; });
   }
   document.addEventListener('click', e => {
@@ -2628,6 +2649,7 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
         if (!kindOk(e)) return false;
         if (catFilter && e.category !== catFilter) return false;
         if (dayFilter && e.date !== dayFilter) return false;
+        if (idFilter && !idFilter.has(e.id)) return false;
         if (groupFilter !== null && groupOf(e) !== groupFilter) return false;
         if (!q) return true;
         let app;
@@ -2643,7 +2665,7 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
       .sort((a, b) => b.date.localeCompare(a.date) || b.createdAt - a.createdAt);
 
     renderAmtBar(base);
-    const filtering = minAmt || q || reviewOnly || kindFilter || catFilter || dayFilter || groupFilter !== null;
+    const filtering = minAmt || q || reviewOnly || kindFilter || catFilter || dayFilter || idFilter || groupFilter !== null;
     const fd = shown.filter(e => e.type === 'debit' && counted(e)), fc = shown.filter(e => e.type === 'credit' && counted(e));
     const invOnly = kindFilter && kindFilter !== 'spent' && kindFilter !== 'income', si = invOnly ? investedOf(shown) : null;
     $('filterSummary').innerHTML = filtering && shown.length
@@ -2651,7 +2673,7 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
         ? ` · put in <b>${fmt(si.out)}</b>${si.back ? ` · came back <b style="color:var(--income)">${fmt(si.back)}</b>` : ''}`
         : `${fd.length || !fc.length ? ` · spent <b>${fmt(sum(fd))}</b>` : ''}${fc.length ? ` · received <b style="color:var(--income)">${fmt(sum(fc))}</b>` : ''}`}${
         // Spent / Income narrowed further (amount, search, group, review): say what the whole total is
-        (kindFilter === 'spent' || kindFilter === 'income') && (minAmt || q || reviewOnly || catFilter || dayFilter || groupFilter !== null)
+        (kindFilter === 'spent' || kindFilter === 'income') && (minAmt || q || reviewOnly || catFilter || dayFilter || idFilter || groupFilter !== null)
           ? ` <span class="sub" style="display:inline">· of ${fmt(kindFilter === 'spent' ? spent : income)} ${periodWord()} (other filters on)</span>` : ''}`
       : '';
     if (!shown.length) {
@@ -2811,7 +2833,7 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
   // follows Summary's rules: counted() entries only (never transfers, investments, loans, cross entries,
   // refund-linked credits or categories you set as not counted) and payments net of linked refunds (amtOf).
   // Charts are inline SVG drawn by the small helpers below (vz…); nothing is loaded from the network.
-  const AN_SLOTS = 8;   // categorical colours --vz-c1 … --vz-c8 (validated order, see the CSS)
+  const AN_SLOTS = 7;   // categorical colours --vz-c1 … --vz-c7 (validated order, see the CSS)
   const anNf = {};
   function anNum(key, opts) {
     const k = state.settings.currency + '|' + key;
@@ -2889,7 +2911,7 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
       (f > 0.004 ? `<path class="an-grow" d="${arc(0, f)}" fill="none" stroke-width="${sw}" stroke-linecap="round" style="stroke:${col}"/>` : '') +
       `<line x1="${f1(t0[0])}" y1="${f1(t0[1])}" x2="${f1(t1[0])}" y2="${f1(t1[1])}" class="axis" style="stroke:var(--muted)"/>` +
       `<text x="${f1(t1[0] - 4)}" y="${f1(t1[1] - 2)}" text-anchor="end">20%</text>` +
-      `<text x="${cx}" y="${cy - 8}" text-anchor="middle" class="t1" style="font-size:24px;font-weight:700">${rate == null ? '—' : esc(Math.round(rate * 100) + '%')}</text>` +
+      `<text x="${cx}" y="${cy - 8}" text-anchor="middle" class="t1" style="font-size:24px;font-weight:700">${rate == null ? '—' : esc((Math.round(rate * 100) < 0 ? '−' : '') + Math.abs(Math.round(rate * 100)) + '%')}</text>` +
       `<text x="${cx}" y="${cy + 8}" text-anchor="middle">${rate == null ? 'no income' : rate < 0 ? 'overspent' : 'saved'}</text>` +
       `<text x="${cx - R}" y="${h - 1}" text-anchor="middle">0</text><text x="${cx + R}" y="${h - 1}" text-anchor="middle">100%</text>`;
     return vzSvg(w, h, body, rate == null ? 'Savings rate: no income' : `Savings rate ${Math.round(rate * 100)}% of income`);
@@ -3024,13 +3046,15 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
 
   // heatmap fill for a day: one hue (spending), stronger = more; bins from the period's own spread
   const heatFill = (v, bins) => { if (!(v > 0)) return ''; const k = bins.findIndex(t => v <= t); return [0.2, 0.42, 0.68, 1][k < 0 ? 3 : k]; };
-  function heatCell(x, y, w, h, iso, d, bins, today, rx, numbered) {
-    const v = d ? d.s : 0, op = heatFill(v, bins), future = iso > today;
-    const tip = `${dName(iso, true)}: ${future ? 'still to come' : v ? `spent ${fmt0(v)} (${plural(d.n, 'payment')})` : 'nothing spent'}`;
+  // pick: the year's small cells — a tap selects the day and the readout offers to open it (see the click handler)
+  function heatCell(x, y, w, h, iso, d, bins, today, rx, numbered, pick) {
+    const v = d ? d.s : 0, op = heatFill(v, bins), ahead = iso > today, future = ahead && !v;   // a day ahead with money already dated on it is shown like any other
+    const tip = `${dName(iso, true)}: ${future ? 'still to come' : v ? `spent ${fmt0(v)} (${plural(d.n, 'payment')})${ahead ? ' · dated ahead' : ''}` : 'nothing spent'}`;
     let s = `<rect class="cell${future ? ' fut' : ''}${iso === today ? ' today' : ''}" x="${f1(x)}" y="${f1(y)}" width="${f1(w)}" height="${f1(h)}" rx="${rx}"` +
       (op ? ` style="fill:var(--vz-spend);fill-opacity:${op}"` : '') +
-      ` data-tip="${esc(tip)}"${future ? '' : ` data-go="day:${iso}" tabindex="0" role="button"`} aria-label="${esc(tip)}"/>`;
-    if (numbered) s += `<text x="${f1(x + 5)}" y="${f1(y + 13)}" style="pointer-events:none;font-size:10px;${op >= 0.68 ? 'fill:#fff;font-weight:600' : future ? '' : 'fill:var(--text)'}">${+iso.slice(8)}</text>`;
+      ` data-tip="${esc(tip)}"${future ? '' : ` ${pick ? 'data-pick' : 'data-go'}="day:${iso}" tabindex="0" role="button"`} aria-label="${esc(tip)}"/>`;
+    // day numbers in text ink (dark on the pale light-mode coral, light on the dim dark-mode one); the strongest band takes --vz-heat-hi
+    if (numbered) s += `<text x="${f1(x + 5)}" y="${f1(y + 13)}" style="pointer-events:none;font-size:10px;${op === 1 ? 'fill:var(--vz-heat-hi);font-weight:600' : future ? '' : 'fill:var(--text)'}">${+iso.slice(8)}</text>`;
     return s;
   }
   // a month as a calendar (Mon … Sun)
@@ -3056,10 +3080,10 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
       for (let d = new Date(a), k = off; d <= b; d.setDate(d.getDate() + 1), k++) {
         const iso = isoDate(d), wx = lw + Math.floor(k / 7) * cs;
         if (d.getDate() === 1) body += `<text x="${wx}" y="${top + 9}">${esc(mName(iso.slice(0, 7), 's'))}</text>`;
-        body += heatCell(wx, top + 14 + (k % 7) * cs, c, c, iso, byDay.get(iso), bins, today, 2, false);
+        body += heatCell(wx, top + 14 + (k % 7) * cs, c, c, iso, byDay.get(iso), bins, today, 2, false, true);
       }
     });
-    return vzSvg(W, hh * 2 + 10, body, 'Daily spending through the year');
+    return vzSvg(W, hh * 2 + 10, body, 'Daily spending through the year', ' data-heat="year"');
   }
 
   // horizontal bars, one hue: label line above each bar, value at the right
@@ -3168,25 +3192,31 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     const sumDays = (from, to) => { let s = 0, i = 0; byDay.forEach((v, d) => { if (d >= from && d <= to) { s += v.s; i += v.i; } }); return { s, i }; };
     const thru = (mk, day) => sumDays(mk + '-01', `${mk}-${pad(Math.min(day, mkDays(mk)))}`);
     const todayMk = today.slice(0, 7), todayD = +today.slice(8);
-    // "usual" is a typical month: the median of up to 6 months before (with records), so one month with a
-    // big one-off payment doesn't sway it. A month's forecast: so far + what the rest of a month usually adds.
+    // A month's forecast: spent to today + what the rest of a month typically adds (the median over up to 6
+    // months before, so one big one-off payment doesn't sway it). Payments already dated later in the month
+    // count towards that rest, so the forecast is never below what is already recorded for the month.
+    // usual: a typical month (that median), used to project a financial year's remaining months.
     const median = a => { const b = a.slice().sort((x, y) => x - y), k = b.length >> 1; return b.length % 2 ? b[k] : (b[k - 1] + b[k]) / 2; };
     const histOf = mk => [1, 2, 3, 4, 5, 6].map(k => mkAdd(mk, -k)).filter(has);
     const monthFc = (mk, day) => {
-      const soFar = thru(mk, day).s, hist = histOf(mk);
-      if (!hist.length) return { total: day ? soFar / day * mkDays(mk) : soFar, usual: null, n: 0 };
-      return { total: soFar + Math.max(0, median(hist.map(x => mTot(x).s - thru(x, day).s))), usual: median(hist.map(x => mTot(x).s)), n: hist.length };
+      const soFar = thru(mk, day).s, all = mTot(mk).s, hist = histOf(mk);
+      if (!hist.length) return { total: Math.max(all, day ? soFar / day * mkDays(mk) : soFar), usual: null, n: 0, soFar, ahead: all - soFar };
+      return { total: Math.max(all, soFar + Math.max(0, median(hist.map(x => mTot(x).s - thru(x, day).s)))), usual: median(hist.map(x => mTot(x).s)), n: hist.length, soFar, ahead: all - soFar };
     };
     // the same stretch before: last month (to the same day while this one runs) and the 3 months before;
     // for a year, the last financial year (to the same date while this one runs)
     let prev = null, avg = null;
     if (!fy) {
       const pmk = mkAdd(curMk, -1), cut = isCur ? todayD : 31, pd = Math.min(cut, mkDays(pmk));
-      if (has(pmk)) prev = Object.assign(thru(pmk, cut), { from: pmk + '-01', to: `${pmk}-${pad(pd)}`, label: isCur ? `1–${pd} ${mName(pmk, 's')}` : mName(pmk, 'l'), word: isCur ? `the same days of ${mName(pmk, 'l')}` : mName(pmk, 'l') });
+      if (has(pmk)) prev = Object.assign(thru(pmk, cut), { from: pmk + '-01', to: `${pmk}-${pad(pd)}`,
+        label: !isCur ? mName(pmk, 'l') : pd === 1 ? `1 ${mName(pmk, 's')}` : `1–${pd} ${mName(pmk, 's')}`,
+        word: !isCur ? mName(pmk, 'l') : pd === 1 ? `1 ${mName(pmk, 'l')}` : `the same days of ${mName(pmk, 'l')}` });
+      // the 3 months before: to the same day while this month runs (the headline), and whole (insights on a month's total)
       const ams = [1, 2, 3].map(k => mkAdd(curMk, -k)).filter(has);
       if (ams.length) {
-        let s = 0, i = 0; ams.forEach(x => { const t = thru(x, cut); s += t.s; i += t.i; });
-        avg = { s: s / ams.length, i: i / ams.length, n: ams.length, label: `${ams.length}-mo avg`, word: `your ${ams.length}-month average${isCur ? ' for these days' : ''}` };
+        let s = 0, i = 0, w = 0; ams.forEach(x => { const t = thru(x, cut); s += t.s; i += t.i; w += mTot(x).s; });
+        avg = { s: s / ams.length, i: i / ams.length, full: w / ams.length, n: ams.length, label: `${ams.length}-mo avg`, word: `your ${ams.length}-month average${isCur ? ' for these days' : ''}`,
+          fullWord: ams.length === 1 ? `${mName(ams[0], 'l')}'s total` : `your ${ams.length}-month average` };
       }
     } else {
       const y = fyStartYear(current), pf = `${y - 1}-04-01`;
@@ -3237,16 +3267,16 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
       const upto = isCur ? months.indexOf(todayMk) + 1 : 12, a = cum(months.slice(0, upto));
       const pms = Array.from({ length: 12 }, (_, i) => monthKey(new Date(y - 1, 3 + i, 1))), b = has(pms[11]) ? cum(pms) : null;
       let fc = null;
-      if (isCur && upto < 12) {
+      if (isCur && upto < 12) {   // this month's forecast, then a typical month for each one left (or what is already dated in it, if more)
         const mf = monthFc(todayMk, todayD), per = mf.usual != null ? mf.usual : mf.total;
-        fc = { v: (a[upto - 2] || 0) + Math.max(mf.total, mTot(todayMk).s) + (12 - upto) * per, at: 11 };
+        fc = { v: (a[upto - 2] || 0) + mf.total + months.slice(upto).reduce((t, mk) => t + Math.max(per, mTot(mk).s), 0), at: 11 };
       }
       pace = { id: 'pace', n: 12, a, b, fc, today: isCur, todayLabel: 'Now', labels: months.map(mk => mName(mk, 's').slice(0, 1)),
         aName: fyLabel(y), bName: b ? fyLabel(y - 1) : '', label: 'Spending through the financial year, month by month' };
       pace.tips = months.map((mk, i) => `${mName(mk, 's')}: ` + [i < a.length ? `${fmt0(a[i])} so far in ${fyLabel(y)}` : '', b ? `${fmt0(b[i])} in ${fyLabel(y - 1)}` : ''].filter(Boolean).join(' · '));
     }
     const curFc = !fy && isCur ? monthFc(curMk, todayD) : null;
-    const usual = !fy && histOf(curMk).length ? { s: median(histOf(curMk).map(x => mTot(x).s)), n: histOf(curMk).length } : null;
+    if (curFc) pace.ahead = curFc.ahead;
     // groups (Hospital, Personal…): income, spending and net for the period, and spending by month
     let groups = null;
     if (groupsOn) {
@@ -3256,7 +3286,7 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
       groups = { keys: gl, rows: gl.map(k => g.get(k)).filter(x => x.n) };
     }
     const m = { fy, r, isCur, today, curMk, realTo, items, spent, income, deb, cred, byMonth, byDay, mTot, firstMk, prev, avg, cats, pCat, catRank, icats, icatRank, ipay, ipayAll,
-      payees, wdSum, wdN, bins, months, pace, curFc, usual, groups };
+      payees, wdSum, wdN, bins, months, pace, curFc, groups };
     m.insights = anInsights(m);
     m.ms = performance.now() - t0;
     anMemo = { key, arr: state.expenses, m };
@@ -3269,23 +3299,25 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     const add = (score, ic, html, go) => out.push({ score, ic, html, go });
     const b = s => `<b>${esc(s)}</b>`, catName = k => `${catOf(k).emoji || ''} ${k}`.trim();
     if (income > 0 && spent > income) add(0.95, '⚠️', `You spent ${b(fmt0(spent - income))} more than came in ${w}.`, 'kind:spent');
-    // where this month is heading
+    // where this month is heading, and a month or year against the same baseline the headline uses
+    // (the 3-month average for a month, last financial year for a year), so the two never disagree
+    const more = (cur, base, up, down) => b((cur / base >= 3 ? chg(cur, base) : pct(Math.abs(cur - base) / base)) + (cur > base ? up : down));
     if (m.curFc && spent > 0) {
-      const f = m.curFc, d = f.usual ? (f.total - f.usual) / f.usual : 0;
-      add(0.9, '🧭', f.usual && Math.abs(d) >= 0.05
-        ? `At this pace you'll spend about ${b(fmt0(f.total))} this month — ${b((d >= 2 ? chg(f.total, f.usual) : pct(Math.abs(d))) + (d > 0 ? ' more' : ' less'))} than your usual ${esc(fmt0(f.usual))}.`
-        : `At this pace you'll spend about ${b(fmt0(f.total))} this month${f.usual ? `, close to your usual ${esc(fmt0(f.usual))}` : ''}.`, 'kind:spent');
+      const f = m.curFc, base = avg && avg.full > 0 ? avg.full : null, d = base ? (f.total - base) / base : 0;
+      const already = f.ahead >= 1 ? ` (${esc(fmt0(f.ahead))} of it already dated later this month)` : '';
+      add(0.9, '🧭', base && Math.abs(d) >= 0.05
+        ? `At this pace you'll spend about ${b(fmt0(f.total))} this month${already} — ${more(f.total, base, ' more', ' less')} than ${esc(avg.fullWord)} of ${esc(fmt0(base))}.`
+        : `At this pace you'll spend about ${b(fmt0(f.total))} this month${already}${base ? `, close to ${esc(avg.fullWord)} of ${esc(fmt0(base))}` : ''}.`, 'kind:spent');
     } else if (m.fy && m.isCur && m.pace.fc && spent > 0) add(0.6, '🧭', `On course for about ${b(fmt0(m.pace.fc.v))} of spending this financial year.`, 'kind:spent');
-    // spending against your usual (a finished month) or last year
-    if (!m.isCur && m.usual && m.usual.s > 0 && spent > 0) {
-      const d = (spent - m.usual.s) / m.usual.s;
+    if (!m.fy && !m.isCur && avg && avg.s > 0 && spent > 0) {
+      const d = (spent - avg.s) / avg.s;
       add(0.45 + Math.min(0.3, Math.abs(d) / 2), d > 0.05 ? '📈' : d < -0.05 ? '📉' : '📊', Math.abs(d) >= 0.05
-        ? `You spent ${b(fmt0(spent))}, ${b((d >= 2 ? chg(spent, m.usual.s) : pct(Math.abs(d))) + (d > 0 ? ' more' : ' less'))} than your usual ${esc(fmt0(m.usual.s))} a month.`
-        : `You spent ${b(fmt0(spent))}, about your usual ${esc(fmt0(m.usual.s))} a month.`, 'kind:spent');
+        ? `You spent ${b(fmt0(spent))}, ${more(spent, avg.s, ' more', ' less')} than ${esc(avg.fullWord)} of ${esc(fmt0(avg.s))}.`
+        : `You spent ${b(fmt0(spent))}, about ${esc(avg.fullWord)} of ${esc(fmt0(avg.s))}.`, 'kind:spent');
     }
     if (m.fy && prev && prev.s > 0 && spent > 0) {
       const d = (spent - prev.s) / prev.s;
-      add(0.5, d > 0 ? '📈' : '📉', `Spending is ${b(pct(Math.abs(d)) + (d > 0 ? ' higher' : ' lower'))} than ${esc(prev.word)} (${esc(fmt0(prev.s))}).`, 'kind:spent');
+      add(0.5, d > 0 ? '📈' : '📉', `Spending is ${more(spent, prev.s, ' higher', ' lower')} than ${esc(prev.word)} (${esc(fmt0(prev.s))}).`, 'kind:spent');
     }
     // the biggest moves by category
     if (prev && spent > 0) {
@@ -3306,9 +3338,8 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
       const share = big.reduce((t, e) => t + amtOf(e), 0) / spent;
       if (big.length && share >= 0.25) {
         const top = big[0], who = payerKey(top) ? payerName(payerKey(top)) : catOf(top.category).name;
-        const low = amtOf(big[big.length - 1]), p10 = Math.pow(10, Math.max(0, String(Math.floor(low)).length - 2));
         add(0.85 * share + 0.2, '💥', `${b(big.length === 1 ? 'One large payment' : `${big.length} large payments`)} made up ${b(pct(share))} of spending${big.length > 1 ? ' — the biggest' : ':'} ${b(fmt0(amtOf(top)))} to ${esc(who)} on ${esc(dName(top.date))}.`,
-          'big:' + Math.max(0, Math.floor((low - 0.01) / p10) * p10));
+          'ids:' + big.map(e => e.id).join(','));   // the list shows exactly these payments
       }
     }
     // groups with income: what a business one (Hospital, a business account's) made, what a personal one kept
@@ -3326,12 +3357,24 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     if (otherC && spent > 0 && otherC.amt / spent >= 0.15) add(Math.min(0.7, otherC.amt / spent), '📦', `${b(fmt0(otherC.amt))} (${pct(otherC.amt / spent)} of spending, ${plural(otherC.n, 'payment')}) is under ${esc(otherC.key)} — giving those a category makes this picture sharper.`, 'cat:spent:' + otherC.key);
     // still to review
     const rv = m.items.filter(e => e.unread);
-    if (rv.length) add(0.36, '📝', `${b(plural(rv.length, 'transaction'))} (${esc(fmt0(rv.reduce((t, e) => t + e.amount, 0)))}) ${rv.length === 1 ? 'is' : 'are'} still marked to review.`, 'review:');
-    // repeating payments (spending only: SIPs and transfers aren't)
-    const reps = rec.filter(x => !catOf(x.category).exclude);
-    if (reps.length) {
-      const monthly = reps.reduce((t, x) => t + x.amt * (x.rec.every === 'week' ? 52 / 12 : 1), 0), big1 = reps.slice().sort((a, c) => c.amt - a.amt)[0];
-      add(0.3, '🔁', `About ${b(fmt0(monthly) + ' a month')} goes on ${plural(reps.length, 'repeating payment')} — the largest ${esc(fmt0(big1.amt))} to ${esc(big1.name)}.`, 'payee:' + big1.key);
+    if (rv.length) {   // money out and money in kept apart, counted as the list it opens adds them up
+      const rs = sum(rv.filter(e => e.type === 'debit' && counted(e))), ri = sum(rv.filter(e => e.type === 'credit' && counted(e)));
+      const amts = [rs >= 0.5 ? `${fmt0(rs)} spent` : '', ri >= 0.5 ? `${fmt0(ri)} received` : ''].filter(Boolean).join(' and ');
+      add(0.36, '📝', `${b(plural(rv.length, 'transaction'))} ${rv.length === 1 ? 'is' : 'are'} still marked to review${amts ? ` — ${esc(amts)}` : ''}.`, 'review:');
+    }
+    // repeating payments (recurringList): what they actually took in the period shown, from the account
+    // shown, counted like all spending here (counted(), net of refunds; SIPs and transfers aren't spending)
+    if (rec.length && spent > 0) {
+      const took = new Map();
+      m.deb.forEach(e => {
+        const k = payerKey(e), r = k && rec.find(x => samePayer(k, x.key) || samePayer(x.key, k)); if (!r) return;
+        const g = took.get(r.key) || { r, amt: 0, n: 0 }; g.amt += amtOf(e); g.n++; took.set(r.key, g);
+      });
+      const reps = [...took.values()].filter(g => g.amt > 0).sort((a, c) => c.amt - a.amt);
+      if (reps.length) {
+        const tot = reps.reduce((t, g) => t + g.amt, 0), top = reps[0];
+        add(0.3, '🔁', `${b(plural(reps.length, 'repeating payment'))} took ${b(fmt0(tot))} ${w} (${pct(tot / spent)} of spending)${reps.length > 1 ? ' — the most' : ':'} ${esc(fmt0(top.amt))} to ${esc(top.r.name)}${top.n > 1 ? ` over ${plural(top.n, 'payment')}` : ''}.`, 'payee:' + top.r.key);
+      }
     }
     // where income comes from
     if (income > 0) {
@@ -3392,7 +3435,7 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     const p = m.pace;
     if (!p.a.some(v => v > 0) && !(p.b && p.b.some(v => v > 0))) return '';
     const last = p.a.length ? p.a[p.a.length - 1] : 0, bAt = p.b && p.a.length ? p.b[Math.min(p.b.length, p.a.length) - 1] : null;
-    let def = `${fmt0(last)} spent ${m.isCur ? 'so far' : `in ${p.aName}`}`;
+    let def = `${fmt0(last)} spent ${m.isCur ? 'so far' : `in ${p.aName}`}${p.ahead >= 1 ? ` (+${fmt0(p.ahead)} dated later this month)` : ''}`;
     if (bAt != null) def += m.isCur ? ` · ${fmt0(bAt)} by the same ${m.fy ? 'month' : 'day'} in ${p.bName}` : ` · ${fmt0(p.b[p.b.length - 1])} in ${p.bName}`;
     if (p.fc) def += ` · heading for ~${fmt0(p.fc.v)}`;
     return `<div class="card"><h2>Spending pace</h2>
@@ -3419,7 +3462,8 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     const top = m.cats.slice(0, 7), rest = m.cats.slice(7), slots = slotsFor(m.catRank, top.map(c => c.key)), total = m.spent;
     const col = k => slots.has(k) ? slotColor(slots.get(k)) : 'var(--vz-other)';
     const parts = top.map(c => ({ name: catName2(c.key), v: c.amt, color: col(c.key), go: 'cat:spent:' + c.key, tip: `${catName2(c.key)}: ${fmt0(c.amt)} · ${pct(c.amt / (total || 1))} of spending · ${plural(c.n, 'payment')}` }));
-    if (rest.length) { const v = rest.reduce((t, c) => t + c.amt, 0); parts.push({ name: `Others (${rest.length})`, v, color: 'var(--vz-other)', tip: `${rest.length} other categories: ${fmt0(v)} · ${pct(v / (total || 1))}` }); }
+    if (rest.length === 1) { const c = rest[0]; parts.push({ name: catName2(c.key), v: c.amt, color: 'var(--vz-other)', go: 'cat:spent:' + c.key, tip: `${catName2(c.key)}: ${fmt0(c.amt)} · ${pct(c.amt / (total || 1))} of spending · ${plural(c.n, 'payment')}` }); }
+    else if (rest.length) { const v = rest.reduce((t, c) => t + c.amt, 0); parts.push({ name: `Others (${rest.length})`, v, color: 'var(--vz-other)', tip: `${rest.length} other categories: ${fmt0(v)} · ${pct(v / (total || 1))}` }); }
     parts.kind = 'spent'; parts.def = `${fmt(total)} spent in ${m.cats.length} ${m.cats.length === 1 ? 'category' : 'categories'} · tap one to see its payments`;
     const rows = m.cats.map(c => `<div class="an-row" data-go="cat:spent:${esc(c.key)}" role="button" tabindex="0">
         <span class="an-sw" style="background:${col(c.key)}"></span>
@@ -3451,7 +3495,8 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     slots = slotsFor(rank, top.map(x => x.slot));
     const col = k => slots.has(k) ? slotColor(slots.get(k)) : 'var(--vz-other)';
     const parts = top.map(x => ({ name: x.name, v: x.amt, color: col(x.slot), go: x.go, tip: `${x.name}: ${fmt0(x.amt)} · ${pct(x.amt / total)} of income · ${plural(x.n, 'payment')}` }));
-    if (rest.length) { const v = rest.reduce((t, x) => t + x.amt, 0); parts.push({ name: `Others (${rest.length})`, v, color: 'var(--vz-other)', tip: `${rest.length} more: ${fmt0(v)} · ${pct(v / total)}` }); }
+    if (rest.length === 1) { const x = rest[0]; parts.push({ name: x.name, v: x.amt, color: 'var(--vz-other)', go: x.go, tip: `${x.name}: ${fmt0(x.amt)} · ${pct(x.amt / total)} of income · ${plural(x.n, 'payment')}` }); }
+    else if (rest.length) { const v = rest.reduce((t, x) => t + x.amt, 0); parts.push({ name: `Others (${rest.length})`, v, color: 'var(--vz-other)', tip: `${rest.length} more: ${fmt0(v)} · ${pct(v / total)}` }); }
     parts.kind = 'income'; parts.def = `${fmt(total)} came in from ${plural(list.length, by === 'payer' ? 'source' : 'category', by === 'payer' ? 'sources' : 'categories')}`;
     const rows = list.slice(0, 12).map(x => `<div class="an-row" data-go="${esc(x.go)}" role="button" tabindex="0">
         <span class="an-sw" style="background:${col(x.slot)}"></span>
@@ -3463,10 +3508,12 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
   }
   function anCardWaterfall(m, W) {
     if (!(m.income > 0) || !m.cats.length) return '';
-    const top = m.cats.slice(0, 5), restV = m.cats.slice(5).reduce((t, c) => t + c.amt, 0), saved = m.income - m.spent;
+    // the 5 biggest categories, then the rest in one bar (a 6th category on its own rather than "everything else (1)")
+    const nTop = m.cats.length <= 6 ? m.cats.length : 5, nRest = m.cats.length - nTop;
+    const top = m.cats.slice(0, nTop), restV = m.cats.slice(nTop).reduce((t, c) => t + c.amt, 0), saved = m.income - m.spent;
     const steps = [{ kind: 'inc', v: m.income, name: '💰 Income', label: '+' + fmt0(m.income), tip: `Income: ${fmt0(m.income)}`, go: 'kind:income' }]
       .concat(top.map(c => ({ kind: 'sp', v: c.amt, name: catName2(c.key), label: '−' + fmt0(c.amt), tip: `${catName2(c.key)}: −${fmt0(c.amt)} (${pct(c.amt / m.income)} of income)`, go: 'cat:spent:' + c.key })),
-        restV > 0 ? [{ kind: 'sp', v: restV, name: `Everything else (${m.cats.length - 5})`, label: '−' + fmt0(restV), tip: `${m.cats.length - 5} smaller categories: −${fmt0(restV)}`, go: 'kind:spent' }] : [],
+        restV > 0 ? [{ kind: 'sp', v: restV, name: `Everything else (${nRest})`, label: '−' + fmt0(restV), tip: `${plural(nRest, 'smaller category', 'smaller categories')}: −${fmt0(restV)}`, go: 'kind:spent' }] : [],
         [{ kind: 'end', v: saved, name: saved >= 0 ? '🏦 Saved' : '✕ Overspent', label: (saved < 0 ? '−' : '') + fmt0(Math.abs(saved)), tip: saved >= 0 ? `Kept ${fmt0(saved)}: ${pct(saved / m.income)} of income` : `Spent ${fmt0(-saved)} more than came in` }]);
     return `<div class="card"><h2>How income was used</h2><div class="sub">From ${esc(fmt0(m.income))} in to ${esc(fmt0(Math.abs(saved)))} ${saved >= 0 ? 'kept' : 'overspent'}, biggest categories first</div>
       ${vzTip(`Each bar takes its share out of what came in`)}<div class="an-chart">${vzWaterfall(W, steps)}</div></div>`;
@@ -3478,8 +3525,10 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     const used = keys.map((g, j) => ms.some(x => x.parts[j] > 0));
     const k2 = keys.filter((g, j) => used[j]), c2 = colors.filter((c, j) => used[j]), ms2 = ms.map(x => ({ mk: x.mk, fut: x.fut, parts: x.parts.filter((v, j) => used[j]) }));
     const name = g => g || 'No group', cur = m.fy ? (m.isCur ? m.today.slice(0, 7) : '') : m.curMk;
+    // each amount in full and compact (₹36L): anFit shows the compact ones when the full table is wider than the card
+    const amt = (v, neg) => `<span class="f">${esc((neg ? '−' : '') + fmt0(v))}</span><span class="c">${esc((neg ? '−' : '') + cmp(v))}</span>`;
     const rows = m.groups.rows.map(g => `<tr data-go="group:${esc(g.g)}" role="button" tabindex="0"><td><i class="an-sw" style="display:inline-block;margin-right:6px;background:${colors[keys.indexOf(g.g)]}"></i>${esc(name(g.g))}</td>
-      <td${g.i ? ' style="color:var(--income)"' : ''}>${g.i ? esc(fmt0(g.i)) : '—'}</td><td>${esc(fmt0(g.s))}</td><td${g.i && g.i - g.s < 0 ? ' style="color:var(--danger)"' : ''}>${g.i ? esc((g.i - g.s < 0 ? '−' : '') + fmt0(Math.abs(g.i - g.s))) : '—'}</td></tr>`).join('');
+      <td${g.i ? ' style="color:var(--income)"' : ''}>${g.i ? amt(g.i) : '—'}</td><td>${amt(g.s)}</td><td${g.i && g.i - g.s < 0 ? ' style="color:var(--danger)"' : ''}>${g.i ? amt(Math.abs(g.i - g.s), g.i - g.s < 0) : '—'}</td></tr>`).join('');
     return `<div class="card"><h2>Groups</h2><div class="sub">Spending by group each month · the table is ${esc(m.r.label)}</div>
       ${k2.length ? vzLegend(k2.map((g, j) => ['', c2[j], name(g)])) + vzTip('Tap a month to open it, or a group below') + `<div class="an-chart">${vzStacked(W, ms2, k2.map(name), c2, cur)}</div>` : ''}
       <table class="an-tbl"><thead><tr><th>Group</th><th>Income</th><th>Spent</th><th>Net</th></tr></thead><tbody>${rows}</tbody></table></div>`;
@@ -3489,7 +3538,7 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     const b = m.bins, legend = `<div class="an-legend an-scale"><span>Less</span>${[0, 0.2, 0.42, 0.68, 1].map(o => `<i style="background:${o ? 'var(--vz-spend)' : 'var(--vz-cell)'};opacity:${o || 1}"></i>`).join('')}<span>More</span>` +
       `<span class="an-bands">${b.length ? `≤${esc(cmp(b[0]))} · ≤${esc(cmp(b[1]))} · ≤${esc(cmp(b[2]))} · more` : ''}</span></div>`;
     const days = [...m.byDay.entries()].filter(([d, v]) => d >= m.r.from && d <= m.realTo && v.s > 0).sort((a, c) => c[1].s - a[1].s), top = days[0];
-    const def = top ? `Biggest day: ${dName(top[0], true)} — ${fmt0(top[1].s)} (${plural(top[1].n, 'payment')}) · tap a day to see it` : '';
+    const def = top ? `Biggest day: ${dName(top[0], true)} — ${fmt0(top[1].s)} (${plural(top[1].n, 'payment')}) · ${m.fy ? 'tap a day to pick it' : 'tap a day to see it'}` : '';
     return `<div class="card"><h2>Daily spending</h2><div class="sub">${plural(days.length, 'day')} with spending${m.isCur ? ' so far' : ''}</div>${legend}${vzTip(def)}
       <div class="an-chart">${m.fy ? vzHeatYear(W, fyStartYear(current), m.byDay, b, m.today) : vzHeatMonth(W, m.curMk, m.byDay, b, m.today)}</div></div>`;
   }
@@ -3534,7 +3583,23 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     }
     root.classList.toggle('an-fade', animate);
     root.innerHTML = html;
+    anFit(root);
     root.dataset.ms = m.ms.toFixed(1);
+  }
+  // Amounts never break inside the number: a headline figure wider than its column is drawn smaller,
+  // and a table too wide for its card shows compact amounts (₹36L), so the page never scrolls sideways
+  function anFit(root) {
+    root.querySelectorAll('.an-big, .an-kpi .v').forEach(el => {
+      el.style.fontSize = '';
+      const w = el.clientWidth, sw = el.scrollWidth; if (!w || sw <= w) return;
+      const fs = parseFloat(getComputedStyle(el).fontSize);
+      el.style.fontSize = Math.max(10, Math.floor(fs * w / sw * 10) / 10) + 'px';
+    });
+    root.querySelectorAll('.an-tbl').forEach(t => {
+      t.classList.remove('short');
+      const card = t.parentElement, cs = getComputedStyle(card), avail = card.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight);
+      if (avail > 0 && t.offsetWidth > avail + 0.5) t.classList.add('short');
+    });
   }
   // Analysis: what to open when a chart, row or insight is tapped (the list, with only that filter on)
   function anGo(s) {
@@ -3547,13 +3612,31 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
       else if (k === 'group') keepGroupFilter(v);
       else if (k === 'review') reviewOnly = true;
       else if (k === 'day') dayFilter = v;
-      else if (k === 'big') { kindFilter = 'spent'; minAmt = +v || 0; try { localStorage.setItem('expense-tracker-v1:minAmt', String(minAmt)); } catch (e) {} }
+      else if (k === 'ids') { kindFilter = 'spent'; idFilter = new Set(v.split(',')); }
       else if (k === 'month') { period = 'month'; try { localStorage.setItem('expense-tracker-v1:period', 'month'); } catch (e) {} current = mkStart(v); }
     });
   }
   (() => {
     const sec = $('view-analysis');
-    const tipFor = (el, card) => { const t = card && card.querySelector('.an-tip'); if (t) t.textContent = el ? el.getAttribute('data-tip') : t.getAttribute('data-def'); };
+    // a readout shows what is under the pointer, else the day picked on the year's calendar (with its Open button), else the card's own line
+    const tipFor = (el, card) => {
+      const t = card && card.querySelector('.an-tip'); if (!t) return;
+      const pk = !el && card.querySelector('.cell.pick');
+      if (el) t.textContent = el.getAttribute('data-tip');
+      else if (pk) t.innerHTML = `${esc(pk.getAttribute('data-tip'))}<button class="chip sel" data-go="${esc(pk.getAttribute('data-pick'))}">Open ›</button>`;
+      else t.textContent = t.getAttribute('data-def');
+    };
+    // The year's calendar has a cell per day, too small to aim a finger at: a touch picks the nearest day and
+    // the readout names it with an Open button; a mouse click (a precise pointer) opens the day at once.
+    let lastPtr = 'mouse';
+    sec.addEventListener('pointerdown', e => { lastPtr = e.pointerType || 'mouse'; }, true);
+    const pickAt = e => {
+      const svg = e.target.closest && e.target.closest('svg[data-heat]'); if (!svg) return null;
+      const own = e.target.closest('[data-pick]'); if (own) return own;
+      let best = null, bd = Infinity;   // a tap in the gap between days: the nearest day, if it is close
+      svg.querySelectorAll('[data-pick]').forEach(c => { const r = c.getBoundingClientRect(), d = Math.hypot(r.left + r.width / 2 - e.clientX, r.top + r.height / 2 - e.clientY); if (d < bd) { bd = d; best = c; } });
+      return best && bd <= best.getBoundingClientRect().width * 1.5 ? best : null;
+    };
     const hot = el => { sec.querySelectorAll('.vz .hot').forEach(x => x.classList.remove('hot')); if (el) el.classList.add('hot'); };
     sec.addEventListener('pointerover', e => { const el = e.target.closest('[data-tip]'); if (el) { tipFor(el, el.closest('.card')); hot(el); } });
     sec.addEventListener('focusin', e => { const el = e.target.closest('[data-tip]'); if (el) { tipFor(el, el.closest('.card')); hot(el); } });
@@ -3577,11 +3660,19 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     sec.addEventListener('click', e => {
       if (e.target.closest('[data-anacct]')) { acctFilter = ''; render(); return; }
       const t = e.target.closest('[data-incby]'); if (t) { anIncBy = t.dataset.incby; renderAnalysis(); return; }
+      const pk = pickAt(e);
+      if (pk) {
+        if (lastPtr === 'mouse') { anGo(pk.getAttribute('data-pick')); return; }
+        const card = pk.closest('.card');
+        card.querySelectorAll('.cell.pick').forEach(x => x.classList.remove('pick'));
+        pk.classList.add('pick'); tipFor(null, card);
+        return;
+      }
       const g = e.target.closest('[data-go]'); if (g && g.getAttribute('data-go')) anGo(g.getAttribute('data-go'));
     });
     sec.addEventListener('keydown', e => {
-      const g = (e.key === 'Enter' || e.key === ' ') && e.target.closest('[data-go]');
-      if (g) { e.preventDefault(); anGo(g.getAttribute('data-go')); }
+      const g = (e.key === 'Enter' || e.key === ' ') && e.target.closest('[data-go], [data-pick]');
+      if (g) { e.preventDefault(); anGo(g.getAttribute('data-go') || g.getAttribute('data-pick')); }
     });
     // charts are drawn at the card's width: draw again when it changes (rotation, split view)
     let rt = null;
@@ -4008,6 +4099,7 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
   });
   $('fHistory').addEventListener('click', () => {
     payerFilter = $('fHistory').dataset.key || '';
+    catFilter = ''; dayFilter = ''; idFilter = null;   // a payee's history is all of it: a day, category or payments picked on Analysis don't narrow it
     returnToMail = false; closeAll();
     view = 'list'; syncNav(); render();
     requestAnimationFrame(() => {
@@ -5283,7 +5375,7 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
   });
 
   // ---------- navigation ----------
-  const step = n => { current = new Date(current.getFullYear(), current.getMonth() + n * (period === 'fy' ? 12 : 1), 1); dayFilter = ''; render(); };
+  const step = n => { current = new Date(current.getFullYear(), current.getMonth() + n * (period === 'fy' ? 12 : 1), 1); dayFilter = ''; idFilter = null; render(); };
   $('prevM').addEventListener('click', () => step(-1));
   $('nextM').addEventListener('click', () => {
     step(1);
@@ -5296,6 +5388,7 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     if (e.target.closest('[data-kindoff]')) { kindFilter = ''; renderList(); return; }
     if (e.target.closest('[data-catoff]')) { catFilter = ''; renderList(); return; }
     if (e.target.closest('[data-dayoff]')) { dayFilter = ''; renderList(); return; }
+    if (e.target.closest('[data-idsoff]')) { idFilter = null; renderList(); return; }
     if (e.target.closest('[data-review]')) { reviewOnly = !reviewOnly; renderList(); return; }
     const gb = e.target.closest('[data-grp]');
     if (gb) { setGroupFilter(gb.dataset.grp === '*' ? null : gb.dataset.grp); return; }
