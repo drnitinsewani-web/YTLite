@@ -2814,12 +2814,18 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
   }
   // Payments a credit could be returning (or credits that could return a payment): within 60 days
   // after the payment, not more than it (what's left of it), the same amount first, then the same payer.
-  function refundCands(e) {
-    const k = payerKey(e), left = d => d.amount - refundedOf(d) + (e.refundOf === d.id ? e.amount : 0);
+  // all: every possible one within a year (for "Choose another"), optionally matching a search
+  function refundCands(e, all = false, q = '') {
+    const k = payerKey(e), left = d => d.amount - refundedOf(d) + (e.refundOf === d.id ? e.amount : 0), days = all ? 366 : 60;
     const ok = x => x.id !== e.id && !catOf(x.category).exclude && x.category !== 'Transfer';
     const list = e.type === 'credit'
-      ? state.expenses.filter(d => ok(d) && d.type === 'debit' && d.date <= e.date && dayDiff(d.date, e.date) <= 60 && left(d) >= e.amount - 0.005)
-      : state.expenses.filter(c => ok(c) && c.type === 'credit' && !refundTarget(c) && c.date >= e.date && dayDiff(c.date, e.date) <= 60 && c.amount <= e.amount - refundedOf(e) + 0.005);
+      ? state.expenses.filter(d => ok(d) && d.type === 'debit' && d.date <= e.date && dayDiff(d.date, e.date) <= days && left(d) >= e.amount - 0.005)
+      : state.expenses.filter(c => ok(c) && c.type === 'credit' && !refundTarget(c) && c.date >= e.date && dayDiff(c.date, e.date) <= days && c.amount <= e.amount - refundedOf(e) + 0.005);
+    if (all) {
+      const words = String(q).toLowerCase().split(/\s+/).filter(Boolean);
+      const hay = x => `${noteText(x)} ${x.note || ''} ${x.comment || ''} ${x.category} ${x.amount} ${fmt(x.amount)} ${dShort(x.date)}`.toLowerCase();
+      return list.filter(x => words.every(w => hay(x).includes(w))).sort((a, b) => dayDiff(a.date, e.date) - dayDiff(b.date, e.date));
+    }
     const exact = x => Math.abs(x.amount - e.amount) < 0.005, same = x => !!k && samePayer(payerKey(x), k);
     const score = x => (exact(x) ? 0 : 2) + (same(x) ? 0 : 1);
     const near = (a, b) => score(a) - score(b) || dayDiff(a.date, e.date) - dayDiff(b.date, e.date);
@@ -2835,16 +2841,38 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     if (linked) html = `<div>${esc(refundLine(e))}</div><button type="button" class="chip" data-refundunlink="${esc(e.id)}" style="margin-top:4px">✕ Not a refund</button>`;
     else if (back.length) html = `<div>${esc(refundLine(e))}</div>` + back.map(c => `<button type="button" class="chip" data-refundunlink="${esc(c.id)}" style="margin-top:4px">✕ ${fmt(c.amount)} on ${esc(dShort(c.date))} wasn't for this</button>`).join(' ');
     if (!linked && (e.type === 'credit' || refundedOf(e) < e.amount - 0.005)) {
-      const cands = refundCands(e);
-      if (cands.length) html += `<div class="sub" style="margin:${html ? 8 : 0}px 0 4px">${e.type === 'credit' ? '↩️ Money back for a payment? Tap the payment — then neither counts:' : '↩️ Did money come back for this? Tap it — the payment then counts only what you kept:'}</div>` +
-        `<div class="chips">${cands.map(x => chip(x, e.type === 'credit' ? 'Refund of' : 'Back:')).join('')}</div>`;
+      const cands = refundCands(e), any = cands.length || refundCands(e, true).length;
+      if (any) html += `<div class="sub" style="margin:${html ? 8 : 0}px 0 4px">${e.type === 'credit' ? '↩️ Money back for a payment? Tap the payment — then neither counts:' : '↩️ Did money come back for this? Tap it — the payment then counts only what you kept:'}</div>` +
+        `<div class="chips">${cands.map(x => chip(x, e.type === 'credit' ? 'Refund of' : 'Back:')).join('')}` +
+        (refundMoreFor === e.id ? '' : `<button type="button" class="chip" data-refundmore="1">🔍 Choose another ${e.type === 'credit' ? 'payment' : 'credit'}…</button>`) + `</div>` +
+        (refundMoreFor === e.id ? `<input id="fRefundQ" type="search" placeholder="Search by name, amount, date or note" style="margin-top:8px" autocomplete="off"><div id="fRefundList" style="margin-top:6px;max-height:300px;overflow-y:auto;display:flex;flex-direction:column;gap:6px"></div>` : '');
     }
     box.innerHTML = html; box.classList.toggle('hidden', !html);
+    if (refundMoreFor === e.id && $('fRefundQ')) renderRefundList(e);
   }
+  // "Choose another…": every payment (or credit) that fits, within a year, searchable
+  let refundMoreFor = '';
+  function renderRefundList(e) {
+    const q = $('fRefundQ') ? $('fRefundQ').value : '', list = refundCands(e, true, q), max = 60;
+    const scope = e.type === 'credit' ? `Payments of ${fmt(e.amount)} or more in the year before ${dShort(e.date)}, nearest first:` : `Money in of up to ${fmt(e.amount - refundedOf(e))} in the year after ${dShort(e.date)}, nearest first:`;
+    $('fRefundList').innerHTML = `<div class="sub" style="margin:0">${esc(scope)}</div>` + (list.length ? list.slice(0, max).map(x =>
+      `<button type="button" class="chip" data-refundlink="${esc(x.id)}" style="justify-content:space-between;text-align:left;width:100%;display:flex;gap:8px"><span style="min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(dShort(x.date))} · ${esc(shortNote(x))}${acctById(x.account) ? ' · ' + esc(acctName(acctById(x.account))) : ''}</span><b style="white-space:nowrap">${x.type === 'credit' ? '+' : '−'}${fmt(x.amount)}</b></button>`).join('') +
+      (list.length > max ? `<div class="sub" style="margin:0">${list.length - max} more — type to narrow them down.</div>` : '')
+      : `<div class="sub" style="margin:0">${q ? 'Nothing matches that.' : 'None.'}</div>`);
+  }
+  $('fRefund').addEventListener('input', ev => {
+    if (ev.target.id !== 'fRefundQ') return;
+    const e = state.expenses.find(x => x.id === editingId); if (e) renderRefundList(e);
+  });
   $('fRefund').addEventListener('click', ev => {
+    if (ev.target.closest('[data-refundmore]')) {
+      const e = state.expenses.find(x => x.id === editingId); if (!e) return;
+      refundMoreFor = e.id; renderRefund(e); setTimeout(() => $('fRefundQ') && $('fRefundQ').focus(), 50); return;
+    }
     const l = ev.target.closest('[data-refundlink]'), u = ev.target.closest('[data-refundunlink]');
     if (!l && !u) return;
     const e = state.expenses.find(x => x.id === editingId); if (!e) return;
+    refundMoreFor = '';
     if (u) {
       const c = state.expenses.find(x => x.id === u.dataset.refundunlink); if (!c) return;
       delete c.refundOf;
@@ -2886,7 +2914,7 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     $('fNote').value = src ? src.note || '' : '';
     $('fComment').value = exp ? exp.comment || '' : '';
     renderMatchOptions(exp || null);
-    renderRefund(exp || null);
+    refundMoreFor = ''; renderRefund(exp || null);
     renderBatchBtn(exp || null);
     formSugFor = exp || (pre ? { ...pre, note: pre.note || pre.desc } : null);
     renderFormSuggest(formSugFor);
