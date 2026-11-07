@@ -518,6 +518,15 @@
       <button class="btn ghost" id="addCat">＋ New category</button>
     </div>
     <div class="card native-only">
+      <h2>📂 Statement folder</h2>
+      <div class="sub" id="folderStatus">No folder chosen.</div>
+      <button class="btn primary" id="folderPick">Choose a folder (e.g. in iCloud Drive)</button>
+      <button class="btn ghost hidden" id="folderCheck">↻ Check the folder now</button>
+      <button class="btn ghost hidden" id="folderClear">Stop watching this folder</button>
+      <div class="sub" id="folderLog" style="margin-top:10px"></div>
+      <div class="sub" style="margin-top:10px">Save statements into this folder from Mail, WhatsApp, Files or your computer: bank CSV/Excel, PhonePe CSV/PDF, Google Pay PDF (any PDF with a DeepSeek key). Each time Kharcha opens it imports new files by itself: duplicates are skipped or merged, accounts are created and categories applied. Files stay in the folder; a replaced file is read again.</div>
+    </div>
+    <div class="card native-only">
       <h2>☁️ iCloud sync</h2>
       <div class="sub" id="cloudStatus">Checking iCloud…</div>
       <label class="mchk" style="margin-top:12px"><input type="checkbox" id="cloudOn"><span>Sync with iCloud (private to your Apple ID)</span></label>
@@ -1228,7 +1237,10 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
       }
       if (x.account) {   // a statement names the bank of an account created without one: fill it in
         const a = acctById(x.account), bank = String(x.acctBank || '').trim();
-        if (a && bank && /^(bank account|account|card|credit card)$/i.test(a.name) && bank.length <= 40) a.name = bank;
+        if (a && x.bankSure && bank && bank.length <= 40) {
+          if (a.kind === 'card' && /^(card|credit card)$/i.test(a.name)) a.name = /card/i.test(bank) ? bank : bank + ' Card';
+          else if (a.kind !== 'card' && /^(bank account|account)$/i.test(a.name)) a.name = bank;
+        }
         return;
       }
       if (!x.acctDigits) return;
@@ -1597,6 +1609,7 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
   function showBg() { $('sheetBg').style.display = 'block'; }
   function closeAll() {
     imp.tagOnImport = null;
+    setTimeout(() => runFolderQueue(), 500);   // statements from the folder wait while a sheet is open
     $('sheet').classList.remove('open'); $('impSheet').classList.remove('open'); $('smsSheet').classList.remove('open'); $('mailSheet').classList.remove('open'); $('catSheet').classList.remove('open');
     $('sheetBg').style.display = 'none';
     document.activeElement && document.activeElement.blur();
@@ -1794,20 +1807,29 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
       });
   }
   // Text lines of a PDF, top to bottom, with words on the same line joined.
-  async function readPdfLines(file) {
+  // Passwords that opened a statement before (this device only) are tried first, so the same
+  // bank's monthly PDFs open without asking — also when they arrive in the statement folder.
+  const PW_KEY = 'expense-tracker-v1:pdfpw';
+  const knownPasswords = () => { try { return JSON.parse(localStorage.getItem(PW_KEY) || '[]'); } catch (e) { return []; } };
+  const rememberPassword = pw => { try { localStorage.setItem(PW_KEY, JSON.stringify([pw, ...knownPasswords().filter(x => x !== pw)].slice(0, 8))); } catch (e) {} };
+  async function readPdfLines(file, { noPrompt = false } = {}) {
     await loadPdfJs();
     const data = new Uint8Array(await file.arrayBuffer());
     let doc, password;
-    for (let attempt = 0; attempt < 3; attempt++) {
+    const tries = [undefined, ...knownPasswords()];
+    for (let attempt = 0; attempt < tries.length + 3; attempt++) {
       try { doc = await pdfjsLib.getDocument({ data: data.slice(), password, isEvalSupported: false }).promise; break; }
       catch (e) {
         if (e && e.name === 'PasswordException') {
-          password = prompt(attempt ? 'Wrong password. Try again:' : 'This PDF is password-protected. Enter its password:');
+          if (attempt + 1 < tries.length) { password = tries[attempt + 1]; continue; }
+          if (noPrompt) throw new Error('PASSWORD');
+          password = prompt(attempt >= tries.length ? 'Wrong password. Try again:' : 'This PDF is password-protected. Enter its password:');
           if (password === null) throw new Error('Cancelled');
         } else throw e;
       }
     }
     if (!doc) throw new Error('Wrong PDF password');
+    if (password) rememberPassword(password);
     const lines = [];
     for (let n = 1; n <= doc.numPages; n++) {
       const page = await doc.getPage(n);
@@ -1847,6 +1869,7 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     const note = (party ? `${type === 'credit' ? 'From' : 'To'} ${party}` : details || APP_LABEL[app]) + (utr ? ` · UTR ${utr}` : '') + ' · ' + APP_LABEL[app];
     return { date, desc: note, type, amount, app, payment: acct.walletName ? 'Wallet' : 'UPI', walletName: acct.walletName,
       category, touched: false, utr, account: acct.account, acctDigits: acct.account ? '' : acct.acctDigits, acctBank: bank, acctKind: 'bank',
+      utrSure: !!utr,   // printed by the app as the UPI reference
       ref: utr ? `upi|${utr}|${type}|${amount.toFixed(2)}` : `${app}|${txnId || date + '|' + amount.toFixed(2) + '|' + details}` };
   }
   // PhonePe CSV/Excel export: Date, Time, Transaction Details, Transaction ID, UTR, Transaction Type,
@@ -1887,7 +1910,7 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     recs.forEach(r => {
       const t = r.lines.join(' ').replace(/\s+/g, ' ');
       const utr = (t.match(/UPI Transaction ID\s*:?\s*(\d{8,})/i) || [])[1];
-      const what = t.match(/\b(Paid to|Sent to|Self transfer to|Received from|Refund from|Self transfer from)\s+(.+?)\s+₹\s*([\d,]+(?:\.\d{1,2})?)/i);
+      const what = t.match(/\b(Paid to|Sent to|Self transfer to|Received from|Refund from|Self transfer from)\s+(.+?)\s*[+\-−]?\s*₹\s*([\d,]+(?:\.\d{1,2})?)/i);
       if (!utr || !what) return;   // header lines ("01 May 2026 - 31 October 2026 ₹…") are not transactions
       const dm = t.match(DATE);
       const date = parseDate(`${dm[1]} ${dm[2]} ${dm[3]}`, 'dmy');
@@ -1898,6 +1921,8 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
       const by = t.match(/\b(?:Paid by|Received in|Credited to|Paid from)\s+(.+?)\s+(\d{2,6})\b/i);
       const details = (/^self transfer/i.test(what[1]) ? (type === 'credit' ? 'Transfer from ' : 'Transfer to ') : (type === 'credit' ? 'Received from ' : 'Paid to ')) + what[2];
       const it = makePhonePeItem({ date, details, utr, type, instrument: by ? by[2] : '', amount, app: 'gpay', bank: by ? by[1].trim() : '' });
+      it.bankSure = !!by;   // the statement itself names the paying bank
+      if (by && /credit card|\bcard\b/i.test(by[1])) it.acctKind = 'card';
       if (/^self transfer/i.test(what[1]) && catsFor(type).some(c => c.name === 'Transfer')) it.category = 'Transfer';
       items.push(it);
     });
@@ -2074,14 +2099,15 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
       const otherAcct = e => x.account ? (e.account && e.account !== x.account)
         : (x.acctDigits && e.account && !((acctById(e.account) || {}).digits || []).some(z => z.endsWith(x.acctDigits) || x.acctDigits.endsWith(z)));
       // both carry a UPI reference and they differ: certainly two different payments
-      // (only explicit references: other 12-digit numbers in a narration might not be UPI refs)
-      const otherRef = e => /^\d{12}$/.test(x.utr || '') && /^\d{12}$/.test(e.utr || '') && !utrsOf(e).includes(x.utr) && !utrsOf(x).includes(e.utr);
-      const sameAmt = state.expenses.filter(e => !used.has(e.id) && e.type === x.type && Math.abs(e.amount - x.amount) < 0.005 && !otherAcct(e) && !otherRef(e));
+      // (only references both sources printed as the UPI reference — PhonePe/GPay statements, SMS
+      // "RRN/UTR/Ref" — count; a stray 12-digit number in a narration might be something else)
+      const otherRef = e => x.utrSure && e.utrSure && x.utr && e.utr && x.utr !== e.utr;
+      const sameAmt = state.expenses.filter(e => !used.has(e.id) && e.type === x.type && Math.abs(e.amount - x.amount) < 0.005 && !otherAcct(e));
       const hasBal = v => v != null && !isNaN(v);
       let m = hasBal(x.balance) && sameAmt.find(e => hasBal(e.balance) && Math.abs(e.balance - x.balance) < 0.011 && dayDiff(e.date, x.date) <= 4);
       if (m) x.dup = 'balance';
       else {
-        m = sameAmt.find(e => e.date === x.date && !(hasBal(x.balance) && hasBal(e.balance)));
+        m = sameAmt.find(e => e.date === x.date && !(hasBal(x.balance) && hasBal(e.balance)) && !otherRef(e));
         x.dup = m ? 'maybe' : false;
       }
       if (m) { used.add(m.id); x.match = m.id; }
@@ -2267,7 +2293,8 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
       let lines;
       try { lines = await readPdfLines(file); }
       catch (e) { if (!(e && e.message === 'Cancelled')) toast(e && e.message && e.message.length > 15 ? e.message : 'Could not read that PDF'); return; }
-      if (isGPay(lines)) { previewStatement(parseGPay(lines), `Google Pay · ${file.name}`, 'No transactions found in this PDF'); return; }
+      const gp = isGPay(lines) ? parseGPay(lines) : [];
+      if (gp.length) { previewStatement(gp, `Google Pay · ${file.name}`, 'No transactions found in this PDF'); return; }
       if (!isPhonePe(lines)) {
         if (aiOn()) { aiReadLines(lines, file.name, lines.slice(0, 12).join('\n')); return; }
         toast('This PDF isn’t a PhonePe or Google Pay statement. Download the CSV/Excel version from net banking, or add a DeepSeek key in Settings to read any PDF.', 6000); return;
@@ -2286,6 +2313,18 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     }
     const det = detectColumns(rows);
     if (!det && aiOn() && rows.length) { aiReadLines(rowsToLines(rows), file.name, rowsContext(rows)); return; }
+    setupStatement(rows, file, det);
+    $('impMap').open = !det;
+    $('toast').classList.remove('show');
+    fillMapSelects();
+    buildItems();
+    renderImport();
+    showBg();
+    $('impList').scrollTop = 0;
+    requestAnimationFrame(() => $('impSheet').classList.add('open'));
+  }
+  // Column map, account and sign for a bank statement (used by the import screen and the folder)
+  function setupStatement(rows, file, det) {
     imp.rows = rows; imp.name = file.name; imp.filter = 'all'; imp.mode = 'file'; imp.acctOverride = '';
     imp.header = det ? det.header : 0;
     imp.map = det ? det.map : { date: -1, desc: -1, debit: -1, credit: -1, amount: -1, type: -1, balance: -1 };
@@ -2308,17 +2347,9 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
       const anyNeg = rows.slice(imp.header + 1).some(r => parseAmount(r[imp.map.amount]) < 0);
       imp.sign = anyNeg ? 'neg-debit' : 'pos-debit';
     } else imp.sign = 'neg-debit';
-    $('impMap').open = !det;
-    $('toast').classList.remove('show');
     const holder = detectHolderName(rows, imp.header);
     if (holder && !state.settings.selfName) { state.settings.selfName = holder; save(); }
     selfRe = selfPatterns();
-    fillMapSelects();
-    buildItems();
-    renderImport();
-    showBg();
-    $('impList').scrollTop = 0;
-    requestAnimationFrame(() => $('impSheet').classList.add('open'));
   }
 
   // ---------- bank SMS ----------
@@ -2407,7 +2438,7 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
         /payment|received|thank/i.test(t) && catsFor('credit').some(c => c.name === 'Transfer')) cat = 'Transfer';
     const acct = matchAccount(t);
     return { date, desc, type, amount, payment, category: cat, touched: false, account: acct.id, acctDigits: acct.digits,
-      acctBank: bankFromText(t) || bank, acctKind, balance: smsBalance, seq: 0, utr, app: appFrom(t),
+      acctBank: bankFromText(t) || bank, acctKind, balance: smsBalance, seq: 0, utr, utrSure: !!utr && utr === rrn, app: appFrom(t),
       ref: rrn ? `sms|${rrn}|${type}|${amount.toFixed(2)}` : `sms|${date}|${type}|${amount.toFixed(2)}|${(party || t).toLowerCase()}` };
   }
   // "Avl bal in A/c XX8810 as on 06-NOV-26: INR 1,23,456.78" — a balance reply without a transaction
@@ -2555,7 +2586,7 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
       if (n) toast(`Also set ${n} other “${k}” transaction${n > 1 ? 's' : ''} to ${x.category}`);
     }
   });
-  function addItems(items, label) {
+  function addItems(items, label, quiet = false) {
     const now = Date.now();
     const created = ensureAccounts(items);
     const add = items.map((x, i) => ({
@@ -2563,6 +2594,7 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
       date: x.date, note: x.desc, payment: x.payment || 'Bank', ref: x.ref, account: x.account || '',
       ...(x.balance != null ? { balance: x.balance } : {}),
       ...(x.utr ? { utr: x.utr } : {}),
+      ...(x.utr && x.utrSure ? { utrSure: true } : {}),
       ...(x.app ? { app: x.app } : {}),
       ...(x.comment ? { comment: x.comment } : needsReview(x) ? { unread: true } : {})
     }));
@@ -2577,6 +2609,7 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     if (crossNew) label = (label || `Imported ${add.length} transactions`) + ` · ${crossNew} cross entr${crossNew > 1 ? 'ies' : 'y'} → Transfer`;
     save();
     const latest = add.reduce((m, x) => x.date > m ? x.date : m, '');
+    if (quiet) return;
     if (latest) { const d = new Date(latest + 'T00:00'); current = new Date(d.getFullYear(), d.getMonth(), 1); }
     closeAll();
     view = 'list'; syncNav(); render();
@@ -2586,7 +2619,7 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     if (imp.tagOnImport) { tagSameRecords(imp.tagOnImport); imp.tagOnImport = null; }
     const items = imp.items.filter(x => x.include);
     items.forEach(x => {
-      if (imp.acctOverride) { x.account = finalAcct(x); x.acctDigits = ''; }   // user chose an account (or none)
+      if (imp.acctOverride) { x.account = finalAcct(x); x.acctDigits = ''; x.bankSure = false; }   // user chose an account (or none)
     });
     const skipped = imp.items.filter(x => !x.include);
     skipped.forEach(x => { if (imp.acctOverride) x.account = finalAcct(x); });
@@ -3178,20 +3211,32 @@ Rules: include only completed transactions — skip OTPs, offers, ads, due/bill 
     if (!parts.length) { toast('Nothing to read'); return; }
     if (parts.length > 3 && !confirm(`DeepSeek will read “${label}” in ${parts.length} parts (about ${Math.ceil(parts.length * 0.4)} min). Continue?`)) return;
     aiBusy = true;
-    const items = [];
-    try {
-      for (let i = 0; i < parts.length; i++) {
-        toast(`🤖 DeepSeek is reading ${label}${parts.length > 1 ? ` · part ${i + 1} of ${parts.length}` : ''}…`, 600000);
-        const j = await aiJson(AI_EXTRACT(), (context ? `Statement header (for context, not transactions):\n${context}\n\n` : '') + `Text:\n${parts[i]}`);
-        items.push(...aiItems(j.transactions));
-      }
-    } catch (e) { aiBusy = false; toast(e.message, 5000); return; }
+    let uniq;
+    try { uniq = await aiExtractParts(parts, label, context); }
+    catch (e) { aiBusy = false; toast(e.message, 5000); return; }
     aiBusy = false;
-    // the same transaction can appear twice when a statement is split into parts
-    const seen = new Set();
-    const uniq = items.filter(x => { const k = `${x.date}|${x.type}|${x.amount}|${x.utr || x.desc}|${x.balance ?? ''}`; if (seen.has(k)) return false; seen.add(k); return true; });
     $('toast').classList.remove('show');
     if (!openItemsPreview(uniq, `🤖 DeepSeek · ${label}`, true)) toast(uniq.length ? 'Everything here is already in Kharcha' : 'DeepSeek found no transactions in it', 3500);
+  }
+  function aiSplit(lines) {
+    lines = lines.map(l => String(l).trim()).filter(Boolean);
+    const parts = [];
+    for (let i = 0, cur = [], size = 0; i < lines.length; i++) {
+      cur.push(lines[i]); size += lines[i].length;
+      if (cur.length >= 70 || size > 7000 || i === lines.length - 1) { parts.push(cur.join('\n')); cur = []; size = 0; }
+    }
+    return parts;
+  }
+  async function aiExtractParts(parts, label, context = '') {
+    const items = [];
+    for (let i = 0; i < parts.length; i++) {
+      toast(`🤖 DeepSeek is reading ${label}${parts.length > 1 ? ` · part ${i + 1} of ${parts.length}` : ''}…`, 600000);
+      const j = await aiJson(AI_EXTRACT(), (context ? `Statement header (for context, not transactions):\n${context}\n\n` : '') + `Text:\n${parts[i]}`);
+      items.push(...aiItems(j.transactions));
+    }
+    // the same transaction can appear twice when a statement is split into parts
+    const seen = new Set();
+    return items.filter(x => { const k = `${x.date}|${x.type}|${x.amount}|${x.utr || x.desc}|${x.balance ?? ''}`; if (seen.has(k)) return false; seen.add(k); return true; });
   }
   const rowsToLines = rows => rows.map(r => r.map(c => c instanceof Date ? isoDate(c) : String(c ?? '').trim()).filter(Boolean).join(' | '));
   function rowsContext(rows) {
@@ -3269,6 +3314,120 @@ Rules: include only completed transactions — skip OTPs, offers, ads, due/bill 
     aiBusy = false; $('askGo').disabled = false;
   });
   renderAi();
+
+  // ---------- statement folder (iOS app): new files are imported without the review screen ----------
+  const FOLDER_LOG = 'expense-tracker-v1:folderLog';
+  const folderInfo = { name: null, msg: '', pending: 0, error: '', checked: 0 };
+  const folderLog = () => { try { return JSON.parse(localStorage.getItem(FOLDER_LOG) || '[]'); } catch (e) { return []; } };
+  function logFolder(r) {
+    try { localStorage.setItem(FOLDER_LOG, JSON.stringify([{ ...r, at: Date.now() }, ...folderLog()].slice(0, 25))); } catch (e) {}
+  }
+  // Same rules as tapping Import on the review screen: new rows are added, exact repeats skipped,
+  // rows matching an entry (UPI reference, balance, same day & amount) merged into it.
+  function commitAuto(items, r, marked) {
+    if (!marked) { items.sort((a, b) => b.date.localeCompare(a.date)); markDups(items); }
+    if (items.some(x => x.app)) tagSameRecords(items);
+    const add = items.filter(x => x.include && x.dup !== 'exact');
+    const skipped = items.filter(x => !x.include);
+    r.same = items.filter(x => x.dup === 'exact').length;
+    r.merged = linkDuplicates(skipped);
+    updateBalances(skipped.filter(x => x.match));
+    if (add.length) addItems(add, '', true);
+    r.added = add.length;
+    r.spent = add.filter(x => x.type === 'debit').reduce((t, x) => t + x.amount, 0);
+    return r;
+  }
+  async function autoImportFile(file) {
+    const r = { name: file.name, added: 0, merged: 0, same: 0, note: '' };
+    try {
+      if (/\.pdf$/i.test(file.name)) {
+        let lines;
+        try { lines = await readPdfLines(file, { noPrompt: true }); }
+        catch (e) { r.note = e.message === 'PASSWORD' ? 'password-protected: open it once with 📥 Import and enter the password; after that Kharcha remembers it' : 'couldn’t read this PDF'; return r; }
+        const gp = isGPay(lines) ? parseGPay(lines) : [];
+        if (gp.length) { r.kind = 'Google Pay'; return commitAuto(gp, r); }
+        if (isPhonePe(lines)) { r.kind = 'PhonePe'; return commitAuto(parsePhonePe(lines), r); }
+        if (aiOn()) { r.kind = 'DeepSeek'; return commitAuto(await aiExtractParts(aiSplit(lines), file.name, lines.slice(0, 12).join('\n')), r); }
+        r.note = 'not a PhonePe or Google Pay PDF (add a DeepSeek key in Settings to read other PDFs)'; return r;
+      }
+      let rows = await readStatement(file);
+      rows = (rows || []).filter(x => Array.isArray(x) && x.some(c => String(c).trim() !== ''));
+      const ph = phonePeHeader(rows);
+      if (ph >= 0) { r.kind = 'PhonePe'; return commitAuto(parsePhonePeRows(rows, ph), r); }
+      const det = detectColumns(rows);
+      if (det) {
+        setupStatement(rows, file, det); imp.mode = 'file'; imp.acctOverride = ''; imp.filter = 'all';
+        buildItems();   // also marks duplicates and checks the running balance
+        r.kind = imp.stmtAcct.bank || 'Bank statement';
+        if (imp.balanceCheck && imp.balanceCheck.bad) r.warn = `${imp.balanceCheck.bad} row(s) don’t match the running balance`;
+        return commitAuto(imp.items, r, true);
+      }
+      if (aiOn() && rows.length) { r.kind = 'DeepSeek'; return commitAuto(await aiExtractParts(aiSplit(rowsToLines(rows)), file.name, rowsContext(rows)), r); }
+      r.note = 'columns not recognised: import it once with 📥 Import to set them'; return r;
+    } catch (e) {
+      r.note = (e && e.message) || 'couldn’t read this file'; r.retry = true;   // e.g. DeepSeek offline: try again next time
+      return r;
+    }
+  }
+  const folderQ = []; let folderBusy = false;
+  const sheetOpen = () => !!document.querySelector('.sheet.open');
+  async function runFolderQueue() {
+    if (folderBusy || !folderQ.length || sheetOpen() || aiBusy) return;
+    folderBusy = true;
+    const done = [];
+    while (folderQ.length && !sheetOpen()) {
+      const f = folderQ.shift();
+      toast(`📂 Importing ${f.name}…`, 600000);
+      let r;
+      try {
+        const bin = atob(f.b64), bytes = new Uint8Array(bin.length);
+        for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+        r = await autoImportFile(new File([bytes], f.name));
+      } catch (e) { r = { name: f.name, added: 0, merged: 0, same: 0, note: 'couldn’t open this file' }; }
+      if (!r.retry) native({ type: 'folderDone', keys: [f.key] });
+      logFolder(r); done.push(r);
+    }
+    folderBusy = false;
+    $('toast').classList.remove('show');
+    if (!done.length) return;
+    save(); render(); renderFolder();
+    const added = done.reduce((t, r) => t + r.added, 0), merged = done.reduce((t, r) => t + r.merged + r.same, 0);
+    const failed = done.filter(r => r.note).length;
+    toast(`📂 ${done.length} statement${done.length > 1 ? 's' : ''} from your folder: ${added} new transaction${added === 1 ? '' : 's'}${merged ? ` · ${merged} already in Kharcha` : ''}${failed ? ` · ${failed} need${failed === 1 ? 's' : ''} attention (Settings)` : ''}`, 5000);
+  }
+  window.expensesFolderInfo = (name, msg) => { folderInfo.name = name; folderInfo.msg = msg || ''; renderFolder(); };
+  window.expensesFolderFiles = (files, pending, error) => {
+    folderInfo.pending = pending || 0; folderInfo.error = error || ''; folderInfo.checked = Date.now(); folderInfo.msg = '';
+    (files || []).forEach(f => { if (!folderQ.some(q => q.key === f.key)) folderQ.push(f); });
+    renderFolder();
+    runFolderQueue();
+  };
+  function renderFolder() {
+    if (!NATIVE) return;
+    const n = folderInfo.name;
+    $('folderPick').textContent = n ? 'Choose a different folder' : 'Choose a folder (e.g. in iCloud Drive)';
+    $('folderPick').classList.toggle('primary', !n); $('folderPick').classList.toggle('ghost', !!n);
+    ['folderCheck', 'folderClear'].forEach(id => $(id).classList.toggle('hidden', !n));
+    const when = folderInfo.checked ? new Date(folderInfo.checked).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' }) : '';
+    $('folderStatus').innerHTML = !n ? 'No folder chosen.' : `Watching <b>📂 ${esc(n)}</b>${when ? ` · checked ${esc(when)}` : ''}` +
+      (folderBusy || folderQ.length ? ` · importing ${folderQ.length + (folderBusy ? 1 : 0)}…` : '') +
+      (folderInfo.pending ? ` · ${folderInfo.pending} file${folderInfo.pending > 1 ? 's' : ''} still downloading from iCloud` : '') +
+      (folderInfo.error ? `<br><span style="color:var(--warn)">⚠︎ ${esc(folderInfo.error)}</span>` : '') +
+      (folderInfo.msg ? `<br>${esc(folderInfo.msg)}` : '');
+    const log = folderLog().slice(0, 8);
+    $('folderLog').innerHTML = log.length ? '<b>Recent</b><br>' + log.map(r => {
+      const d = new Date(r.at).toLocaleDateString(undefined, { day: 'numeric', month: 'short' });
+      return `${esc(d)} · ${esc(r.name)} — ` + (r.note ? `<span style="color:var(--warn)">${esc(r.note)}</span>`
+        : `${esc(r.kind || '')}: ${r.added} new${r.merged + r.same ? `, ${r.merged + r.same} already there` : ''}${r.warn ? ` · <span style="color:var(--warn)">${esc(r.warn)}</span>` : ''}`);
+    }).join('<br>') : '';
+  }
+  $('folderPick').addEventListener('click', () => native({ type: 'folderPick' }));
+  $('folderCheck').addEventListener('click', () => { folderInfo.msg = 'Checking…'; renderFolder(); native({ type: 'folderCheck' }); });
+  $('folderClear').addEventListener('click', () => {
+    if (!confirm('Stop watching this folder? Transactions already imported stay.')) return;
+    native({ type: 'folderClear' });
+  });
+  renderFolder();
 
   // Statement file shared into the iOS app (Mail / Files / WhatsApp → Share → Kharcha).
   window.expensesReceiveFile = (name, b64) => {

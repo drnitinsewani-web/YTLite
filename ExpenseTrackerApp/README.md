@@ -57,6 +57,14 @@ In Messages, select the SMS text (or long-press → *Copy* and paste anywhere) �
 If you don't see it, scroll the app row to the end → **More** → turn on *Kharcha*.
 Open Expenses afterwards: the shared messages appear in the review screen.
 
+## Statement folder (iCloud Drive)
+**Settings → 📂 Statement folder → Choose a folder** and pick a folder, e.g. *iCloud Drive › Statements*.
+Save statements there from Mail, WhatsApp, Files or a computer (bank CSV/Excel, PhonePe CSV/PDF, Google Pay PDF;
+any other PDF with a DeepSeek key). Every time Kharcha opens it imports new or replaced files by itself: duplicates
+are skipped or merged, accounts created, categories applied. Files that need attention (unknown columns, a PDF
+password Kharcha hasn't seen) are listed in the same card; open such a file once with 📥 Import and Kharcha
+remembers its columns' bank / the password for next time.
+
 ## Siri
 Copy a bank SMS, then say **"Hey Siri, send copied message to Kharcha"**. It is added the next time you open the app.
 Also: **"Add expense in Kharcha"** (Siri asks the amount and what it was for) and **"How much have I spent in Kharcha"**.

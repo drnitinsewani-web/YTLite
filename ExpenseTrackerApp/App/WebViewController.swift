@@ -1,13 +1,16 @@
 import UIKit
 import WebKit
+import UniformTypeIdentifiers
 
 /// Hosts the bundled web app (www/) and bridges it to native features:
 /// durable storage, file export through the share sheet, and texts received
 /// from the Share Extension.
-final class WebViewController: UIViewController, WKScriptMessageHandler, WKUIDelegate, WKNavigationDelegate {
+final class WebViewController: UIViewController, WKScriptMessageHandler, WKUIDelegate, WKNavigationDelegate, UIDocumentPickerDelegate {
     static let scheme = "expenses"
     private var webView: WKWebView!
     private var jsReady = false
+    private var folderChecking = false
+    private var folderRetries = 0
 
     override func loadView() {
         let config = WKWebViewConfiguration()
@@ -59,6 +62,59 @@ final class WebViewController: UIViewController, WKScriptMessageHandler, WKUIDel
     @objc private func appDidBecomeActive() {
         deliverSharedTexts()
         sendCloudData()
+        folderRetries = 0
+        checkFolder()
+    }
+
+    // MARK: - Statement folder (e.g. in iCloud Drive)
+
+    private func sendFolderInfo(status: String? = nil) {
+        guard jsReady else { return }
+        let sync = FolderSync.shared
+        let name = sync.isSet ? jsString(sync.folderName ?? "Folder") : "null"
+        let msg = status.map { jsString($0) } ?? "null"
+        webView.evaluateJavaScript("window.expensesFolderInfo && window.expensesFolderInfo(\(name), \(msg))")
+    }
+
+    private func pickFolder() {
+        let picker = UIDocumentPickerViewController(forOpeningContentTypes: [UTType.folder])
+        picker.delegate = self
+        picker.allowsMultipleSelection = false
+        topPresenter().present(picker, animated: true)
+    }
+
+    func documentPicker(_ controller: UIDocumentPickerViewController, didPickDocumentsAt urls: [URL]) {
+        guard let url = urls.first else { return }
+        if FolderSync.shared.setFolder(url) {
+            sendFolderInfo(status: "Folder chosen. Looking for statements…")
+            folderRetries = 0
+            checkFolder()
+        } else {
+            sendFolderInfo(status: "Couldn't get access to that folder. Try another one.")
+        }
+    }
+
+    /// Reads new statements in the background and hands them to the web app, which imports
+    /// them without asking (duplicates are skipped there). Files still downloading from
+    /// iCloud are looked at again shortly.
+    private func checkFolder() {
+        guard jsReady, FolderSync.shared.isSet, !folderChecking else { return }
+        folderChecking = true
+        DispatchQueue.global(qos: .utility).async { [weak self] in
+            let result = FolderSync.shared.newFiles()
+            let payload: [[String: String]] = result.files.map { ["name": $0.name, "key": $0.key, "b64": $0.data.base64EncodedString()] }
+            let json = (try? JSONSerialization.data(withJSONObject: payload)).flatMap { String(data: $0, encoding: .utf8) } ?? "[]"
+            DispatchQueue.main.async {
+                guard let self = self else { return }
+                self.folderChecking = false
+                let err = result.error.map { self.jsString($0) } ?? "null"
+                self.webView.evaluateJavaScript("window.expensesFolderFiles && window.expensesFolderFiles(\(json), \(result.pending), \(err))")
+                if result.pending > 0 && self.folderRetries < 6 {
+                    self.folderRetries += 1
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 10) { [weak self] in self?.checkFolder() }
+                }
+            }
+        }
     }
 
     private func deliverSharedTexts() {
@@ -85,6 +141,19 @@ final class WebViewController: UIViewController, WKScriptMessageHandler, WKUIDel
             jsReady = true
             deliverSharedTexts()
             sendCloudData()
+            sendFolderInfo()
+            folderRetries = 0
+            checkFolder()
+        case "folderPick":
+            pickFolder()
+        case "folderCheck":
+            folderRetries = 0
+            checkFolder()
+        case "folderClear":
+            FolderSync.shared.clear()
+            sendFolderInfo()
+        case "folderDone":
+            FolderSync.shared.markSeen((body["keys"] as? [String]) ?? [])
         case "cloudPull":
             sendCloudData()
         case "cloudPush":
