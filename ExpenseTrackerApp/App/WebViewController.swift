@@ -11,6 +11,9 @@ final class WebViewController: UIViewController, WKScriptMessageHandler, WKUIDel
     private var jsReady = false
     private var folderChecking = false
     private var folderRetries = 0
+    /// Files the web app couldn't import this time (e.g. DeepSeek offline): tried again once the app is
+    /// opened again or the folder is checked from Settings, not on the follow-up checks before that.
+    private var folderLater = Set<String>()
 
     override func loadView() {
         let config = WKWebViewConfiguration()
@@ -63,6 +66,7 @@ final class WebViewController: UIViewController, WKScriptMessageHandler, WKUIDel
         deliverSharedTexts()
         sendCloudData()
         folderRetries = 0
+        folderLater.removeAll()
         checkFolder()
     }
 
@@ -88,6 +92,7 @@ final class WebViewController: UIViewController, WKScriptMessageHandler, WKUIDel
         if FolderSync.shared.setFolder(url) {
             sendFolderInfo(status: "Folder chosen. Looking for statements…")
             folderRetries = 0
+            folderLater.removeAll()
             checkFolder()
         } else {
             sendFolderInfo(status: "Couldn't get access to that folder. Try another one.")
@@ -96,19 +101,26 @@ final class WebViewController: UIViewController, WKScriptMessageHandler, WKUIDel
 
     /// Reads new statements in the background and hands them to the web app, which imports
     /// them without asking (duplicates are skipped there). Files still downloading from
-    /// iCloud are looked at again shortly.
+    /// iCloud are looked at again shortly. A few at a time: once the web app has imported
+    /// them it asks for the rest ("folderMore").
     private func checkFolder() {
         guard jsReady, FolderSync.shared.isSet, !folderChecking else { return }
         folderChecking = true
+        let skip = folderLater
         DispatchQueue.global(qos: .utility).async { [weak self] in
-            let result = FolderSync.shared.newFiles()
-            let payload: [[String: String]] = result.files.map { ["name": $0.name, "key": $0.key, "b64": $0.data.base64EncodedString()] }
+            let result = FolderSync.shared.newFiles(skipping: skip)
+            let payload: [[String: String]] = result.files.map { file -> [String: String] in
+                var item: [String: String] = ["name": file.name, "key": file.key, "b64": file.data.base64EncodedString()]
+                if let note = file.note { item["note"] = note }
+                if file.retry { item["retry"] = "1" }
+                return item
+            }
             let json = (try? JSONSerialization.data(withJSONObject: payload)).flatMap { String(data: $0, encoding: .utf8) } ?? "[]"
             DispatchQueue.main.async {
                 guard let self = self else { return }
                 self.folderChecking = false
                 let err = result.error.map { self.jsString($0) } ?? "null"
-                self.webView.evaluateJavaScript("window.expensesFolderFiles && window.expensesFolderFiles(\(json), \(result.pending), \(err))")
+                self.webView.evaluateJavaScript("window.expensesFolderFiles && window.expensesFolderFiles(\(json), \(result.pending), \(err), \(result.more))")
                 if result.pending > 0 && self.folderRetries < 6 {
                     self.folderRetries += 1
                     DispatchQueue.main.asyncAfter(deadline: .now() + 10) { [weak self] in self?.checkFolder() }
@@ -150,18 +162,30 @@ final class WebViewController: UIViewController, WKScriptMessageHandler, WKUIDel
             webView.evaluateJavaScript("window.expensesBackups && window.expensesBackups(\(list))")
         case "backupRead":
             let name = (body["name"] as? String) ?? ""
-            StateStore.snapshotBeforeRestore()
-            let text = StateStore.readBackup(name).map { jsString($0) } ?? "null"
+            // read it first: the copy of the current data made next can push the oldest restore point out
+            let backup = StateStore.readBackup(name)
+            if backup != nil { StateStore.snapshotBeforeRestore() }
+            let text = backup.map { jsString($0) } ?? "null"
             webView.evaluateJavaScript("window.expensesBackupData && window.expensesBackupData(\(jsString(name)), \(text))")
         case "folderPick":
             pickFolder()
         case "folderRescan":
             FolderSync.shared.forgetSeen()
             folderRetries = 0
+            folderLater.removeAll()
             checkFolder()
         case "folderCheck":
             folderRetries = 0
+            folderLater.removeAll()
             checkFolder()
+        case "folderMore":
+            checkFolder()
+        case "folderForget":
+            FolderSync.shared.forget((body["keys"] as? [String]) ?? [])
+            folderRetries = 0
+            checkFolder()
+        case "folderLater":
+            folderLater.formUnion((body["keys"] as? [String]) ?? [])
         case "folderClear":
             FolderSync.shared.clear()
             sendFolderInfo()

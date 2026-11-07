@@ -2475,7 +2475,7 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
       if (state.settings.selfName === imp.newSelf) { state.settings.selfName = ''; selfRe = selfPatterns(); save(); }
       imp.newSelf = '';
     }
-    setTimeout(() => { runFolderQueue(); aiShowDone(); }, 500);   // statements from the folder, and DeepSeek's readings, wait while a sheet is open
+    setTimeout(() => { runFolderQueue(); aiShowDone(); runImportQueue(); }, 500);   // statements from the folder, shared files and DeepSeek's readings wait while a sheet is open
     $('sheet').classList.remove('open'); $('impSheet').classList.remove('open'); $('smsSheet').classList.remove('open'); $('mailSheet').classList.remove('open'); $('catSheet').classList.remove('open');
     $('sheetBg').style.display = 'none'; $('sheetBg').classList.remove('over'); catFromForm = false;
     document.activeElement && document.activeElement.blur();
@@ -3598,12 +3598,23 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     const top = rows.slice(0, Math.min(rows.length, (det ? det.header : 10) + 1)).map(r => (r || []).join(' ')).join(' ');
     return new Set((top.match(TRADE_HEAD) || []).map(t => t.toLowerCase().replace(/\s+/g, ''))).size >= 2;
   }
+  // Statement files shared into the app wait their turn: one review at a time, the next once it is closed.
+  // A file whose reading finished while another review opened waits here too.
+  const importQ = []; let importBusy = false;
+  async function runImportQueue() {
+    if (importBusy) return;
+    importBusy = true;
+    try { while (importQ.length && !sheetOpen()) { const job = importQ.shift(); try { await (typeof job === 'function' ? job() : startImport(job)); } catch (e) {} } }
+    finally { importBusy = false; }
+  }
+  function importLater(file) { importQ.unshift(file); toast(`📥 ${file.name} opens for review when you close this`, 4000); }
   async function startImport(file) {
     toast('Reading ' + file.name + '…');
     if (/\.pdf$/i.test(file.name) || file.type === 'application/pdf') {
       let lines;
       try { lines = await readPdfLines(file); }
       catch (e) { if (!(e && e.message === 'Cancelled')) toast(e && e.message && e.message.length > 15 ? e.message : 'Could not read that PDF'); return; }
+      if (sheetOpen()) { importLater(file); return; }   // another review opened while it was read
       if (isFdAdvice(lines)) { const fd = parseFdAdvice(lines); toast(fd ? saveFd(fd) : 'This looks like an FD advice, but its amount or maturity date couldn’t be read', 6000); return; }
       const gp = isGPay(lines) ? parseGPay(lines) : [];
       if (gp.length) { previewStatement(gp, `Google Pay · ${file.name}`, 'No transactions found in this PDF'); return; }
@@ -3611,16 +3622,17 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
         const cs = parseCardStatement(lines, file.name);
         if (cs.items.length || !aiOn()) { previewStatement(cs.items, `${cs.label} · ${file.name}`, 'No transactions found in this card statement'); return; }
       }
-      if (!isPhonePe(lines)) {
-        if (aiOn()) { aiReadLines(lines, file.name, lines.slice(0, 12).join('\n')); return; }
-        toast('This PDF isn’t a PhonePe or Google Pay statement. Download the CSV/Excel version from net banking, or add a DeepSeek key in Settings to read any PDF.', 6000); return;
-      }
-      previewStatement(parsePhonePe(lines), `PhonePe · ${file.name}`, 'No transactions found in this PDF');
+      // a bank or card statement can name PhonePe in its rows: if PhonePe's layout isn't in it, DeepSeek reads it
+      const pp = isPhonePe(lines) ? parsePhonePe(lines) : [];
+      if (pp.length || (isPhonePe(lines) && phonePeHead(lines) && !aiOn())) { previewStatement(pp, `PhonePe · ${file.name}`, 'No transactions found in this PDF'); return; }
+      if (aiOn()) { aiReadLines(lines, file.name, lines.slice(0, 12).join('\n')); return; }
+      toast('This PDF isn’t a PhonePe or Google Pay statement. Download the CSV/Excel version from net banking, or add a DeepSeek key in Settings to read any PDF.', 6000);
       return;
     }
     let rows;
     try { rows = await readStatement(file); }
     catch (e) { toast(e.message && e.message.length > 20 ? e.message : 'Could not read that file'); return; }
+    if (sheetOpen()) { importLater(file); return; }   // another review opened while it was read
     rows = (rows || []).filter(r => Array.isArray(r) && r.some(c => String(c).trim() !== ''));
     const br = readBrokerReport(lastBook, file.name);
     if (br) { const msg = saveBrokerReport(br); toast(/Summary › Brokers/.test(msg) ? msg : msg + ' · see Summary › Brokers', 7000); return; }
@@ -4338,11 +4350,12 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     if (!list || !list.length) { el.textContent = 'No automatic backups yet: the first one is made the next time something changes.'; return; }
     el.innerHTML = 'Tap one to restore it (your current data is backed up first):<br>' + list.map(b => {
       const when = new Date(b.at * 1000).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' });
-      return `<button class="chip" data-backup="${esc(b.name)}" style="margin:4px 4px 0 0">${/^before-shrink/.test(b.name) ? '⚠︎ before data shrank' : /^before-restore/.test(b.name) ? '↩︎ before a restore' : '📅 daily'} · ${esc(when)} · ${b.entries >= 0 ? b.entries + ' entries' : 'unreadable'}</button>`;
+      return `<button class="chip" data-backup="${esc(b.name)}" data-entries="${+b.entries}" style="margin:4px 4px 0 0">${/^before-shrink/.test(b.name) ? '⚠︎ before data shrank' : /^before-restore/.test(b.name) ? '↩︎ before a restore' : '📅 daily'} · ${esc(when)} · ${b.entries >= 0 ? b.entries + ' entries' : 'unreadable'}</button>`;
     }).join('');
   };
   $('backupList').addEventListener('click', e => {
     const b = e.target.closest('[data-backup]'); if (!b) return;
+    if (+b.dataset.entries < 0) { toast('That backup couldn’t be read'); return; }
     if (!confirm('Restore this backup? Entries added since then will be replaced.')) return;
     native({ type: 'backupRead', name: b.dataset.backup });
   });
@@ -4353,6 +4366,7 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     try { localStorage.removeItem(CLOUD_BASE); } catch (e) {}   // next iCloud sync merges instead of deleting
     save(); render(); renderSettings();
     toast(`Restored ${state.expenses.length} entries from the backup`, 5000);
+    setTimeout(runFolderQueue, 5000);
   };
   $('restoreBtn').addEventListener('click', () => $('restoreFile').click());
   $('restoreFile').addEventListener('change', async e => {
@@ -4371,6 +4385,7 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
       state = migrate({ ...data, expenses: valid }); loadProblem = '';
       try { localStorage.removeItem(CLOUD_BASE); } catch (e) {}   // next iCloud sync merges instead of deleting
       save(); $('currency').innerHTML = ''; render(); toast('Restored');
+      setTimeout(runFolderQueue, 3000);
     } catch (err) { toast('Not a valid backup file'); }
     e.target.value = '';
   });
@@ -4380,7 +4395,7 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     state = defaultState(); state.settings.wipedAt = Date.now(); loadProblem = '';
     save(); $('currency').innerHTML = ''; render();
     try { localStorage.removeItem(FOLDER_LOG); } catch (e) {}
-    if (NATIVE && folderInfo.name) { native({ type: 'folderRescan' }); toast('All data deleted · importing the statements in your folder again…', 4000); }
+    if (NATIVE && folderInfo.name) { rescanFolder(); toast('All data deleted · importing the statements in your folder again…', 4000); }
     else toast('All data deleted');
   });
 
@@ -4869,9 +4884,10 @@ Rules: include only completed transactions — skip OTPs, offers, ads, due/bill 
   }
   let aiBusy = false;
   const aiQueue = [], aiDone = [];   // what arrived while DeepSeek was busy; readings waiting for an open sheet to close
-  function aiFree(wait = 50) {   // DeepSeek is free again: read what arrived meanwhile
+  function aiFree(wait = 50) {   // DeepSeek is free again: read what arrived meanwhile, then the statement folder's files
     aiBusy = false;
     if (aiQueue.length) setTimeout(() => { if (!aiBusy && aiQueue.length) aiReadLines(...aiQueue.shift()); }, wait);
+    setTimeout(runFolderQueue, wait + 50);
   }
   function aiShowDone() {
     while (aiDone.length && !sheetOpen()) {
@@ -4999,7 +5015,10 @@ Rules: include only completed transactions — skip OTPs, offers, ads, due/bill 
     state.settings.ai = { ...aiCfg(), key, model: $('aiModel').value, ok: false }; save(); renderAi();
     $('aiStatus').textContent = 'Testing…';
     try { await aiRaw({ model: 'deepseek-chat', max_tokens: 5, messages: [{ role: 'user', content: 'Reply OK' }] });
-      state.settings.ai.ok = true; save(); renderAi(); toast('DeepSeek connected ✓'); }
+      state.settings.ai.ok = true; save(); renderAi();
+      const keys = NATIVE && folderInfo.name ? folderNeedAi() : [];
+      if (keys.length) { keys.forEach(k => folderHad.delete(k)); setFolderNeedAi([]); native({ type: 'folderForget', keys }); }
+      toast('DeepSeek connected ✓' + (keys.length ? ` · reading ${keys.length} PDF${keys.length > 1 ? 's' : ''} from your folder` : '')); }
     catch (e) { $('aiStatus').textContent = '⚠︎ ' + e.message; }
   });
   $('aiModel').addEventListener('change', e => { if (state.settings.ai) { state.settings.ai.model = e.target.value; save(); } });
@@ -5026,8 +5045,28 @@ Rules: include only completed transactions — skip OTPs, offers, ads, due/bill 
   const FOLDER_LOG = 'expense-tracker-v1:folderLog';
   const folderInfo = { name: null, msg: '', pending: 0, error: '', checked: 0 };
   const folderLog = () => { try { return JSON.parse(localStorage.getItem(FOLDER_LOG) || '[]'); } catch (e) { return []; } };
-  function logFolder(r) {
-    try { localStorage.setItem(FOLDER_LOG, JSON.stringify([{ ...r, at: Date.now() }, ...folderLog()].slice(0, 25))); } catch (e) {}
+  function logFolder(r) {   // the same problem with the same file again is listed once
+    const log = folderLog().filter(x => !(r.note && x.name === r.name && x.note === r.note));
+    try { localStorage.setItem(FOLDER_LOG, JSON.stringify([{ ...r, at: Date.now() }, ...log].slice(0, 25))); } catch (e) {}
+  }
+  // PDFs only DeepSeek can read, looked at again once a key is added; how often DeepSeek failed on a file
+  const FOLDER_NEED_AI = 'expense-tracker-v1:folderNeedAi', FOLDER_TRIES = 'expense-tracker-v1:folderTries';
+  const folderNeedAi = () => { try { return JSON.parse(localStorage.getItem(FOLDER_NEED_AI) || '[]'); } catch (e) { return []; } };
+  const setFolderNeedAi = keys => { try { localStorage.setItem(FOLDER_NEED_AI, JSON.stringify(keys.slice(-100))); } catch (e) {} };
+  function folderTries(key) {
+    let t = {}; try { t = JSON.parse(localStorage.getItem(FOLDER_TRIES) || '{}') || {}; } catch (e) {}
+    t[key] = (t[key] || 0) + 1;
+    const ks = Object.keys(t); if (ks.length > 50) delete t[ks[0]];
+    try { localStorage.setItem(FOLDER_TRIES, JSON.stringify(t)); } catch (e) {}
+    return t[key];
+  }
+  // the folder's DeepSeek readings take turns with yours (Settings › Categorise, Ask, shared messages)
+  async function folderAi(r, lines, label, context) {
+    if (aiBusy) { r.later = true; return r; }
+    r.kind = 'DeepSeek'; aiBusy = true;
+    let items;
+    try { items = await aiExtractParts(aiSplit(lines), label, context); } finally { aiFree(); }
+    return commitAuto(items, r);
   }
   // Same rules as tapping Import on the review screen: new rows are added, exact repeats skipped,
   // rows matching an entry (UPI reference, balance, same day & amount) merged into it.
@@ -5059,9 +5098,11 @@ Rules: include only completed transactions — skip OTPs, offers, ads, due/bill 
           const cs = parseCardStatement(lines, file.name);
           if (cs.items.length || !aiOn()) { r.kind = cs.label; if (!cs.items.length) r.note = 'card statement with no transactions found'; return commitAuto(cs.items, r); }
         }
-        if (isPhonePe(lines)) { r.kind = 'PhonePe'; return commitAuto(parsePhonePe(lines), r); }
-        if (aiOn()) { r.kind = 'DeepSeek'; return commitAuto(await aiExtractParts(aiSplit(lines), file.name, lines.slice(0, 12).join('\n')), r); }
-        r.note = 'not a PhonePe or Google Pay PDF (add a DeepSeek key in Settings to read other PDFs)'; return r;
+        // a bank or card statement can name PhonePe in its rows: if PhonePe's layout isn't in it, DeepSeek reads it
+        const pp = isPhonePe(lines) ? parsePhonePe(lines) : [];
+        if (pp.length || (isPhonePe(lines) && phonePeHead(lines) && !aiOn())) { r.kind = 'PhonePe'; if (!pp.length) r.note = 'PhonePe statement with no transactions found'; return commitAuto(pp, r); }
+        if (aiOn()) return await folderAi(r, lines, file.name, lines.slice(0, 12).join('\n'));
+        r.needAi = true; r.note = 'not a PhonePe or Google Pay PDF (add a DeepSeek key in Settings to read it)'; return r;
       }
       let rows = await readStatement(file);
       rows = (rows || []).filter(x => Array.isArray(x) && x.some(c => String(c).trim() !== ''));
@@ -5072,6 +5113,7 @@ Rules: include only completed transactions — skip OTPs, offers, ads, due/bill 
       const det = detectColumns(rows);
       if (looksLikeTrades(rows, det)) { r.note = 'a trading report, not a bank statement — nothing added'; return r; }
       if (det && !det.guessed) {   // columns guessed without a header row are only used on the review screen
+        if (sheetOpen()) { r.later = true; return r; }   // a review opened while it was read: it uses the same screen data
         setupStatement(rows, file, det); imp.mode = 'file'; imp.acctOverride = ''; imp.filter = 'all'; imp.newSelf = '';
         buildItems();   // also marks duplicates and checks the running balance
         if (imp.stmtAcct.learn) learnDigits(imp.stmtAcct.id, imp.stmtAcct.learn);
@@ -5079,34 +5121,50 @@ Rules: include only completed transactions — skip OTPs, offers, ads, due/bill 
         if (imp.balanceCheck && imp.balanceCheck.bad) r.warn = `${imp.balanceCheck.bad} row(s) don’t match the running balance`;
         return commitAuto(imp.items, r, true);
       }
-      if (aiOn() && rows.length) { r.kind = 'DeepSeek'; return commitAuto(await aiExtractParts(aiSplit(rowsToLines(rows)), file.name, rowsContext(rows)), r); }
+      if (aiOn() && rows.length) return await folderAi(r, rowsToLines(rows), file.name, rowsContext(rows));
       r.note = 'columns not recognised: open it with 📥 Import and choose them there'; return r;
     } catch (e) {
-      r.note = (e && e.message) || 'couldn’t read this file'; r.retry = true;   // e.g. DeepSeek offline: try again next time
+      // DeepSeek offline or busy: tried again next time (a file that can't be read is left as it is)
+      r.note = (e && e.message) || 'couldn’t read this file'; r.retry = r.kind === 'DeepSeek';
       return r;
     }
   }
-  const folderQ = []; let folderBusy = false;
-  const sheetOpen = () => !!document.querySelector('.sheet.open');
+  const folderQ = []; let folderBusy = false, folderCur = '', folderGen = 0;
+  const folderHad = new Set();   // imported this session: a check that overlapped its import may hand it over again
+  const sheetOpen = () => !!document.querySelector('.sheet.open') || $('sheetBg').style.display === 'block';   // or opening
+  // nothing is imported while saved data couldn't be read (nothing could be saved): it waits for the restore
   async function runFolderQueue() {
-    if (folderBusy || !folderQ.length || sheetOpen() || aiBusy) return;
+    if (folderBusy || !folderQ.length || sheetOpen() || aiBusy || loadProblem) return;
     folderBusy = true;
     const done = [];
-    while (folderQ.length && !sheetOpen()) {
-      const f = folderQ.shift();
+    while (folderQ.length && !sheetOpen() && !aiBusy) {
+      const f = folderQ.shift(), gen = folderGen; folderCur = f.key;
       toast(`📂 Importing ${f.name}…`, 600000);
       let r;
-      try {
-        const bin = atob(f.b64), bytes = new Uint8Array(bin.length);
-        for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
-        r = await autoImportFile(new File([bytes], f.name));
-      } catch (e) { r = { name: f.name, added: 0, merged: 0, same: 0, note: 'couldn’t open this file' }; }
-      if (!r.retry) native({ type: 'folderDone', keys: [f.key] });
+      if (f.note) r = { name: f.name, added: 0, merged: 0, same: 0, note: f.note, retry: !!f.retry };   // too big, or couldn't be opened
+      else {
+        try {
+          const bin = atob(f.b64), bytes = new Uint8Array(bin.length);
+          for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+          r = await autoImportFile(new File([bytes], f.name));
+        } catch (e) { r = { name: f.name, added: 0, merged: 0, same: 0, note: 'couldn’t open this file' }; }
+      }
+      folderCur = '';
+      if (r.later) { if (gen === folderGen) folderQ.unshift(f); break; }   // a review is open or DeepSeek is busy: after that
+      if (r.retry && folderTries(f.key) >= 3) { r.retry = false; r.note += ' (tried 3 times: open it with 📥 Import)'; }
+      saveLocal();   // kept before the file counts as imported
+      if (r.retry) native({ type: 'folderLater', keys: [f.key] });
+      else {
+        native({ type: 'folderDone', keys: [f.key] }); folderHad.add(f.key);
+        if (r.needAi) setFolderNeedAi(folderNeedAi().filter(k => k !== f.key).concat(f.key));
+      }
       logFolder(r); done.push(r);
     }
     folderBusy = false;
-    $('toast').classList.remove('show');
-    if (!done.length) return;
+    if (!aiBusy) $('toast').classList.remove('show');
+    // a big folder comes a few files at a time: the next ones once these are in
+    if (!folderQ.length && folderInfo.more && done.length && folderInfo.name) { folderInfo.more = 0; native({ type: 'folderMore' }); }
+    if (!done.length) { renderFolder(); return; }
     save(); render(); renderFolder();
     const added = done.reduce((t, r) => t + r.added, 0), merged = done.reduce((t, r) => t + r.merged + r.same, 0);
     const fds = done.filter(r => r.fd && r.kind === 'Fixed deposit').length, brk = done.filter(r => r.fd && r.kind !== 'Fixed deposit').length;
@@ -5114,12 +5172,15 @@ Rules: include only completed transactions — skip OTPs, offers, ads, due/bill 
     toast(`📂 ${done.length} file${done.length > 1 ? 's' : ''} from your folder: ${added} new transaction${added === 1 ? '' : 's'}${merged ? ` · ${merged} already in Kharcha` : ''}${fds ? ` · ${fds} FD${fds > 1 ? 's' : ''} saved` : ''}${brk ? ` · ${brk} broker report${brk > 1 ? 's' : ''} read` : ''}${failed ? ` · ${failed} need${failed === 1 ? 's' : ''} attention (Settings)` : ''}`, 5000);
   }
   window.expensesFolderInfo = (name, msg) => { folderInfo.name = name; folderInfo.msg = msg || ''; renderFolder(); };
-  window.expensesFolderFiles = (files, pending, error) => {
-    folderInfo.pending = pending || 0; folderInfo.error = error || ''; folderInfo.checked = Date.now(); folderInfo.msg = '';
-    (files || []).forEach(f => { if (!folderQ.some(q => q.key === f.key)) folderQ.push(f); });
+  window.expensesFolderFiles = (files, pending, error, more) => {
+    folderInfo.pending = pending || 0; folderInfo.error = error || ''; folderInfo.checked = Date.now(); folderInfo.msg = ''; folderInfo.more = more || 0;
+    (files || []).forEach(f => { if (f.key !== folderCur && !folderHad.has(f.key) && !folderQ.some(q => q.key === f.key)) folderQ.push(f); });
     renderFolder();
     runFolderQueue();
   };
+  // stop watching / another folder: files still waiting from this one aren't imported
+  function folderStop() { folderQ.length = 0; folderGen++; folderInfo.more = 0; renderFolder(); }
+  function rescanFolder() { folderHad.clear(); native({ type: 'folderRescan' }); }
   function renderFolder() {
     if (!NATIVE) return;
     const n = folderInfo.name;
@@ -5128,7 +5189,7 @@ Rules: include only completed transactions — skip OTPs, offers, ads, due/bill 
     ['folderCheck', 'folderRescan', 'folderClear'].forEach(id => $(id).classList.toggle('hidden', !n));
     const when = folderInfo.checked ? new Date(folderInfo.checked).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' }) : '';
     $('folderStatus').innerHTML = !n ? 'No folder chosen.' : `Watching <b>📂 ${esc(n)}</b>${when ? ` · checked ${esc(when)}` : ''}` +
-      (folderBusy || folderQ.length ? ` · importing ${folderQ.length + (folderBusy ? 1 : 0)}…` : '') +
+      (folderBusy || folderQ.length ? (loadProblem && !folderBusy ? ` · ${folderQ.length} waiting until your data is restored` : ` · importing ${folderQ.length + (folderBusy ? 1 : 0)}…`) : '') +
       (folderInfo.pending ? ` · ${folderInfo.pending} file${folderInfo.pending > 1 ? 's' : ''} still downloading from iCloud` : '') +
       (folderInfo.error ? `<br><span style="color:var(--warn)">⚠︎ ${esc(folderInfo.error)}</span>` : '') +
       (folderInfo.msg ? `<br>${esc(folderInfo.msg)}` : '');
@@ -5139,15 +5200,15 @@ Rules: include only completed transactions — skip OTPs, offers, ads, due/bill 
         : r.fd ? esc(r.fd) : `${esc(r.kind || '')}: ${r.added} new${r.merged + r.same ? `, ${r.merged + r.same} already there` : ''}${r.warn ? ` · <span style="color:var(--warn)">${esc(r.warn)}</span>` : ''}`);
     }).join('<br>') : '';
   }
-  $('folderPick').addEventListener('click', () => native({ type: 'folderPick' }));
+  $('folderPick').addEventListener('click', () => { folderStop(); native({ type: 'folderPick' }); });
   $('folderCheck').addEventListener('click', () => { folderInfo.msg = 'Checking…'; renderFolder(); native({ type: 'folderCheck' }); });
   $('folderRescan').addEventListener('click', () => {
     if (!confirm('Read every file in the folder again? Transactions already in Kharcha are recognised and skipped.')) return;
-    folderInfo.msg = 'Reading every file again…'; renderFolder(); native({ type: 'folderRescan' });
+    folderInfo.msg = 'Reading every file again…'; renderFolder(); rescanFolder();
   });
   $('folderClear').addEventListener('click', () => {
     if (!confirm('Stop watching this folder? Transactions already imported stay.')) return;
-    native({ type: 'folderClear' });
+    folderStop(); native({ type: 'folderClear' });
   });
   renderFolder();
 
@@ -5156,7 +5217,9 @@ Rules: include only completed transactions — skip OTPs, offers, ads, due/bill 
     try {
       const bin = atob(b64), bytes = new Uint8Array(bin.length);
       for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
-      startImport(new File([bytes], name || 'statement'));
+      importQ.push(new File([bytes], name || 'statement'));
+      if (sheetOpen() && !importBusy) toast(`📥 ${name || 'The shared file'} opens for review when you close this`, 4000);
+      runImportQueue();
     } catch (e) { toast('Could not open the shared file'); }
   };
   // Text from the Share Extension or the "Add Bank Message" Shortcuts action (iOS app).
@@ -5193,6 +5256,11 @@ Rules: include only completed transactions — skip OTPs, offers, ads, due/bill 
     return items.length;
   }
   window.expensesReceiveShared = text => {
+    // shared together with statement files: after their reviews
+    if (importBusy || importQ.length) { importQ.push(() => receiveShared(text)); runImportQueue(); return; }
+    receiveShared(text);
+  };
+  function receiveShared(text) {
     // copied message + comment from Siri ("Add this transaction to Kharcha")
     const withComment = [];
     text = String(text).replace(/^kharcha:msg:(\{.*\})\s*$/gm, (_m, j) => { try { withComment.push(JSON.parse(j)); } catch (e) {} return ''; }).trim();
@@ -5235,12 +5303,12 @@ Rules: include only completed transactions — skip OTPs, offers, ads, due/bill 
     } else {
       openItemsPreview(items, `${items.length} shared message${items.length > 1 ? 's' : ''}`);
     }
-  };
+  }
   if (!NATIVE) document.querySelectorAll('.native-only').forEach(el => el.classList.add('hidden'));
   $('autoAdd').checked = !!state.settings.autoAddShared;
   $('autoAdd').addEventListener('change', e => { state.settings.autoAddShared = e.target.checked; save(); toast(e.target.checked ? 'Messages will be added automatically' : 'Messages will wait for your review'); });
   // bump when Kharcha learns a new kind of file, so the statement folder is looked at again
-  const PARSER_VERSION = 8;   // 4: FD advices · 5: broker ledgers and P&L reports · 6: statement periods · 7: credit card PDFs · 8: card PDFs that mention PhonePe, more card layouts
+  const PARSER_VERSION = 9;   // 4: FD advices · 5: broker ledgers and P&L reports · 6: statement periods · 7: credit card PDFs · 8: card PDFs that mention PhonePe, more card layouts · 9: bank PDFs that mention PhonePe go to DeepSeek
   if (NATIVE) native({ type: 'ready', parser: PARSER_VERSION });
   if (loadProblem) toast('⚠︎ Kharcha couldn’t read its saved data, so nothing will be saved until it is restored. Settings › Data › Automatic backups.', 10000);
   const autoMail = () => {
