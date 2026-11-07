@@ -411,6 +411,10 @@
       <div class="sub" id="recNote" style="margin-bottom:6px"></div>
       <div id="recList"></div>
     </div>
+    <div class="card hidden" id="grpCard">
+      <h2>By group</h2>
+      <div id="grpList"></div>
+    </div>
     <div class="card" id="incCard">
       <h2>Income by category</h2>
       <div id="incBars"></div>
@@ -510,7 +514,7 @@
       <div class="chips" id="catChips" style="margin-top:12px"></div>
       <h2 style="margin-top:16px">Income categories</h2>
       <div class="chips" id="incChips" style="margin-top:12px"></div>
-      <div class="sub" style="margin-top:10px">Tap a category to rename it, change its emoji or type, or delete it.</div>
+      <div class="sub" style="margin-top:10px">Tap a category to rename it, change its emoji or type, put it in a group (e.g. <b>Hospital</b> or <b>Personal</b>), or delete it.</div>
       <button class="btn ghost" id="addCat">＋ New category</button>
     </div>
     <div class="card native-only">
@@ -553,6 +557,7 @@
   <input class="amount-input" id="fAmount" type="number" inputmode="decimal" step="any" min="0" placeholder="0.00" required style="margin-top:10px">
   <label>Category</label>
   <div class="chips" id="fCats"></div>
+  <div id="fGroupWrap" class="hidden"><label>Group</label><div class="chips" id="fGroup"></div></div>
   <div class="row2">
     <div><label for="fDate">Date</label><input id="fDate" type="date" required></div>
     <div><label for="fPay">Paid with</label>
@@ -623,6 +628,10 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     <input id="catName" maxlength="30" placeholder="Category name" aria-label="Category name">
   </div>
   <div class="sub hidden" id="catFixed" style="margin-top:6px">This built-in category's name is used by Kharcha's automatic rules, so only its emoji can change.</div>
+  <label for="catGroup">Group (e.g. Hospital, Personal)</label>
+  <input id="catGroup" list="groupList" maxlength="24" placeholder="No group" autocomplete="off">
+  <datalist id="groupList"></datalist>
+  <div class="chips" id="catGroupPick" style="margin-top:6px"></div>
   <label for="catKind">Used for</label>
   <select id="catKind"><option value="debit">Expenses</option><option value="credit">Income</option><option value="both">Both</option></select>
   <label class="mchk"><input type="checkbox" id="catExclude"><span>Not real spending or income (like Transfer, Investment): faded, left out of totals and never marked to review</span></label>
@@ -817,6 +826,12 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
   };
   const catOf = name => state.categories.find(c => c.name === name) || { emoji: '📦', name, kind: 'both' };
   const catsFor = type => state.categories.filter(c => c.kind === type || c.kind === 'both');
+  // Groups ("Hospital", "Personal"…): set on a category, optionally overridden on one transaction
+  // (e.group: a name, or '' for "no group").
+  const groupOf = e => e.group !== undefined ? e.group : (catOf(e.category).group || '');
+  const GROUP_SUGGEST = ['Personal', 'Hospital'];
+  const allGroups = () => [...new Set(state.categories.map(c => c.group).concat(state.expenses.map(e => e.group)).filter(Boolean))]
+    .sort((a, b) => a.localeCompare(b));
   const counted = e => !catOf(e.category).exclude;
   let acctFilter = '';
   // Amount filter (remembered per device) and amount terms in search: ">1000", ">=5000", "<500", "swiggy >300"
@@ -831,6 +846,8 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
   const AMT_PRESETS = [0, 1000, 5000, 10000];
   // "To review": imported transactions above the threshold stay unread until a comment is saved.
   let reviewOnly = false;
+  let groupFilter = null;   // null = all; otherwise a group name ('' = no group)
+  try { const g = localStorage.getItem('expense-tracker-v1:group'); if (g !== null) groupFilter = g; } catch (e) {}
   // "All transactions with this person/merchant" view (all dates), opened from a transaction.
   let payerFilter = '';
   const payerName = k => k.toLowerCase().replace(/\b\w/g, c => c.toUpperCase());
@@ -1081,6 +1098,25 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     const r = e.target.closest('[data-rec]'); if (!r) return;
     payerFilter = r.dataset.rec; view = 'list'; syncNav(); render(); window.scrollTo(0, 0);
   });
+  function renderGroups(items) {
+    const groups = allGroups();
+    $('grpCard').classList.toggle('hidden', !groups.length);
+    if (!groups.length) return;
+    const rows = groups.concat(['']).map(g => {
+      const its = items.filter(e => groupOf(e) === g && counted(e));
+      return { g, spent: sum(its.filter(e => e.type === 'debit')), inc: sum(its.filter(e => e.type === 'credit')), n: its.length };
+    }).filter(r => r.n || r.g);
+    const total = rows.reduce((t, r) => t + r.spent, 0) || 1;
+    $('grpList').innerHTML = rows.map(r => `<div class="bar-row" data-gotogroup="${esc(r.g)}" role="button" style="cursor:pointer">
+        <div class="top"><span>${r.g ? '🏷️ ' + esc(r.g) : 'No group'} <span class="sub">${r.n}</span></span>
+          <span><b>${fmt(r.spent)}</b>${r.inc ? ` <span style="color:var(--income)">+${fmt(r.inc)}</span>` : ''} <span class="sub">${Math.round(r.spent / total * 100)}%</span></span></div>
+        <div class="progress"><div style="width:${r.spent / total * 100}%"></div></div></div>`).join('') +
+      `<div class="sub" style="margin-top:6px">Tap a group to see its transactions. Transfers and investments aren't counted.</div>`;
+  }
+  document.addEventListener('click', e => {
+    const r = e.target.closest('[data-gotogroup]'); if (!r) return;
+    view = 'list'; syncNav(); setGroupFilter(r.dataset.gotogroup); window.scrollTo(0, 0);
+  });
   function renderFormSuggest(e) {
     formSugs = e && !e.comment ? suggestFor(e) : [];
     $('fSuggest').classList.toggle('hidden', !formSugs.length);
@@ -1106,6 +1142,16 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     $('amtBar').innerHTML = (toReview || reviewOnly ? `<button class="chip ${reviewOnly ? 'sel' : ''}" data-review="1">● To review ${toReview}</button>` : '') + AMT_PRESETS.map(v =>
       `<button class="chip ${minAmt === v ? 'sel' : ''}" data-min="${v}">${v ? 'Over ' + fmt(v).replace(/\.00$/, '') : 'All amounts'}</button>`).join('') +
       `<button class="chip ${custom ? 'sel' : ''}" data-min="custom">${custom ? 'Over ' + fmt(minAmt).replace(/\.00$/, '') : 'Custom…'}</button>`;
+    const groups = allGroups();
+    if (groupFilter !== null && groupFilter !== '' && !groups.includes(groupFilter)) groupFilter = null;
+    if (groups.length) $('amtBar').innerHTML = `<button class="chip ${groupFilter === null ? 'sel' : ''}" data-grp="*">All groups</button>` +
+      groups.map(g => `<button class="chip ${groupFilter === g ? 'sel' : ''}" data-grp="${esc(g)}">🏷️ ${esc(g)}</button>`).join('') +
+      `<button class="chip ${groupFilter === '' ? 'sel' : ''}" data-grp="">No group</button>` + $('amtBar').innerHTML;
+  }
+  function setGroupFilter(g) {
+    groupFilter = g;
+    try { if (g === null) localStorage.removeItem('expense-tracker-v1:group'); else localStorage.setItem('expense-tracker-v1:group', g); } catch (e) {}
+    render();
   }
   function setMinAmt(v) {
     minAmt = Math.max(0, v || 0);
@@ -1352,12 +1398,14 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
       .filter(e => {
         if (minAmt && e.amount <= minAmt) return false;
         if (reviewOnly && !e.unread) return false;
+        if (groupFilter !== null && groupOf(e) !== groupFilter) return false;
         if (!q) return true;
         let app;
         return parseQuery(q).every(t => t.op
           ? (t.op === '>' ? e.amount > t.v : t.op === '>=' ? e.amount >= t.v : t.op === '<' ? e.amount < t.v : e.amount <= t.v)
           : (e.note.toLowerCase().includes(t.word) || e.category.toLowerCase().includes(t.word) || String(e.comment || '').toLowerCase().includes(t.word)
              || appWordMatch(app ?? (app = appCached(e)), t.word)
+             || groupOf(e).toLowerCase().includes(t.word)
              || (acctById(e.account) && `${acctById(e.account).nick || ''} ${acctById(e.account).name}`.toLowerCase().includes(t.word))));
       })
       .sort((a, b) => b.date.localeCompare(a.date) || b.createdAt - a.createdAt);
@@ -1481,6 +1529,7 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     $('notCounted').innerHTML = Object.keys(ex).length ? 'Not counted: ' + Object.entries(ex).map(([c, v]) =>
       `${esc(catOf(c).emoji)} ${esc(c)} ${v.out ? fmt(v.out) + ' out' : ''}${v.out && v.in ? ', ' : ''}${v.in ? fmt(v.in) + ' in' : ''}`).join(' · ') : '';
     renderRecurring();
+    renderGroups(items);
     $('catBars').innerHTML = debits.length ? barsHtml(debits, '') : `<div class="sub">Nothing spent ${periodWord()}.</div>`;
     $('incCard').classList.toggle('hidden', !credits.length);
     $('incBars').innerHTML = barsHtml(credits, 'inc');
@@ -1523,7 +1572,7 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
       `<span class="chip" data-editacct="${esc(a.id)}" role="button">${esc(a.emoji || '🏦')} ${esc(acctName(a))}${a.nick && a.nick !== a.name ? ` <small>${esc(a.name)}</small>` : ''} <small>••${esc(a.digits.join(', ••'))}${a.bal ? ' · ' + esc(fmt(a.bal.amount)) + ' (' + esc(new Date(a.bal.date + 'T00:00').toLocaleDateString(undefined, { day: 'numeric', month: 'short' })) + ')' : ''}</small><span class="x" data-delacct="${esc(a.id)}" role="button" aria-label="Remove">✕</span></span>`).join('')
       : '<span class="sub" style="margin:0">No accounts yet.</span>';
     const used = {}; state.expenses.forEach(e => { used[e.category] = (used[e.category] || 0) + 1; });
-    const chip = (c, i) => `<button type="button" class="chip" data-editcat="${i}">${esc(c.emoji)} ${esc(c.name)}${c.kind === 'both' ? ' <small>±</small>' : ''}${c.exclude ? ' <small>not counted</small>' : ''} <small>${used[c.name] || 0}</small></button>`;
+    const chip = (c, i) => `<button type="button" class="chip" data-editcat="${i}">${esc(c.emoji)} ${esc(c.name)}${c.kind === 'both' ? ' <small>±</small>' : ''}${c.group ? ` <small>· ${esc(c.group)}</small>` : ''}${c.exclude ? ' <small>not counted</small>' : ''} <small>${used[c.name] || 0}</small></button>`;
     $('catChips').innerHTML = state.categories.map((c, i) => c.kind !== 'credit' ? chip(c, i) : '').join('');
     $('incChips').innerHTML = state.categories.map((c, i) => c.kind === 'credit' ? chip(c, i) : '').join('');
     const rules = Object.entries(state.rules);
@@ -1549,10 +1598,19 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
   }
 
   // ---------- add / edit ----------
+  // formGroup: null = follow the category's group, otherwise the chosen group ('' = none)
+  let formGroup = null;
   function renderFormCats() {
     $('fType').querySelectorAll('button').forEach(b => b.classList.toggle('sel', b.dataset.type === formType));
     $('fCats').innerHTML = catsFor(formType).map(c =>
       `<button type="button" class="chip ${c.name === selectedCat ? 'sel' : ''}" data-cat="${esc(c.name)}">${esc(c.emoji)} ${esc(c.name)}</button>`).join('');
+    const groups = allGroups();
+    $('fGroupWrap').classList.toggle('hidden', !groups.length);
+    if (!groups.length) return;
+    const catG = catOf(selectedCat).group || '';
+    const cur = formGroup === null ? catG : formGroup;
+    $('fGroup').innerHTML = groups.concat(['']).map(g => `<button type="button" class="chip ${g === cur ? 'sel' : ''}" data-group="${esc(g)}">${g ? esc(g) : 'No group'}</button>`).join('') +
+      `<span class="sub" style="margin:0;align-self:center">${formGroup === null ? (catG ? `from ${esc(selectedCat)}` : '') : 'this transaction only'}</span>`;
   }
   let pendingRef = '', returnToMail = false;
   function openSheet(exp, pre) {
@@ -1576,6 +1634,7 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     const today = new Date();
     $('fDate').value = src && src.date ? src.date : (monthKey(current) === monthKey(today) ? isoDate(today) : isoDate(current));
     selectedCat = src && src.category ? src.category : (catsFor(formType)[0] || {}).name;
+    formGroup = exp && exp.group !== undefined ? exp.group : null;
     $('fDelete').classList.toggle('hidden', !exp);
     let lastAcct = ''; try { lastAcct = localStorage.getItem(KEY + ':acct') || ''; } catch (e) {}
     const defAcct = src ? (src.account || '') : (acctFilter || (acctById(lastAcct) ? lastAcct : ''));
@@ -1604,11 +1663,14 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
       comment: $('fComment').value.trim()
     };
     if (!data.comment) delete data.comment;
+    const ownGroup = formGroup !== null && formGroup !== (catOf(selectedCat).group || '');
+    if (ownGroup) data.group = formGroup;
     try { localStorage.setItem(KEY + ':acct', data.account); } catch (e) {}
     try { localStorage.setItem(KEY + ':pay', data.payment); } catch (e) {}
     if (editingId) {
       const e = state.expenses.find(x => x.id === editingId);
       if (!data.comment) delete e.comment;
+      if (!ownGroup) delete e.group;
       Object.assign(e, data);
       let msg = 'Updated';
       const wasCat = e.category;
@@ -1642,6 +1704,12 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
   $('fCats').addEventListener('click', e => {
     const b = e.target.closest('[data-cat]'); if (!b) return;
     selectedCat = b.dataset.cat; renderFormCats();
+  });
+  $('fGroup').addEventListener('click', e => {
+    const b = e.target.closest('[data-group]'); if (!b) return;
+    const g = b.dataset.group;
+    formGroup = g === (catOf(selectedCat).group || '') ? null : g;   // same as the category: just follow it
+    renderFormCats();
   });
   $('fDelete').addEventListener('click', () => {
     if (!confirm('Delete this transaction?')) return;
@@ -2509,6 +2577,8 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
   $('search').addEventListener('input', renderList);
   $('amtBar').addEventListener('click', e => {
     if (e.target.closest('[data-review]')) { reviewOnly = !reviewOnly; renderList(); return; }
+    const gb = e.target.closest('[data-grp]');
+    if (gb) { setGroupFilter(gb.dataset.grp === '*' ? null : gb.dataset.grp); return; }
     const b = e.target.closest('[data-min]'); if (!b) return;
     if (b.dataset.min !== 'custom') { setMinAmt(+b.dataset.min); return; }
     const v = prompt('Show transactions over this amount', minAmt || '');
@@ -2611,6 +2681,11 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     $('catFixed').classList.toggle('hidden', !FIXED_CATS.has(c.name));
     $('catKind').value = c.kind; $('catKind').disabled = FIXED_CATS.has(c.name);
     $('catExclude').checked = !!c.exclude;
+    $('catGroup').value = c.group || '';
+    const gs = [...new Set(allGroups().concat(GROUP_SUGGEST))];
+    $('groupList').innerHTML = gs.map(g => `<option value="${esc(g)}">`).join('');
+    $('catGroupPick').innerHTML = gs.map(g => `<button type="button" class="chip" data-pickgroup="${esc(g)}">${esc(g)}</button>`).join('') +
+      `<button type="button" class="chip" data-pickgroup="">No group</button>`;
     const n = i >= 0 ? state.expenses.filter(e => e.category === c.name).length : 0;
     const r = i >= 0 ? Object.values(state.rules).filter(v => v === c.name).length : 0;
     $('catUse').textContent = i >= 0 ? `Used by ${n} transaction${n === 1 ? '' : 's'}${r ? ` and ${r} learned rule${r === 1 ? '' : 's'}` : ''}. Renaming updates all of them.` : '';
@@ -2630,6 +2705,7 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     const x = e.target.closest('[data-editcat]'); if (x) openCatSheet(+x.dataset.editcat);
   }));
   $('catCancel').addEventListener('click', closeAll);
+  $('catGroupPick').addEventListener('click', e => { const b = e.target.closest('[data-pickgroup]'); if (b) $('catGroup').value = b.dataset.pickgroup; });
   // rename every use of a category: transactions, learned rules, earlier renames
   function renameCategory(from, to) {
     state.expenses.forEach(e => { if (e.category === from) e.category = to; });
@@ -2644,6 +2720,9 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     const name = $('catName').value.replace(/\s+/g, ' ').trim();
     const emoji = $('catEmoji').value.trim() || '🏷️';
     const kind = $('catKind').value, exclude = $('catExclude').checked;
+    // reuse the existing spelling of a group ("hospital" → "Hospital")
+    const g0 = $('catGroup').value.replace(/\s+/g, ' ').trim().slice(0, 24);
+    const group = allGroups().concat(GROUP_SUGGEST).find(g => g.toLowerCase() === g0.toLowerCase()) || g0;
     if (!name) { toast('Type a category name'); return; }
     if (state.categories.some(c => c !== old && c.name.toLowerCase() === name.toLowerCase())) { toast(`“${name}” already exists`); return; }
     if (old) {
@@ -2653,10 +2732,10 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
       if (stranded) { toast(`${stranded} ${lost === 'credit' ? 'income' : 'expense'} entr${stranded === 1 ? 'y uses' : 'ies use'} it — choose “Both” or move them first`, 4000); return; }
       if ((catsFor('debit').length <= 1 && old.kind !== 'credit' && kind === 'credit') || (catsFor('credit').length <= 1 && old.kind !== 'debit' && kind === 'debit')) { toast('Keep at least one expense and one income category'); return; }
       if (name !== old.name) renameCategory(old.name, name);
-      const { exclude: _x, ...rest } = old;
-      state.categories[catEditing] = { ...rest, emoji, name, kind, ...(exclude ? { exclude: true } : {}) };
+      const { exclude: _x, group: _g, ...rest } = old;
+      state.categories[catEditing] = { ...rest, emoji, name, kind, ...(exclude ? { exclude: true } : {}), ...(group ? { group } : {}) };
     } else {
-      state.categories.push({ emoji, name, kind, ...(exclude ? { exclude: true } : {}) });
+      state.categories.push({ emoji, name, kind, ...(exclude ? { exclude: true } : {}), ...(group ? { group } : {}) });
     }
     tidyTransfers();   // review marks follow the "not counted" setting
     save(); closeAll(); renderSettings(); render();
@@ -2703,9 +2782,9 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
   }
   $('exportCsv').addEventListener('click', () => {
     const q = v => `"${String(v).replace(/"/g, '""')}"`;
-    const rows = [['Date', 'Type', 'Category', 'Amount', 'Currency', 'Payment', 'Account', 'Note', 'Comment']]
+    const rows = [['Date', 'Type', 'Category', 'Group', 'Amount', 'Currency', 'Payment', 'Account', 'Note', 'Comment']]
       .concat([...state.expenses].sort((a, b) => a.date.localeCompare(b.date))
-        .map(e => [e.date, e.type === 'credit' ? 'Credit' : 'Debit', e.category, e.amount, state.settings.currency, e.payment || '', (acctById(e.account) || {}).name || '', e.note, e.comment || '']));
+        .map(e => [e.date, e.type === 'credit' ? 'Credit' : 'Debit', e.category, groupOf(e), e.amount, state.settings.currency, e.payment || '', (acctById(e.account) || {}).name || '', e.note, e.comment || '']));
     download(`transactions-${isoDate(new Date())}.csv`, rows.map(r => r.map(q).join(',')).join('\n'), 'text/csv');
   });
   $('backup').addEventListener('click', () =>
@@ -3111,9 +3190,9 @@ Rules: include only completed transactions — skip OTPs, offers, ads, due/bill 
     const rows = state.expenses.filter(e => e.date >= cutoff).sort((a, b) => b.date.localeCompare(a.date)).slice(0, 1500);
     const months = {};
     state.expenses.forEach(e => { const m = e.date.slice(0, 7); months[m] = months[m] || { out: 0, in: 0 }; if (counted(e)) months[m][e.type === 'credit' ? 'in' : 'out'] += e.amount; });
-    const data = rows.map(e => [e.date, e.type === 'credit' ? 'in' : 'out', e.amount, e.category, acctName(acctById(e.account)) || e.payment || '', String(e.note || '').slice(0, 60), String(e.comment || '').slice(0, 40)].join(' | ')).join('\n');
+    const data = rows.map(e => [e.date, e.type === 'credit' ? 'in' : 'out', e.amount, e.category + (groupOf(e) ? ' [' + groupOf(e) + ']' : ''), acctName(acctById(e.account)) || e.payment || '', String(e.note || '').slice(0, 60), String(e.comment || '').slice(0, 40)].join(' | ')).join('\n');
     const sys = `You are Kharcha, a helpful personal-finance assistant for an Indian user. Answer in short, plain sentences using ₹ amounts with Indian digit grouping. Base every number on the data; if the data doesn't cover it, say so. Categories "Transfer" (moves between own accounts) and "Investment" are not spending. Today is ${isoDate(new Date())}.`;
-    const user = `Monthly totals (all data, excluding transfers): ${Object.keys(months).sort().map(m => `${m}: out ₹${Math.round(months[m].out)}, in ₹${Math.round(months[m].in)}`).join('; ')}\n\nEntries (date | in/out | amount | category | account | description | user note), newest first${rows.length >= 1500 ? ', most recent 1500 only' : ''}:\n${data}\n\nQuestion: ${q}`;
+    const user = `Monthly totals (all data, excluding transfers): ${Object.keys(months).sort().map(m => `${m}: out ₹${Math.round(months[m].out)}, in ₹${Math.round(months[m].in)}`).join('; ')}\n\nEntries (date | in/out | amount | category [group] | account | description | user note), newest first${rows.length >= 1500 ? ', most recent 1500 only' : ''}:\n${data}\n\nQuestion: ${q}`;
     return aiRaw({ model: aiCfg().model || 'deepseek-chat', temperature: 0.2, max_tokens: 1500, messages: [{ role: 'system', content: sys }, { role: 'user', content: user }] });
   }
   function renderAi() {
