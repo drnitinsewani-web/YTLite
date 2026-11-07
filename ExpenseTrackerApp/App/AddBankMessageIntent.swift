@@ -31,7 +31,7 @@ struct AddBankMessageIntent: AppIntent {
         if text.isEmpty {
             return .result(dialog: "Copy a bank message first (touch and hold it in Messages → Copy), then ask me again.")
         }
-        if SharedInbox.append(text) {
+        if SharedInbox.appendMessage(text) {
             return .result(dialog: fromClipboard ? "Sent the copied message to Kharcha. It's added when you open the app." : "Saved to Kharcha.")
         }
         return .result(dialog: "Couldn't save the message. Open Kharcha once and try again.")

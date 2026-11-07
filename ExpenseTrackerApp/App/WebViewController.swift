@@ -118,8 +118,17 @@ final class WebViewController: UIViewController, WKScriptMessageHandler, WKUIDel
         }
     }
 
+    /// Asks the page first: it says no while one of its sheets is open or its saved data couldn't be
+    /// read, and everything stays in the inbox until it sends "inboxOpen".
     private func deliverSharedTexts() {
         guard jsReady else { return }
+        webView.evaluateJavaScript("window.expensesCanReceive ? window.expensesCanReceive() : true") { [weak self] result, _ in
+            guard let self = self, self.jsReady, (result as? Bool) ?? true else { return }
+            self.sendInbox()
+        }
+    }
+
+    private func sendInbox() {
         // Statement files shared from Mail / Files / WhatsApp open the import screen
         for file in SharedInbox.takeFiles() {
             let js = "window.expensesReceiveFile && window.expensesReceiveFile(\(jsString(file.name)), \(jsString(file.data.base64EncodedString())))"
@@ -146,6 +155,8 @@ final class WebViewController: UIViewController, WKScriptMessageHandler, WKUIDel
             sendFolderInfo()
             folderRetries = 0
             checkFolder()
+        case "inboxOpen":
+            deliverSharedTexts()
         case "backups":
             let list = (try? JSONSerialization.data(withJSONObject: StateStore.backups())).flatMap { String(data: $0, encoding: .utf8) } ?? "[]"
             webView.evaluateJavaScript("window.expensesBackups && window.expensesBackups(\(list))")

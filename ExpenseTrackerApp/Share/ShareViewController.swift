@@ -131,9 +131,13 @@ final class ShareViewController: UIViewController {
     }
 
     private func finish(with texts: [String]) {
+        // a file that couldn't be saved is mentioned (and the card stays open) so it gets shared again
+        var missed = ""
+        if failedFiles == 1 { missed = " One file couldn’t be saved: share it again." }
+        else if failedFiles > 1 { missed = " \(failedFiles) files couldn’t be saved: share them again." }
         if savedFiles > 0 && texts.isEmpty {
-            show(title: "Statement saved ✓",
-                 detail: "Open Kharcha to import \(savedFiles == 1 ? "it" : "them").", autoClose: true)
+            show(title: failedFiles > 0 ? "\(savedFiles) of \(savedFiles + failedFiles) statements saved" : "Statement saved ✓",
+                 detail: "Open Kharcha to import \(savedFiles == 1 ? "it" : "them")." + missed, autoClose: failedFiles == 0)
             return
         }
         if failedFiles > 0 && texts.isEmpty {
@@ -144,9 +148,9 @@ final class ShareViewController: UIViewController {
             show(title: "Nothing to save", detail: "Share a bank SMS or a CSV / Excel statement.", autoClose: false)
             return
         }
-        let saved = SharedInbox.append(texts.joined(separator: "\n\n"))
+        let saved = SharedInbox.appendMessage(texts.joined(separator: "\n\n"))
         if saved {
-            show(title: "Saved ✓", detail: "Open Kharcha to review and add it.", autoClose: true)
+            show(title: "Saved ✓", detail: "Open Kharcha to review and add it." + missed, autoClose: failedFiles == 0)
         } else {
             show(title: "Couldn’t save", detail: "The app group isn’t set up for this build.", autoClose: false)
         }

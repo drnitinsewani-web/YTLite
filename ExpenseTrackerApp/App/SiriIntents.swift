@@ -60,7 +60,7 @@ struct AddTransactionWithCommentIntent: AppIntent {
             return .result(dialog: "Copy the bank message first (touch and hold it in Messages, then Copy), and ask me again.")
         }
         let note = comment.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard let data = try? JSONSerialization.data(withJSONObject: ["text": text, "comment": note]),
+        guard let data = try? JSONSerialization.data(withJSONObject: ["text": text, "comment": note, "date": KharchaData.today()]),
               let json = String(data: data, encoding: .utf8),
               SharedInbox.append("kharcha:msg:" + json) else {
             return .result(dialog: "Couldn't save it. Open Kharcha once and try again.")
@@ -94,7 +94,7 @@ enum KharchaData {
     struct Summary { let spent: Double; let income: Double; let top: (name: String, amount: Double)?; let toReview: Int }
 
     static func today() -> String {
-        let f = DateFormatter(); f.calendar = Calendar(identifier: .gregorian); f.dateFormat = "yyyy-MM-dd"
+        let f = DateFormatter(); f.calendar = Calendar(identifier: .gregorian); f.locale = Locale(identifier: "en_US_POSIX"); f.dateFormat = "yyyy-MM-dd"
         return f.string(from: Date())
     }
 
@@ -116,9 +116,10 @@ enum KharchaData {
         guard let json = StateStore.load(), let data = json.data(using: .utf8),
               let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let expenses = obj["expenses"] as? [[String: Any]] else { return nil }
-        let excluded = Set(((obj["categories"] as? [[String: Any]]) ?? [])
-            .filter { ($0["exclude"] as? Bool) == true }.compactMap { $0["name"] as? String })
-            .union(["Transfer", "Investment", "Loan"])
+        // as in the app: the categories marked "not counted" (Transfer, Investment and Loan unless you changed that)
+        let cats = (obj["categories"] as? [[String: Any]]) ?? []
+        var excluded = Set(cats.filter { ($0["exclude"] as? Bool) == true }.compactMap { $0["name"] as? String })
+        if cats.isEmpty { excluded = ["Transfer", "Investment", "Loan"] }
         let month = String(today().prefix(7))
         let num: (Any?) -> Double = { v in (v as? Double) ?? Double("\(v ?? 0)") ?? 0 }
         // as in the app: money back linked to a payment (refundOf) is not income, and the payment

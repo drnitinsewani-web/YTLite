@@ -849,6 +849,12 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
   // If saved data exists but can't be read, Kharcha must not start empty and save that emptiness over
   // it (or sync it to iCloud): `loadProblem` stops all saving until the data is restored.
   let loadProblem = '';
+  // the iPhone app's inbox was offered while a sheet was open or nothing could be saved (expensesCanReceive)
+  let inboxWaiting = false;
+  function inboxRetry() {
+    if (!inboxWaiting || loadProblem || document.querySelector('.sheet.open')) return;
+    inboxWaiting = false; native({ type: 'inboxOpen' });
+  }
   function load() {
     const saved = NATIVE ? window.__EXPENSES_NATIVE_STATE__ : null;
     // nothing saved yet (a new install): the app passes null (older versions the text "null")
@@ -873,7 +879,7 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     dataStamp++;
     if (loadProblem) return;   // never overwrite data that couldn't be read
     const json = JSON.stringify(state);
-    if (NATIVE) native({ type: 'save', data: json });
+    if (NATIVE) { native({ type: 'save', data: json }); inboxRetry(); }   // e.g. restored from a backup
     try { localStorage.setItem(KEY, json); }
     catch (e) {
       if (!NATIVE) toast('Could not save — storage full or unavailable');
@@ -2508,7 +2514,7 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     if (!a.bal) return null;
     let v = a.bal.amount, n = 0;
     state.expenses.forEach(e => {
-      if (e.account !== a.id || e.date <= a.bal.date) return;
+      if (e.account !== a.id || e.date < a.bal.date || (e.date === a.bal.date && !(a.bal.at && (e.createdAt || 0) > a.bal.at))) return;
       v += e.type === 'credit' ? e.amount : -e.amount; n++;
     });
     return { amount: Math.round(v * 100) / 100, n };
@@ -2646,7 +2652,7 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
   function showBg() { $('sheetBg').style.display = 'block'; }
   function closeAll() {
     imp.tagOnImport = null;
-    setTimeout(() => runFolderQueue(), 500);   // statements from the folder wait while a sheet is open
+    setTimeout(() => { runFolderQueue(); inboxRetry(); }, 500);   // statements from the folder and the app's inbox wait while a sheet is open
     $('sheet').classList.remove('open'); $('impSheet').classList.remove('open'); $('smsSheet').classList.remove('open'); $('mailSheet').classList.remove('open'); $('catSheet').classList.remove('open');
     $('sheetBg').style.display = 'none';
     document.activeElement && document.activeElement.blur();
@@ -3394,13 +3400,16 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     const byUtr = new Map();   // every entry per UPI reference (an SMS and the app's entry can share one)
     state.expenses.forEach(e => utrsOf(e).forEach(u => { const k = u + '|' + e.type; byUtr.set(k, (byUtr.get(k) || []).concat(e)); }));
     const withUtr = x => utrsOf(x).flatMap(u => byUtr.get(u + '|' + x.type) || []);
+    // the time a bank SMS printed (kept in its reference when it has no reference number of its own)
+    const smsTime = r => (/^sms\|/.test(r || '') && (String(r).match(/\|(\d{1,2}:\d{2}(?::\d{2})?)(?:\||$)/) || [])[1]) || '';
     const used = new Set();
     items.forEach(x => {
       x.match = null;
       if (refs.has(x.ref)) { x.dup = 'exact'; x.include = false; return; }
       if (x.ref && gone.has(refHash(x.ref))) { x.dup = 'deleted'; x.include = false; return; }
       // same UPI reference number, same direction and amount: the same payment seen from another source
-      const viaUtr = withUtr(x).find(e => !used.has(e.id) && amtIs(e, x.amount));
+      // (a few days apart at most: a 12-digit account or phone number in the text repeats every month)
+      const viaUtr = withUtr(x).find(e => !used.has(e.id) && amtIs(e, x.amount) && dayDiff(e.date, x.date) <= 4);
       if (viaUtr) { x.dup = 'utr'; x.match = viaUtr.id; used.add(viaUtr.id); x.include = false; return; }
       // an account number the app doesn't know yet (x.acctDigits) is a different account from every existing one
       const otherAcct = e => x.account ? (e.account && e.account !== x.account)
@@ -3413,12 +3422,14 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
       // (only references both sources printed as the UPI reference — PhonePe/GPay statements, SMS
       // "RRN/UTR/Ref" — count; a stray 12-digit number in a narration might be something else)
       const otherRef = e => x.utrSure && e.utrSure && x.utr && e.utr && x.utr !== e.utr;
+      // two bank alerts printed at different times are two payments (₹250 at Starbucks at 10:30 and at 18:45)
+      const xTime = smsTime(x.ref), otherTime = e => !!xTime && refsOf(e).some(r => { const t = smsTime(r); return !!t && t !== xTime; });
       const sameAmt = state.expenses.filter(e => !used.has(e.id) && e.type === x.type && amtIs(e, x.amount) && !otherAcct(e));
       const hasBal = v => v != null && !isNaN(v);
       let m = hasBal(x.balance) && sameAmt.find(e => hasBal(e.balance) && Math.abs(e.balance - x.balance) < 0.011 && dayDiff(e.date, x.date) <= 4);
       if (m) x.dup = 'balance';
       else {
-        m = sameAmt.find(e => e.date === x.date && !(hasBal(x.balance) && hasBal(e.balance)) && !otherRef(e));
+        m = sameAmt.find(e => e.date === x.date && !(hasBal(x.balance) && hasBal(e.balance)) && !otherRef(e) && !otherTime(e));
         x.dup = m ? 'maybe' : false;
       }
       if (m) { used.add(m.id); x.match = m.id; }
@@ -3789,16 +3800,21 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
   // ---------- bank SMS ----------
   const SMS_SKIP = /\b(otp|one time password|will be (debited|credited|deducted)|is due|due (date|on|by)|minimum (amount )?due|total (amount )?due|declined|failed|unsuccessful|could not be|has been blocked|requested (money|rs|inr)|collect request|payment request|mandate (has been )?(created|registered|set up)|e-?mandate)\b/i;
   const SMS_PROMO = /\b(up ?to|at ?least|earn|win|won|chance|offers?|apply( now)?|eligible|pre-?approved|instant loan|loan (of|up)|credit limit|reward points?|voucher|coupon|discount|sale|shop now|click|download|unsubscribe|t&c|terms (and|&) conditions|newsletter|webinar|invest now|hurry|limited period)\b/i;
-  const SMS_DEBIT = /\b(debited|debit(ed)? by|debit\s*(of\s*)?(inr|rs\.?|₹)|dr\.?\s*(inr|rs\.?|₹)|sent|spent|paid|withdrawn|withdrawal|purchase|txn of|transferred to|trf to|used (at|for)|charged|deducted)\b/i;
-  const SMS_CREDIT = /\b(credited|credit\s*(of\s*)?(inr|rs\.?|₹)|cr\.?\s*(inr|rs\.?|₹)|received|deposited|refunded|refund of|added to|has been credited|reversed)\b/i;
-  const AMT = /(?:rs\.?|inr|₹|usd|us\$|\$)\s*([\d,]+(?:\.\d{1,2})?)/gi;
+  const SMS_DEBIT = /\b(debited|debit(ed)? by|debit\s*(of\s*)?(inr|rs\.?|₹)|dr\.?\s*(inr|rs\.?|₹)|dr\.?\s*from|sent|spent|paid|withdrawn|withdrawal|purchase|txn of|transferred to|trf to|used (at|for)|thank you for using (?:\w+ ){0,5}card|charged|deducted)\b/i;
+  const SMS_CREDIT = /\b(credited|credit\s*(of\s*)?(inr|rs\.?|₹)|cr\.?\s*(inr|rs\.?|₹)|cr\.?\s*to|received|deposited|refunded|refund of|added to|has been credited|reversed)\b/i;
+  const AMT = /(?:rs\.?|inr|₹|usd|us\$|\$)\s*:?\s*([\d,]+(?:\.\d{1,2})?)/gi;
+  // Footers and side remarks in real alerts that must not make Kharcha skip them ("Never share your OTP,
+  // PIN or CVV", "Bank never asks for your OTP", "Reward points will be credited…"). An OTP message still
+  // names its OTP elsewhere ("123456 is your OTP…").
+  const SMS_FOOTER = /\b(?:never|do not|don[’']?t)\s+(?:share|disclose|reveal|asks?(?:\s+(?:you\s+)?for)?)\s+(?:your\s+|the\s+|this\s+|any\s+)?(?:otp|one time password|pin|cvv|password)(?:\s*(?:,|\/|or|and|&)\s*(?:otp|one time password|pin|cvv|card details|passwords?))*(?![\s:]*(?:is\s+)?\d{4,8}\b)|\b(?:(?:reward\s+)?points?|cash ?back)\b[^.]{0,40}?\bwill be credited\b/gi;
+  const smsSkipText = (t, email) => { const s = t.replace(SMS_FOOTER, ' '); return email ? s.replace(/\b(otp|one time password)\b/gi, '') : s; };
   const BAD_PARTY = /^(a\/?c\b|ac\b|acct|account|your|xx|\*|card\b|bank\b|you\b|sms\b|block\b|call\b|the\b|upi\b|imps\b|neft\b|rs\b|inr\b)/i;
 
   function smsAmount(t) {
     let m; AMT.lastIndex = 0;
     while ((m = AMT.exec(t))) {
       const before = t.slice(Math.max(0, m.index - 22), m.index);
-      if (/bal|balance|limit|avl|avail/i.test(before)) continue;
+      if (/\b(?:bal(?:ance)?|limit|lmt|avl|avail(?:able)?)\b|avlbal/i.test(before)) continue;
       const n = parseFloat(m[1].replace(/,/g, ''));
       if (n > 0) return n;
     }
@@ -3807,10 +3823,20 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
   }
   function smsDate(t, fallback) {
     const re = /\b(\d{4}-\d{2}-\d{2}|\d{1,2}[-\/.]\d{1,2}[-\/.]\d{2,4}|\d{1,2}[- ]?[A-Za-z]{3}[a-z]*[- ,']?\d{2,4}|[A-Za-z]{3}[a-z]* \d{1,2},? \d{4})\b/g;
+    const tomorrow = isoDate(new Date(Date.now() + 864e5));
+    const fmt = state.settings.currency === 'USD' ? 'mdy' : 'dmy';   // US banks write 11/06/2026 for 6 Nov
     let m;
     while ((m = re.exec(t))) {
-      const d = parseDate(m[1], 'dmy');
-      if (d && d <= isoDate(new Date(Date.now() + 864e5))) return d;
+      const noYear = t[re.lastIndex] === ':' && m[1].match(/^(\d{1,2})[- ]?([A-Za-z]{3})[a-z]* \d{2}$/);
+      if (noYear) {   // "05 Nov 10:15": the time, not the year: this year's (or last year's) 5 Nov
+        const mi = MONTHS.indexOf(noYear[2].toLowerCase()), y = new Date().getFullYear();
+        let d = mi < 0 ? null : mkDate(y, mi + 1, noYear[1]);
+        if (d && d > tomorrow) d = mkDate(y - 1, mi + 1, noYear[1]);
+        if (d) return d;
+        continue;
+      }
+      const d = parseDate(m[1], fmt) || parseDate(m[1], fmt === 'mdy' ? 'dmy' : 'mdy');
+      if (d && d <= tomorrow) return d;
     }
     return fallback || isoDate(new Date());
   }
@@ -3819,8 +3845,10 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     if (m && type === 'debit') return m[1].trim();
     const re = /\b(?:to|at|towards|by|from|in favou?r of|info)\s*[:-]?\s+(?:vpa\s+)?(.+?)(?=\s*(?:\.\s|\.?\s*rrn|\.?\s*ref|\.?\s*utr|\bon\s+\d|\bon\s+[a-z]{3}\b|\bvia\b|\bupi\b|\(|;|,|\bavl|\bavail|\bbal\b|\.\s*$|\.[A-Z]|$|\s-\s))/gi;
     while ((m = re.exec(t))) {
-      const c = m[1].replace(/\S+@\S+/g, ' ').replace(/\s+/g, ' ').trim().replace(/^(neft|imps|upi|rtgs|ach|inft)[\/-]+/i, '').replace(/[.\-]+$/, '');
-      if (c.length < 2 || /^\d/.test(c) || BAD_PARTY.test(c) || /a\/c|\*\d|x{2,}\d/i.test(c)) { re.lastIndex = m.index + 2; continue; }
+      let c = m[1].replace(/\S+@\S+/g, ' ').replace(/\s+/g, ' ').trim().replace(/^(neft|imps|upi|rtgs|ach|inft)[\/-]+/i, '').replace(/[.\-]+$/, '');
+      const vpa = c.length < 2 && (m[1].match(/(?:^|\s)([a-z][a-z._-]{2,})@[a-z]/i) || [])[1];
+      if (vpa) c = vpa;
+      if (c.length < 2 || /^\d/.test(c) || BAD_PARTY.test(c) || /a\/c|\bac\s*[x*]*\d|\*\d|\bx+\d/i.test(c) || /^(clearing|realisation|realization|revers\w*|refund)\b/i.test(c)) { re.lastIndex = m.index + 2; continue; }
       return c.slice(0, 60);
     }
     return '';
@@ -3843,7 +3871,10 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
   function parseSms(raw, opts = {}) {
     const t = String(raw).replace(/\s+/g, ' ').trim();
     if (!t) return null;
-    const skip = opts.email ? t.replace(/\b(otp|one time password)\b/gi, '') : t;
+    let skip = smsSkipText(t, opts.email);
+    // money given back for a failed payment ("credited … towards reversal of failed UPI txn") did arrive
+    const giveBack = /\b(revers\w*|refund\w*)\b/i.test(skip) && /\b(credited|reversed|refunded)\b/i.test(skip) && !/\b(will|would|shall) be\b/i.test(skip);
+    if (giveBack) skip = skip.replace(/\b(failed|unsuccessful|declined)\b/gi, '');
     if (SMS_SKIP.test(skip)) return null;
     // Real alerts carry an account/card reference (XX8810, *9226, UPI/RRN/UTR). Emails must have one;
     // anything with promotional wording must have one too.
@@ -3852,54 +3883,82 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     const di = t.search(SMS_DEBIT), ci = t.search(SMS_CREDIT);
     if (di < 0 && ci < 0) return null;
     const type = ci < 0 || (di >= 0 && di < ci) ? 'debit' : 'credit';
+    if (giveBack && type !== 'credit' && SMS_SKIP.test(smsSkipText(t, opts.email))) return null;   // "txn of Rs 500 failed … reversed"
     const amount = Math.round(smsAmount(t) * 100) / 100;
     if (!(amount > 0)) return null;
     const date = smsDate(t, opts.fallbackDate);
     const party = smsParty(t, type) || narrationParty(raw);
     const bank = bankName(t);   // the sender's own signature ("- Axis Bank"), not a payee such as "HDFC ERGO"
-    const acctKind = /credit ?card|card (no\.?|number|ending|x+|\*)|\bcard x+\d|\bcc\s*\d*x+/i.test(t) ? 'card' : 'bank';
+    // a debit card spends from the bank account; "HDFC Bank Card 1234" is HDFC's credit card
+    const debitCard = /\bdebit\s*card\b/i.test(t) && !/\bcredit\s*card\b/i.test(t);
+    const acctKind = !debitCard && /credit ?card|card (no\.?|number|ending|x+|\*)|\bcard x+\d|\bcc\s*\d*x+|\bbank card\s*[x*]*\d{4}\b/i.test(t) ? 'card' : 'bank';
     const balM = acctKind === 'card' ? null :
-      t.match(/\b(?:avl\.?|avail(?:able)?|a\/c|clear|closing|total)?\s*bal(?:ance)?\.?(?:\s+(?:is|of))?\s*[:\-]?\s*(?:rs\.?|inr|₹)\s*([\d,]+(?:\.\d{1,2})?)/i);
+      t.match(/\b(?:avl\.?|avail(?:able)?|a\/c|clear|closing|total)?\s*bal(?:ance)?\.?(?:\s+(?:is|of))?\s*[:\-]?\s*(?:rs\.?|inr|₹)\s*:?\s*([\d,]+(?:\.\d{1,2})?)/i);
     const smsBalance = balM ? parseFloat(balM[1].replace(/,/g, '')) : null;
-    const rrn = (t.match(/\b(?:rrn|ref(?:erence)?(?:\s*no)?|utr|upi ref(?: no)?|txn id|upi)[\s.:#-]*([A-Za-z0-9]{6,})/i) || [])[1] || '';
-    // UPI reference (UTR/RRN) is 12 digits; it is what PhonePe/GPay statements show too
-    const utr = /^\d{12}$/.test(rrn) ? rrn : ((t.match(/\b\d{12}\b/) || [])[0] || '');
+    // a reference has digits ("UPI AutoPay", "UPI transfer", "Info: UPI-SWIGGY" are words) and isn't an account (XX1234)
+    const rrn = (t.match(/\b(?:rrn|ref(?:erence)?(?:\s*no)?|utr|upi ref(?: no)?|txn id|upi)[\s.:#-]*(?!x+\d)((?=[A-Za-z]*\d)[A-Za-z0-9]{6,})/i) || [])[1] || '';
+    // UPI reference (UTR/RRN) is 12 digits; it is what PhonePe/GPay statements show too. Otherwise only a
+    // 12-digit number right after a reference word ("UPI/P2M/631012345678", "Ref. No. 631012345678"),
+    // never a beneficiary's account number or a 91… phone number in the footer.
+    const utr = /^\d{12}$/.test(rrn) ? rrn : (() => {
+      const re = /\b(?:upi|imps|rrn|utr|ref|txn|transaction|p2[am])\b([^\d]{0,12})(\d{12})\b/gi; let m;
+      while ((m = re.exec(t))) if (!/call|sms|a\/c|acc|\bto\b|mob|ph/i.test(m[1])) return m[2];
+      return '';
+    })();
     const payment = /\bupi\b|vpa|@/i.test(t) ? 'UPI' : /\batm\b|cash withdrawal|withdrawn/i.test(t) ? 'Cash' : /\bcard\b/i.test(t) ? 'Card' : 'Bank';
     const desc = party ? `${type === 'credit' ? 'From' : 'To'} ${party}${bank ? ' · ' + bank : ''}` : t.slice(0, 120);
     let cat = classify(party || t, type);
-    // "We have received your payment … towards your credit card" is a bill payment, not income
-    if (type === 'credit' && /credit ?card|card (ending|no\.?|number|x+|\*)|towards (your )?\w*\s*card/i.test(t) &&
-        /payment|received|thank/i.test(t) && catsFor('credit').some(c => c.name === 'Transfer')) cat = 'Transfer';
+    // "We have received your payment … towards your credit card" is a bill payment, not income; a refund
+    // or cashback on the card is money back (as in card statements)
+    const cardCredit = type === 'credit' && /credit ?card|card (ending|no\.?|number|x+|\*)|towards (your )?\w*\s*card/i.test(t);
+    const moneyBack = /\b(refund\w*|cash ?back|revers\w*|chargeback)\b/i.test(t);
+    if (cardCredit && !moneyBack && /payment|received|thank/i.test(t) && catsFor('credit').some(c => c.name === 'Transfer')) cat = 'Transfer';
+    else if (cardCredit && moneyBack && /^Other/.test(cat) && catsFor('credit').some(c => c.name === 'Refund')) cat = 'Refund';
+    // without a reference, the time and balance tell two same-day payments of one amount apart
+    const time = (t.match(/\b(?:[01]?\d|2[0-3]):[0-5]\d(?::[0-5]\d)?\b/) || [])[0] || '';
+    const tail = party ? party.toLowerCase() + (time ? '|' + time : '') + (smsBalance != null ? '|' + smsBalance.toFixed(2) : '') : t.toLowerCase();
     const acct = matchAccount(t);
     return { date, desc, type, amount, payment, category: cat, touched: false, account: acct.id, acctDigits: acct.digits, ...(acct.learn ? { learn: acct.learn } : {}),
       acctBank: bankFromText(bank) || bankFromText(noVpa(t)) || bank, acctKind, balance: smsBalance, seq: 0, utr, utrSure: !!utr && utr === rrn, app: appFrom(t),
-      ref: rrn ? `sms|${rrn}|${type}|${amount.toFixed(2)}` : `sms|${date}|${type}|${amount.toFixed(2)}|${(party || t).toLowerCase()}` };
+      ref: rrn ? `sms|${rrn}|${type}|${amount.toFixed(2)}` : `sms|${date}|${type}|${amount.toFixed(2)}|${tail}` };
   }
   // "Avl bal in A/c XX8810 as on 06-NOV-26: INR 1,23,456.78" — a balance reply without a transaction
-  function parseBalanceSms(raw) {
+  // Not a balance: a minimum / average balance to keep, a card's or loan's outstanding amount.
+  const BAL_NOT = /\b(?:minimum|min|average|avg|monthly|maintain\w*|required|below|shortfall|outstanding|due|loan|charges?|penalty|credit\s*card)\b/i;
+  function parseBalanceSms(raw, fallbackDate) {
     const t = String(raw).replace(/\s+/g, ' ').trim();
-    if (!t || SMS_SKIP.test(t)) return null;
-    const m = t.match(/\bbal(?:ance)?\b.{0,60}?(?:rs\.?|inr|₹)\s*([\d,]+(?:\.\d{1,2})?)(\s*(?:dr|cr)\b)?/i);
+    if (!t || SMS_SKIP.test(smsSkipText(t)) || /\bcredit\s*card\b/i.test(t)) return null;
+    const re = /(?:\bavl\.?\s*|\bavail(?:able)?\s*|\b)bal(?:ance)?\b(.{0,60}?)(?:rs\.?|inr|₹)\s*:?\s*([\d,]+(?:\.\d{1,2})?)(\s*(?:dr|cr)\b)?/gi;
+    let m;
+    while ((m = re.exec(t)) && BAL_NOT.test(t.slice(Math.max(0, m.index - 40), m.index) + ' ' + m[1])) re.lastIndex = m.index + 3;
     if (!m) return null;
+    m = [m[0], m[2], m[3]];
     const acct = matchAccount(t);
     if (!acct.digits && !acct.id) return null;
     let amount = parseFloat(m[1].replace(/,/g, ''));
     if (/dr/i.test(m[2] || '')) amount = -amount;
-    return { balance: amount, date: smsDate(t), account: acct.id, acctDigits: acct.digits, ...(acct.learn ? { learn: acct.learn } : {}), acctBank: (b => bankFromText(b) || bankFromText(t) || b)(bankName(t)), acctKind: 'bank' };
+    return { balance: amount, date: smsDate(t, fallbackDate), account: acct.id, acctDigits: acct.digits, ...(acct.learn ? { learn: acct.learn } : {}), acctBank: (b => bankFromText(b) || bankFromText(t) || b)(bankName(t)), acctKind: 'bank' };
   }
   let lastBalanceReplies = [];
-  function parseSmsBatch(text) {
+  // fallbackDate / a "kharcha:on:2026-11-07" line before a message (the day the iPhone app got it): the date
+  // of messages that print none
+  function parseSmsBatch(text, fallbackDate) {
     const chunks = String(text).replace(/\r/g, '').split(/\n\s*\n/).map(c => c.trim()).filter(Boolean);
-    const out = [];
+    const out = [], seen = new Set();
     lastBalanceReplies = [];
+    let on = /^\d{4}-\d{2}-\d{2}$/.test(fallbackDate || '') ? fallbackDate : '';
+    const keep = x => { if (seen.has(x.ref)) return; seen.add(x.ref); out.push(x); };   // the same message twice (automation and Share)
     chunks.forEach(c => {
+      const mk = c.match(/^kharcha:on:(\d{4}-\d{2}-\d{2})[ \t]*(?:\n|$)/);
+      if (mk) { on = mk[1]; c = c.slice(mk[0].length).trim(); if (!c) return; }
+      const o = on ? { fallbackDate: on } : {};
       const lines = c.split('\n').map(l => l.trim()).filter(Boolean);
-      const each = lines.map(l => parseSms(l));
-      if (lines.length > 1 && each.filter(Boolean).length >= 2) each.forEach(x => x && out.push(x));
+      const each = lines.map(l => parseSms(l, o));
+      if (lines.length > 1 && each.filter(Boolean).length >= 2) each.forEach(x => x && keep(x));
       else {
-        const x = parseSms(c);
-        if (x) out.push(x);
-        else { const b = parseBalanceSms(c); if (b) lastBalanceReplies.push(b); }
+        const x = parseSms(c, o);
+        if (x) keep(x);
+        else { const b = parseBalanceSms(c, on); if (b) lastBalanceReplies.push(b); }
       }
     });
     return out;
@@ -3908,22 +3967,24 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
   function applyBalanceReplies() {
     if (!lastBalanceReplies.length) return '';
     ensureAccounts(lastBalanceReplies);
-    const done = [];
+    const done = [], older = [];
     lastBalanceReplies.forEach(b => {
-      const a = acctById(b.account); if (!a) return;
+      const a = acctById(b.account); if (!a || a.kind === 'card') return;   // a card's "balance" is what you owe
       if (b.learn) learnDigits(a.id, b.learn);
-      if (!a.bal || b.date >= a.bal.date) a.bal = { amount: b.balance, date: b.date, seq: 1e9 };
-      done.push(`${acctName(a)} ••${a.digits[0]} ${fmt(b.balance)}`);
+      // the balance as of now (at): a later SMS or statement row of the same day replaces it, and entries
+      // added after it move the estimate
+      if (!a.bal || b.date >= a.bal.date) { a.bal = { amount: b.balance, date: b.date, seq: 0, at: Date.now() }; done.push(`${acctName(a)} ••${a.digits[0]} ${fmt(b.balance)}`); }
+      else older.push(`${acctName(a)} ••${a.digits[0]}`);
     });
     lastBalanceReplies = [];
     save(); render();
-    return done.length ? 'Balance updated: ' + done.join(', ') : '';
+    return done.length ? 'Balance updated: ' + done.join(', ') : older.length ? `Not updated: Kharcha has a newer balance for ${older.join(', ')}` : '';
   }
   function openSmsPreview(text, source) {
     const items = parseSmsBatch(text);
     const msg = applyBalanceReplies();
     if (msg) toast(msg);
-    return openItemsPreview(items, source) || !!msg;
+    return openItemsPreview(items, source) ? 'review' : !!msg;
   }
   // PhonePe statement: open the review, or (nothing new) tag the matching entries straight away.
   // When the review opens, matching entries are tagged only once the user taps Import.
@@ -3970,8 +4031,9 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
   $('smsGo').addEventListener('click', () => {
     const t = $('smsText').value.trim();
     if (!t) { toast('Paste a bank SMS first'); return; }
-    if (!openSmsPreview(t)) { if (aiOn()) { closeAll(); aiReadLines([t], 'the pasted text'); } else toast('No transaction or balance found. Is this a bank message?'); }
-    else if (!$('impSheet').classList.contains('open')) closeAll();
+    const opened = openSmsPreview(t);
+    if (!opened) { if (aiOn()) { closeAll(); aiReadLines([t], 'the pasted text'); } else toast('No transaction or balance found. Is this a bank message?'); }
+    else if (opened !== 'review') closeAll();
   });
 
   $('impMap').addEventListener('change', e => {
@@ -5032,7 +5094,7 @@ Rules: include only completed transactions — skip OTPs, offers, ads, due/bill 
   }
   let aiBusy = false;
   // lines: text lines (SMS, PDF lines or spreadsheet rows); context: statement header sent with every part
-  async function aiReadLines(lines, label, context = '') {
+  async function aiReadLines(lines, label, context = '', comment = '') {
     if (aiBusy) { toast('DeepSeek is still working…'); return; }
     lines = lines.map(l => String(l).trim()).filter(Boolean);
     const parts = [];
@@ -5048,6 +5110,7 @@ Rules: include only completed transactions — skip OTPs, offers, ads, due/bill 
     catch (e) { aiBusy = false; toast(e.message, 5000); return; }
     aiBusy = false;
     $('toast').classList.remove('show');
+    if (comment) uniq.forEach(x => { x.comment = comment; });   // spoken to Siri with the message
     if (!openItemsPreview(uniq, `🤖 DeepSeek · ${label}`, true)) toast(uniq.length ? 'Everything here is already in Kharcha' : 'DeepSeek found no transactions in it', 3500);
   }
   function aiSplit(lines) {
@@ -5288,14 +5351,14 @@ Rules: include only completed transactions — skip OTPs, offers, ads, due/bill 
   // Text from the Share Extension or the "Add Bank Message" Shortcuts action (iOS app).
   // "Hey Siri, add this transaction to Kharcha": copied message + spoken comment. Already in Kharcha
   // (statement, SMS, PhonePe…)? The comment goes on that entry; otherwise it is added, already reviewed.
-  function addMessageWithComment(text, comment) {
-    comment = String(comment || '').trim().slice(0, 300);
-    if (/^(no|none|nothing|skip|no comment)\.?$/i.test(comment)) comment = '';
-    const items = parseSmsBatch(text);
+  const sirisComment = c => { c = String(c || '').trim().slice(0, 300); return /^(no|none|nothing|skip|no comment)\.?$/i.test(c) ? '' : c; };
+  function addMessageWithComment(text, comment, date) {
+    comment = sirisComment(comment);
+    const items = parseSmsBatch(text, date);
     const bal = applyBalanceReplies();
     if (!items.length) return bal ? 0 : -1;
     markDups(items);
-    linkDuplicates(items);
+    if (linkDuplicates(items)) updateBalances(items.filter(x => x.match));
     const commentCat = type => {   // category you used before with the same comment
       const cnt = {};
       state.expenses.forEach(e => { if (e.type === type && e.comment && !/^Other/.test(e.category) && e.comment.toLowerCase() === comment.toLowerCase()) cnt[e.category] = (cnt[e.category] || 0) + 1; });
@@ -5318,13 +5381,22 @@ Rules: include only completed transactions — skip OTPs, offers, ads, due/bill 
     else { save(); render(); toast(msg, 4000); }
     return items.length;
   }
+  // What may go to DeepSeek when Kharcha can't read a message itself: never the OTPs, mandates and failed
+  // payments it skips on purpose.
+  const aiShareText = text => String(text || '').replace(/^kharcha:on:.*$/gm, '').split(/\n\s*\n/).map(c => c.trim())
+    .filter(c => c && !SMS_SKIP.test(smsSkipText(c.replace(/\s+/g, ' ')))).join('\n\n');
+  // The iPhone app asks before handing over its inbox (shared messages, Siri, statement files): not while a
+  // sheet is open (that would close it, losing what you typed) nor while nothing can be saved. The page asks
+  // for it again once that's over (inboxRetry).
+  window.expensesCanReceive = () => { const ok = !loadProblem && !sheetOpen(); if (!ok) inboxWaiting = true; return ok; };
   window.expensesReceiveShared = text => {
     // copied message + comment from Siri ("Add this transaction to Kharcha")
     const withComment = [];
     text = String(text).replace(/^kharcha:msg:(\{.*\})\s*$/gm, (_m, j) => { try { withComment.push(JSON.parse(j)); } catch (e) {} return ''; }).trim();
     withComment.forEach(m => {
-      if (addMessageWithComment(m.text, m.comment) < 0) {
-        if (aiOn()) aiReadLines([m.text], 'the message from Siri');
+      if (addMessageWithComment(m.text, m.comment, m.date) < 0) {
+        const ai = aiShareText(m.text);
+        if (aiOn() && ai) aiReadLines([ai], 'the message from Siri', '', sirisComment(m.comment));
         else toast('Siri sent a message Kharcha couldn’t read as a transaction', 4000);
       }
     });
@@ -5347,17 +5419,21 @@ Rules: include only completed transactions — skip OTPs, offers, ads, due/bill 
     }
     const items = parseSmsBatch(text);
     const balMsg = applyBalanceReplies();
-    if (!items.length) { if (!balMsg && aiOn()) aiReadLines([text], 'the shared message'); else toast(balMsg || 'No transaction found in the shared message'); return; }
+    const ai = !items.length && !balMsg && aiOn() && aiShareText(text);
+    if (!items.length) { if (ai) aiReadLines([ai], 'the shared message'); else toast(balMsg || 'No transaction found in the shared message'); return; }
     if (balMsg) toast(balMsg);
     if (state.settings.autoAddShared) {
       markDups(items);
-      const merged = linkDuplicates(items);
-      if (merged) { updateBalances(items.filter(x => x.match)); save(); }
+      // only the date, type and amount match an entry ("possible duplicate"): you decide in the review
+      const unsure = items.filter(x => x.dup === 'maybe'), sure = items.filter(x => x.dup !== 'maybe');
+      const merged = linkDuplicates(sure);
+      if (merged) { updateBalances(sure.filter(x => x.match)); save(); }
       const fresh = items.filter(x => !x.dup);
-      const skipped = items.length - fresh.length;
-      if (!fresh.length) { toast(`Skipped ${skipped} message${skipped > 1 ? 's' : ''} already recorded`); return; }
+      const skipped = sure.length - fresh.length;
       const total = fresh.reduce((t, x) => t + (x.type === 'debit' ? x.amount : 0), 0);
-      addItems(fresh, `Added ${fresh.length} from messages${total ? ' · spent ' + fmt(total) : ''}${skipped ? ` · ${skipped} duplicate skipped` : ''}`);
+      if (fresh.length) addItems(fresh, `Added ${fresh.length} from messages${total ? ' · spent ' + fmt(total) : ''}${skipped ? ` · ${skipped} duplicate skipped` : ''}`);
+      if (unsure.length) openItemsPreview(unsure, `${unsure.length} message${unsure.length > 1 ? 's' : ''} that may already be in Kharcha`);
+      else if (!fresh.length) toast(`Skipped ${skipped} message${skipped > 1 ? 's' : ''} already recorded`);
     } else {
       openItemsPreview(items, `${items.length} shared message${items.length > 1 ? 's' : ''}`);
     }
