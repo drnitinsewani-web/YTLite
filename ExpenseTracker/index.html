@@ -887,6 +887,19 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     const mine = ownAccountFor(k);
     return mine ? `${acctName(mine)} ••${mine.digits[0]} (yours)` : '';
   }
+  // The other side of a self transfer: one of your accounts (object), true for "your own name",
+  // or null. Never the account the entry itself belongs to.
+  function selfTransferTo(e) {
+    const own = ownAccountFor(payerKey(e));
+    if (own && own.id !== e.account) return own;
+    const note = e.note || e.desc || '';
+    const accts = state.accounts || [];
+    for (const d of acctDigitsIn(note, false)) {   // masked numbers only: plain long numbers are often references
+      const hit = accts.filter(a => a.id !== e.account && (a.digits || []).some(z => d.length >= 3 && (d.endsWith(z) || z.endsWith(d))));
+      if (hit.length === 1) return hit[0];
+    }
+    return isSelf(note) ? true : null;
+  }
   // A payee known only by a masked number that is exactly one of your own accounts
   function ownAccountFor(k) {
     const m = String(k || '').match(/^ACCT (\d+)$/);
@@ -975,8 +988,13 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
   }
   // A debit in one of your accounts and the same amount credited to a different account of yours
   // within 3 days is a cross entry: both become Transfer. Entries with their own comment are left alone.
+  // "To SWIGGY" / "From Rohit Lahoti": a named person or shop on the other side, so never a self transfer
+  const namedParty = e => {
+    const m = String(e.note || '').match(/^(?:To|From|Paid to|Received from)\s+([^·]+)/i);
+    return !!m && !isSelf(m[1]) && !ownAccountFor(payerKey(e)) && !/^[x*•\s\d]+$/i.test(m[1].trim()) && !/^bank account\s+[x*]/i.test(m[1].trim());
+  };
   function pairCrossEntries() {
-    const ok = e => e.account && counted(e) && e.amount >= 100 && (!e.comment || CROSS_RE.test(e.comment));
+    const ok = e => e.account && counted(e) && e.amount >= 100 && (!e.comment || CROSS_RE.test(e.comment)) && !namedParty(e);
     const debits = state.expenses.filter(e => e.type === 'debit' && ok(e));
     const credits = state.expenses.filter(e => e.type === 'credit' && ok(e));
     const used = new Set(); let n = 0;
@@ -995,14 +1013,25 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
   // Keep categories and review marks consistent with cross-entry comments and excluded categories.
   function tidyTransfers() {
     let changed = 0;
-    // money sent to (or received from) one of your own accounts by masked number is a transfer,
-    // unless you gave it another category or a comment of your own
+    // Money between your own accounts is never spending or income: payments to/from your own name,
+    // or naming one of your other accounts (masked "XXXXXXXXXX38", "A/c XX9226", a full number).
+    // Skipped when you picked the category yourself or wrote a comment of your own.
+    selfRe = selfPatterns();
+    // earlier versions paired named-party payments by amount alone; restore those
     state.expenses.forEach(e => {
-      if (!/^Other/.test(e.category) || (e.comment && !CROSS_RE.test(e.comment))) return;
-      const own = ownAccountFor(payerKey(e));
-      if (!own || own.id === e.account || !catsFor(e.type).some(c => c.name === 'Transfer')) return;
+      if (e.category !== 'Transfer' || e.userCat || !/^Cross entry ↔ /.test(e.comment || '') || !namedParty(e)) return;
+      if (selfTransferTo(e)) return;
+      delete e.comment; e.category = classify(e.note, e.type);
+      if (needsReview(e)) e.unread = true;
+      changed++;
+    });
+    state.expenses.forEach(e => {
+      if (e.category === 'Transfer' || e.userCat || (e.comment && !CROSS_RE.test(e.comment))) return;
+      if (!catsFor(e.type).some(c => c.name === 'Transfer') || catOf(e.category).exclude) return;
+      const other = selfTransferTo(e);
+      if (!other) return;
       e.category = 'Transfer'; delete e.unread;
-      if (!e.comment) e.comment = `Cross entry ↔ ${acctLabel(own)}`;
+      if (!e.comment) e.comment = other === true ? 'Self transfer' : `Cross entry ↔ ${acctLabel(other)}`;
       changed++;
     });
     state.expenses.forEach(e => {
@@ -1316,7 +1345,11 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
   function matchAccount(text, longNumbers) {
     const cands = acctDigitsIn(text, longNumbers);
     for (const c of cands) for (const a of state.accounts || []) for (const d of a.digits || []) {
-      if (d && (c.endsWith(d) || (c.length >= 3 && d.endsWith(c)))) return { id: a.id, digits: c.slice(-4) };
+      if (d && (c.endsWith(d) || (c.length >= 3 && d.endsWith(c)))) {
+        // an account known only by PhonePe's 2 visible digits learns its real ending ("••38" → "••7238")
+        if (c.length >= 4 && (a.digits || []).every(z => z.length < 4)) a.digits = [c.slice(-4), ...a.digits];
+        return { id: a.id, digits: c.slice(-4) };
+      }
     }
     return { id: '', digits: cands.length ? cands[0].slice(-4) : '' };
   }
@@ -1770,6 +1803,7 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
       const e = state.expenses.find(x => x.id === editingId);
       if (!data.comment) delete e.comment;
       if (!ownGroup) delete e.group;
+      if (data.category !== editingOrigCat) data.userCat = true;   // tidyTransfers leaves it alone
       Object.assign(e, data);
       let msg = 'Updated';
       const wasCat = e.category;
@@ -2852,7 +2886,13 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     toast(state.settings.reviewMin ? `New imports over ${fmt(state.settings.reviewMin).replace(/\.00$/, '')} will be marked to review` : 'Review marking turned off');
   });
   $('budget').addEventListener('change', e => { state.settings.budget = Math.max(0, parseFloat(e.target.value) || 0); save(); toast('Budget saved'); });
-  $('selfName').addEventListener('change', e => { state.settings.selfName = e.target.value.trim(); selfRe = selfPatterns(); save(); toast('Saved'); });
+  $('selfName').addEventListener('change', e => {
+    state.settings.selfName = e.target.value.trim(); selfRe = selfPatterns();
+    const before = state.expenses.filter(x => x.category === 'Transfer').length;
+    tidyTransfers(); save(); render();
+    const n = state.expenses.filter(x => x.category === 'Transfer').length - before;
+    toast(n ? `Saved · ${n} payment${n > 1 ? 's' : ''} to/from yourself marked as Transfer` : 'Saved');
+  });
   // ---------- category editor ----------
   const FIXED_CATS = new Set(['Transfer', 'Other', 'Other Income']);   // names used in Kharcha's own logic
   let catEditing = -1;
