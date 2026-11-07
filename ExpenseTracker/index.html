@@ -2548,7 +2548,10 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     $('filterSummary').innerHTML = filtering && shown.length
       ? `${shown.length} transaction${shown.length > 1 ? 's' : ''}${minAmt ? ` over ${fmt(minAmt).replace(/\.00$/, '')}` : ''}${si
         ? ` · put in <b>${fmt(si.out)}</b>${si.back ? ` · came back <b style="color:var(--income)">${fmt(si.back)}</b>` : ''}`
-        : `${fd.length || !fc.length ? ` · spent <b>${fmt(sum(fd))}</b>` : ''}${fc.length ? ` · received <b style="color:var(--income)">${fmt(sum(fc))}</b>` : ''}`}`
+        : `${fd.length || !fc.length ? ` · spent <b>${fmt(sum(fd))}</b>` : ''}${fc.length ? ` · received <b style="color:var(--income)">${fmt(sum(fc))}</b>` : ''}`}${
+        // Spent / Income narrowed further (amount, search, group, review): say what the whole total is
+        (kindFilter === 'spent' || kindFilter === 'income') && (minAmt || q || reviewOnly || groupFilter !== null)
+          ? ` <span class="sub" style="display:inline">· of ${fmt(kindFilter === 'spent' ? spent : income)} ${periodWord()} (other filters on)</span>` : ''}`
       : '';
     if (!shown.length) {
       $('list').innerHTML = `<div class="empty"><div>🪙</div>${filtering ? 'No transactions match this filter' : fa && !payerFilter ? `Nothing in ${esc(acctName(fa))} ${periodWord()}.` : `Nothing ${periodWord()}.<br>Tap <b>+</b> to add, or <b>📥</b> to import a bank statement.`}</div>`;
