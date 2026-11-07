@@ -655,7 +655,7 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
 
   // Keyword rules used to auto-categorise statement lines. First match wins.
   const AUTO_RULES = [
-    ['Investment', /eq trade|upstox|zerodha|groww|angel ?one|angel broking|icici ?sec|icicidirect|hdfc ?sec|kotak ?sec|5paisa|\bdhan\b|paytm money|indmoney|kuvera|smallcase|mutual fund|\bmf\b|\bsip\b|bse limited|bse star|nse clearing|indian clearing|\bfd\b|fixed deposit|fd booking|rd instal|recurring deposit|\bppf\b|\bnps\b|sukanya|vanguard|fidelity|schwab|robinhood|brokerage/],
+    ['Investment', /safe ?gold|digital gold|augmont|mmtc|jar app|eq trade|upstox|zerodha|groww|angel ?one|angel broking|icici ?sec|icicidirect|hdfc ?sec|kotak ?sec|5paisa|\bdhan\b|paytm money|indmoney|kuvera|smallcase|mutual fund|\bmf\b|\bsip\b|bse limited|bse star|nse clearing|indian clearing|\bfd\b|fixed deposit|fd booking|rd instal|recurring deposit|\bppf\b|\bnps\b|sukanya|vanguard|fidelity|schwab|robinhood|brokerage/],
     ['Fees & Charges', /mtf inte|mtf pledge|pledge chg|\bchg\b|charges|annual fee|\bamc\b|gst on|sms alert|penalty|late fee|min(imum)? bal|non ?maint|processing fee|convenience fee|overdraft fee|service fee/],
     ['Transfer', /payment received.*thank|thank you for (your )?payment|autopay si|auto ?debit cc|\batd\b.*\bcc|cc ?billpay|credit ?card|cc ?(payment|pymt|bill)|card ?(payment|pymt)|cred club|\bcred\b|\bself\b|own a\/?c|own account|sweep/],
     ['Salary', /salary|\bsal\b|payroll|stipend|wages/],
@@ -1506,6 +1506,54 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     }
     return lines;
   }
+  // Account used for a PhonePe payment: "XXXXXX9226", "XXXXXXXXXX38" (only 2 digits shown), "Wallet".
+  function phonePeAccount(instrument) {
+    const ins = String(instrument || '').trim();
+    if (/wallet/i.test(ins)) {
+      const w = (state.accounts || []).find(a => a.kind === 'wallet' && /phonepe/i.test(a.name));
+      return { account: w ? w.id : '', acctDigits: '', walletName: 'PhonePe Wallet' };
+    }
+    const d = ins.replace(/\D/g, '');
+    if (d.length < 2) return { account: '', acctDigits: '', walletName: '' };
+    const hits = (state.accounts || []).filter(a => (a.digits || []).some(z => z.endsWith(d) || (d.length >= 3 && d.endsWith(z))));
+    return { account: hits.length === 1 ? hits[0].id : '', acctDigits: d.slice(-4), walletName: '' };
+  }
+  function makePhonePeItem({ date, details, txnId, utr, type, instrument, amount }) {
+    details = String(details || '').replace(/\s+/g, ' ').trim();
+    utr = String(utr || '').replace(/\D/g, '');
+    const party = (details.match(/^(?:Paid to|Received from|Sent to|Payment to|Transfer(?:red)? (?:to|from))\s+(.+)$/i) || [])[1] || '';
+    const acct = phonePeAccount(instrument);
+    let category = classify(party || details, type);
+    if (/wallet top-?up/i.test(details) && catsFor(type).some(c => c.name === 'Transfer')) category = 'Transfer';   // bank → PhonePe wallet
+    const note = (party ? `${type === 'credit' ? 'From' : 'To'} ${party}` : details || 'PhonePe') + (utr ? ` · UTR ${utr}` : '') + ' · PhonePe';
+    return { date, desc: note, type, amount, payment: acct.walletName ? 'Wallet' : 'UPI', walletName: acct.walletName,
+      category, touched: false, utr, account: acct.account, acctDigits: acct.account ? '' : acct.acctDigits, acctBank: '', acctKind: 'bank',
+      ref: utr ? `upi|${utr}|${type}|${amount.toFixed(2)}` : `phonepe|${txnId || date + '|' + amount.toFixed(2) + '|' + details}` };
+  }
+  // PhonePe CSV/Excel export: Date, Time, Transaction Details, Transaction ID, UTR, Transaction Type,
+  // Credit/debit instrument, Amount (with a few title/footer lines around the table).
+  function phonePeHeader(rows) {
+    for (let i = 0; i < Math.min(rows.length, 20); i++) {
+      const h = (rows[i] || []).map(normH);
+      if (h.includes('utr') && h.some(x => /transaction id/.test(x)) && h.some(x => /instrument/.test(x))) return i;
+    }
+    return -1;
+  }
+  function parsePhonePeRows(rows, hi) {
+    const h = rows[hi].map(normH);
+    const col = re => h.findIndex(x => re.test(x));
+    const c = { date: col(/^date$/), details: col(/transaction details|details/), id: col(/transaction id/), utr: col(/^utr/),
+      type: col(/transaction type|^type$/), ins: col(/instrument/), amt: col(/^amount/) };
+    const items = [];
+    rows.slice(hi + 1).forEach(r => {
+      if (!Array.isArray(r)) return;
+      const date = parseDate(r[c.date], 'dmy'); if (!date) return;
+      const amount = Math.round(Math.abs(parseAmount(r[c.amt])) * 100) / 100; if (!(amount > 0)) return;
+      const type = /^cr/i.test(String(r[c.type]).trim()) ? 'credit' : 'debit';
+      items.push(makePhonePeItem({ date, details: r[c.details], txnId: r[c.id], utr: r[c.utr], type, instrument: r[c.ins], amount }));
+    });
+    return items;
+  }
   const isPhonePe = lines => { const t = lines.join(' '); return /phonepe/i.test(t) || (/transaction id/i.test(t) && /utr no/i.test(t) && /(paid by|debited from|credited to)/i.test(t)); };
   // PhonePe statement: each transaction starts with a date ("Nov 05, 2026" or "05 Nov 2026"),
   // then "Paid to X" / "Received from X" / "Mobile recharged …", DEBIT or CREDIT, ₹amount,
@@ -1534,16 +1582,9 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
       if (!desc) desc = (t.match(/(Paid to|Received from|Sent to|Transfer(?:red)? to|Transfer(?:red)? from)\s+([^₹]+?)(?=\s+(?:Transaction ID|UTR|Paid by|Debited from|Credited to|DEBIT|CREDIT|₹|$))/i) || [, '', ''])[2];
       const party = (desc.match(/^(?:Paid to|Received from|Sent to|Payment to|Transfer(?:red)? (?:to|from))\s+(.+)$/i) || [])[1] || '';
       const utr = (t.match(/UTR\s*No\.?\s*:?\s*([0-9]{8,})/i) || [])[1] || '';
-      const txn = (t.match(/Transaction ID\s*:?\s*([A-Z0-9]{8,})/i) || [])[1] || '';
-      const am2 = t.match(/(?:Paid by|Debited from|Credited to|Received in)\s+(?:a\/c\s*)?(?:x+|\*+)?\s*(\d{3,6})\b/i);
-      const wallet = /(?:Paid by|Debited from|Credited to)\s+(?:PhonePe\s+)?Wallet/i.test(t);
-      const acct = am2 ? matchAccount('A/c XX' + am2[1]) : { id: '', digits: '' };
-      const note = (party ? `${type === 'credit' ? 'From' : 'To'} ${party}` : desc || 'PhonePe') + (utr ? ` · UTR ${utr}` : '') + ' · PhonePe';
-      const w = wallet && (state.accounts || []).find(a => a.kind === 'wallet' && /phonepe/i.test(a.name));
-      items.push({ date, desc: note, type, amount, payment: wallet ? 'Wallet' : 'UPI', walletName: wallet ? 'PhonePe Wallet' : '',
-        category: classify(party || desc, type), touched: false, utr,
-        account: w ? w.id : acct.id, acctDigits: am2 ? am2[1].slice(-4) : '', acctBank: '', acctKind: 'bank',
-        ref: utr ? `upi|${utr}|${type}|${amount.toFixed(2)}` : `phonepe|${txn || date + '|' + amount + '|' + note}` });
+      const txnId = (t.match(/Transaction ID\s*:?\s*([A-Z0-9]{8,})/i) || [])[1] || '';
+      const am2 = t.match(/(?:Paid by|Debited from|Credited to|Received in)\s+(?:a\/c\s*)?((?:x+|\*+)?\s*\d{2,6}|(?:PhonePe\s+)?Wallet)\b/i);
+      items.push(makePhonePeItem({ date, details: party ? desc : desc, txnId, utr, type, instrument: am2 ? am2[1] : '', amount }));
     });
     return items;
   }
@@ -1680,8 +1721,10 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
       // same UPI reference number, same direction and amount: the same payment seen from another source
       const viaUtr = utrsOf(x).map(u => byUtr.get(u + '|' + x.type)).find(e => e && !used.has(e.id) && Math.abs(e.amount - x.amount) < 0.005);
       if (viaUtr) { x.dup = 'utr'; x.match = viaUtr.id; used.add(viaUtr.id); x.include = false; return; }
-      const sameAmt = state.expenses.filter(e => !used.has(e.id) && e.type === x.type && Math.abs(e.amount - x.amount) < 0.005 &&
-        (!x.account || !e.account || e.account === x.account));
+      // an account number the app doesn't know yet (x.acctDigits) is a different account from every existing one
+      const otherAcct = e => x.account ? (e.account && e.account !== x.account)
+        : (x.acctDigits && e.account && !((acctById(e.account) || {}).digits || []).some(z => z.endsWith(x.acctDigits) || x.acctDigits.endsWith(z)));
+      const sameAmt = state.expenses.filter(e => !used.has(e.id) && e.type === x.type && Math.abs(e.amount - x.amount) < 0.005 && !otherAcct(e));
       const hasBal = v => v != null && !isNaN(v);
       let m = hasBal(x.balance) && sameAmt.find(e => hasBal(e.balance) && Math.abs(e.balance - x.balance) < 0.011 && dayDiff(e.date, x.date) <= 4);
       if (m) x.dup = 'balance';
@@ -1871,6 +1914,13 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     try { rows = await readStatement(file); }
     catch (e) { toast(e.message && e.message.length > 20 ? e.message : 'Could not read that file'); return; }
     rows = (rows || []).filter(r => Array.isArray(r) && r.some(c => String(c).trim() !== ''));
+    const ph = phonePeHeader(rows);
+    if (ph >= 0) {
+      const items = parsePhonePeRows(rows, ph);
+      $('toast').classList.remove('show');
+      if (!openItemsPreview(items, `PhonePe · ${file.name}`, true)) toast(items.length ? 'Everything in this statement is already in Kharcha' : 'No transactions found in this file');
+      return;
+    }
     const det = detectColumns(rows);
     imp.rows = rows; imp.name = file.name; imp.filter = 'all'; imp.mode = 'file'; imp.acctOverride = '';
     imp.header = det ? det.header : 0;
