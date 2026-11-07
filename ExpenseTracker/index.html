@@ -871,7 +871,7 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
   const APPS = {
     phonepe: { re: new RegExp(String.raw`${VIA}phone\s?pe\b|\bphone\s?pe\s+wallet\b|\s·\sPhonePe$`, 'i'),
       badge: '<span class="appb phonepe" title="PhonePe">Pe</span>', words: ['phonepe'] },
-    gpay: { re: new RegExp(String.raw`${VIA}(?:google\s?pay|gpay)\b`, 'i'),
+    gpay: { re: new RegExp(String.raw`${VIA}(?:google\s?pay|gpay)\b|\s·\sGPay$`, 'i'),
       badge: '<span class="appb gpay" title="Google Pay"><b>G</b>Pay</span>', words: ['gpay', 'googlepay'] },
     paytm: { re: new RegExp(String.raw`${VIA}paytm\b(?!\s+payments?\s+bank)|\bpaytm\s+wallet\b`, 'i'),
       badge: '<span class="appb paytm" title="Paytm">Pay<b>tm</b></span>', words: ['paytm'] } };
@@ -1226,7 +1226,12 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
         if (!w) { w = { id: uid(), name: x.walletName, emoji: '👛', kind: 'wallet', digits: [] }; state.accounts = (state.accounts || []).concat(w); created.push(w); }
         x.account = w.id; return;
       }
-      if (x.account || !x.acctDigits) return;
+      if (x.account) {   // a statement names the bank of an account created without one: fill it in
+        const a = acctById(x.account), bank = String(x.acctBank || '').trim();
+        if (a && bank && /^(bank account|account|card|credit card)$/i.test(a.name) && bank.length <= 40) a.name = bank;
+        return;
+      }
+      if (!x.acctDigits) return;
       const d = x.acctDigits;
       let a = (state.accounts || []).find(y => y.digits.some(z => z.endsWith(d) || d.endsWith(z)));
       if (!a) {
@@ -1831,17 +1836,18 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     const hits = (state.accounts || []).filter(a => (a.digits || []).some(z => z.endsWith(d) || (d.length >= 3 && d.endsWith(z))));
     return { account: hits.length === 1 ? hits[0].id : '', acctDigits: d.slice(-4), walletName: '' };
   }
-  function makePhonePeItem({ date, details, txnId, utr, type, instrument, amount }) {
+  const APP_LABEL = { phonepe: 'PhonePe', gpay: 'GPay', paytm: 'Paytm' };
+  function makePhonePeItem({ date, details, txnId, utr, type, instrument, amount, app = 'phonepe', bank = '' }) {
     details = String(details || '').replace(/\s+/g, ' ').trim();
     utr = String(utr || '').replace(/\D/g, '');
     const party = (details.match(/^(?:Paid to|Received from|Sent to|Payment to|Transfer(?:red)? (?:to|from))\s+(.+)$/i) || [])[1] || '';
     const acct = phonePeAccount(instrument);
     let category = classify(party || details, type);
     if (/wallet top-?up/i.test(details) && catsFor(type).some(c => c.name === 'Transfer')) category = 'Transfer';   // bank → PhonePe wallet
-    const note = (party ? `${type === 'credit' ? 'From' : 'To'} ${party}` : details || 'PhonePe') + (utr ? ` · UTR ${utr}` : '') + ' · PhonePe';
-    return { date, desc: note, type, amount, app: 'phonepe', payment: acct.walletName ? 'Wallet' : 'UPI', walletName: acct.walletName,
-      category, touched: false, utr, account: acct.account, acctDigits: acct.account ? '' : acct.acctDigits, acctBank: '', acctKind: 'bank',
-      ref: utr ? `upi|${utr}|${type}|${amount.toFixed(2)}` : `phonepe|${txnId || date + '|' + amount.toFixed(2) + '|' + details}` };
+    const note = (party ? `${type === 'credit' ? 'From' : 'To'} ${party}` : details || APP_LABEL[app]) + (utr ? ` · UTR ${utr}` : '') + ' · ' + APP_LABEL[app];
+    return { date, desc: note, type, amount, app, payment: acct.walletName ? 'Wallet' : 'UPI', walletName: acct.walletName,
+      category, touched: false, utr, account: acct.account, acctDigits: acct.account ? '' : acct.acctDigits, acctBank: bank, acctKind: 'bank',
+      ref: utr ? `upi|${utr}|${type}|${amount.toFixed(2)}` : `${app}|${txnId || date + '|' + amount.toFixed(2) + '|' + details}` };
   }
   // PhonePe CSV/Excel export: Date, Time, Transaction Details, Transaction ID, UTR, Transaction Type,
   // Credit/debit instrument, Amount (with a few title/footer lines around the table).
@@ -1864,6 +1870,36 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
       const amount = Math.round(Math.abs(parseAmount(r[c.amt])) * 100) / 100; if (!(amount > 0)) return;
       const type = /^cr/i.test(String(r[c.type]).trim()) ? 'credit' : 'debit';
       items.push(makePhonePeItem({ date, details: r[c.details], txnId: r[c.id], utr: r[c.utr], type, instrument: r[c.ins], amount }));
+    });
+    return items;
+  }
+  // Google Pay statement PDF: "03 May, 2026 Paid to X ₹1,700" / "06:23 AM UPI Transaction ID: 648906570936"
+  // / "Paid by Union Bank of India 0007". The UPI transaction ID is the 12-digit reference banks print too.
+  const isGPay = lines => { const t = lines.join(' '); return /google pay/i.test(t) && /UPI Transaction ID/i.test(t); };
+  function parseGPay(lines) {
+    const DATE = /^(\d{1,2}) ([A-Z][a-z]{2}),? (\d{4})\b/;
+    const recs = []; let cur = null;
+    lines.forEach(l => {
+      if (DATE.test(l)) { cur = { lines: [l] }; recs.push(cur); }
+      else if (cur && !/^(Note:|Page \d|Transaction statement|Date & time|\d{10}, )/i.test(l)) cur.lines.push(l);
+    });
+    const items = [];
+    recs.forEach(r => {
+      const t = r.lines.join(' ').replace(/\s+/g, ' ');
+      const utr = (t.match(/UPI Transaction ID\s*:?\s*(\d{8,})/i) || [])[1];
+      const what = t.match(/\b(Paid to|Sent to|Self transfer to|Received from|Refund from|Self transfer from)\s+(.+?)\s+₹\s*([\d,]+(?:\.\d{1,2})?)/i);
+      if (!utr || !what) return;   // header lines ("01 May 2026 - 31 October 2026 ₹…") are not transactions
+      const dm = t.match(DATE);
+      const date = parseDate(`${dm[1]} ${dm[2]} ${dm[3]}`, 'dmy');
+      const amount = Math.round(parseFloat(what[3].replace(/,/g, '')) * 100) / 100;
+      if (!date || !(amount > 0)) return;
+      const type = /received|refund|transfer from/i.test(what[1]) ? 'credit' : 'debit';
+      // "Paid by Union Bank of India 0007" / "Received in ICICI Bank 7238"
+      const by = t.match(/\b(?:Paid by|Received in|Credited to|Paid from)\s+(.+?)\s+(\d{2,6})\b/i);
+      const details = (/^self transfer/i.test(what[1]) ? (type === 'credit' ? 'Transfer from ' : 'Transfer to ') : (type === 'credit' ? 'Received from ' : 'Paid to ')) + what[2];
+      const it = makePhonePeItem({ date, details, utr, type, instrument: by ? by[2] : '', amount, app: 'gpay', bank: by ? by[1].trim() : '' });
+      if (/^self transfer/i.test(what[1]) && catsFor(type).some(c => c.name === 'Transfer')) it.category = 'Transfer';
+      items.push(it);
     });
     return items;
   }
@@ -2037,7 +2073,10 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
       // an account number the app doesn't know yet (x.acctDigits) is a different account from every existing one
       const otherAcct = e => x.account ? (e.account && e.account !== x.account)
         : (x.acctDigits && e.account && !((acctById(e.account) || {}).digits || []).some(z => z.endsWith(x.acctDigits) || x.acctDigits.endsWith(z)));
-      const sameAmt = state.expenses.filter(e => !used.has(e.id) && e.type === x.type && Math.abs(e.amount - x.amount) < 0.005 && !otherAcct(e));
+      // both carry a UPI reference and they differ: certainly two different payments
+      // (only explicit references: other 12-digit numbers in a narration might not be UPI refs)
+      const otherRef = e => /^\d{12}$/.test(x.utr || '') && /^\d{12}$/.test(e.utr || '') && !utrsOf(e).includes(x.utr) && !utrsOf(x).includes(e.utr);
+      const sameAmt = state.expenses.filter(e => !used.has(e.id) && e.type === x.type && Math.abs(e.amount - x.amount) < 0.005 && !otherAcct(e) && !otherRef(e));
       const hasBal = v => v != null && !isNaN(v);
       let m = hasBal(x.balance) && sameAmt.find(e => hasBal(e.balance) && Math.abs(e.balance - x.balance) < 0.011 && dayDiff(e.date, x.date) <= 4);
       if (m) x.dup = 'balance';
@@ -2228,9 +2267,10 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
       let lines;
       try { lines = await readPdfLines(file); }
       catch (e) { if (!(e && e.message === 'Cancelled')) toast(e && e.message && e.message.length > 15 ? e.message : 'Could not read that PDF'); return; }
+      if (isGPay(lines)) { previewStatement(parseGPay(lines), `Google Pay · ${file.name}`, 'No transactions found in this PDF'); return; }
       if (!isPhonePe(lines)) {
         if (aiOn()) { aiReadLines(lines, file.name, lines.slice(0, 12).join('\n')); return; }
-        toast('This PDF isn’t a PhonePe statement. Download the CSV/Excel version from net banking, or add a DeepSeek key in Settings to read any PDF.', 6000); return;
+        toast('This PDF isn’t a PhonePe or Google Pay statement. Download the CSV/Excel version from net banking, or add a DeepSeek key in Settings to read any PDF.', 6000); return;
       }
       previewStatement(parsePhonePe(lines), `PhonePe · ${file.name}`, 'No transactions found in this PDF');
       return;
