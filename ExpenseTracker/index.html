@@ -77,7 +77,8 @@
   .item .note { color: var(--muted); font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .amt { font-weight: 650; font-variant-numeric: tabular-nums; white-space: nowrap; }
   .amt.credit { color: var(--income); }
-  .amt.excluded { color: var(--muted); font-weight: 500; }
+  .amt.debit { color: var(--danger); }
+  .amt.excluded { opacity: .6; font-weight: 500; }
   .empty { text-align: center; color: var(--muted); padding: 48px 16px; }
   .empty div { font-size: 44px; margin-bottom: 8px; }
   .fab {
@@ -146,6 +147,7 @@
   .mrow .snip { color: var(--muted); font-size: 12px; margin-top: 4px; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; word-break: break-word; }
   .mrow .parsed { font-size: 13px; margin-top: 6px; font-variant-numeric: tabular-nums; }
   .mrow .parsed.credit b { color: var(--income); }
+  .mrow .parsed.debit b { color: var(--danger); }
   .mrow.done { opacity: .55; }
   .balrow { display: grid; grid-template-columns: 1fr auto; gap: 2px 10px; align-items: center; padding: 10px 0; border-bottom: 1px solid var(--glass-line, var(--border)); }
   .balrow:last-child { border-bottom: 0; }
@@ -1015,8 +1017,8 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
   }
 
   function amtHtml(e) {
-    const cls = !counted(e) ? 'excluded' : e.type === 'credit' ? 'credit' : '';
-    const amt = `<div class="amt ${cls}">${e.type === 'credit' ? '+' : ''}${fmt(e.amount)}</div>`;
+    const cls = (e.type === 'credit' ? 'credit' : 'debit') + (counted(e) ? '' : ' excluded');
+    const amt = `<div class="amt ${cls}">${e.type === 'credit' ? '+' : '−'}${fmt(e.amount)}</div>`;
     return e.unread ? `<div class="amtwrap">${amt}<span class="rv">REVIEW</span></div>` : amt;
   }
 
@@ -1060,7 +1062,7 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
       const label = d === today ? 'Today' : d === yest ? 'Yesterday'
         : new Date(d + 'T00:00').toLocaleDateString(undefined, { weekday: 'short', day: 'numeric', month: 'short' });
       const ds = spentOf(groups[d]), di = incomeOf(groups[d]);
-      const right = [ds ? fmt(ds) : '', di ? `<span style="color:var(--income)">+${fmt(di)}</span>` : ''].filter(Boolean).join(' · ');
+      const right = [ds ? `<span style="color:var(--danger)">−${fmt(ds)}</span>` : '', di ? `<span style="color:var(--income)">+${fmt(di)}</span>` : ''].filter(Boolean).join(' · ');
       return `<div class="day"><span>${label}</span><span>${right}</span></div>
         <div class="list">${groups[d].map(e => {
           const c = catOf(e.category);
@@ -1624,7 +1626,7 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
             x.balanceGap ? '<span class="tag warn">balance doesn’t add up here</span>' : ''}${
             acctById(finalAcct(x)) ? `<span class="tag">${esc(acctLabel(acctById(finalAcct(x))))}</span>`
             : x.acctDigits && !imp.acctOverride ? `<span class="tag">New account: ${esc(newAcctLabel(x))}</span>` : ''}</div></div>
-        <div class="amt ${x.type === 'credit' ? 'credit' : ''}">${x.type === 'credit' ? '+' : '−'}${fmt(x.amount)}</div>
+        <div class="amt ${x.type === 'credit' ? 'credit' : 'debit'}">${x.type === 'credit' ? '+' : '−'}${fmt(x.amount)}</div>
         <select aria-label="Category">${opts[x.type].map(c => `<option ${c.name === x.category ? 'selected' : ''} value="${esc(c.name)}">${esc(c.emoji)} ${esc(c.name)}</option>`).join('')}</select>
       </div>`).join('');
     $('impList').innerHTML = rows || '<div class="empty">Nothing here.</div>';
@@ -2205,7 +2207,7 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
           <div class="subj">${esc(it.e.subject || '(no subject)')}</div>
           <div class="meta">${esc(sender)} · ${when}</div>
           <div class="snip">${esc(it.e.text)}</div>
-          <div class="parsed ${it.x.type === 'credit' ? 'credit' : ''}">${amt}${it.skipped ? '<span class="tag warn">skipped by auto-sync</span>' : ''}</div>
+          <div class="parsed ${it.x.type === 'credit' ? 'credit' : 'debit'}">${amt}${it.skipped ? '<span class="tag warn">skipped by auto-sync</span>' : ''}</div>
         </div>
         ${added ? '<span class="tag">Added ✓</span>' : `<button class="chip sel" data-madd="${i}">Add</button>`}
       </div>`;
