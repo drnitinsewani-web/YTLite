@@ -346,6 +346,113 @@
     body::before { animation: none; }
     .sheet, .fab, nav button::before, .btn { transition: none; }
   }
+
+  /* ================= Analysis charts ================= */
+  /* Chart colours, checked with a colour-vision validator against the cards' light and dark surfaces.
+     Meaning colours: income green, spending coral, net (saved) in ink: they differ in lightness, so
+     red–green colour blindness still separates them. The 7 category colours (blue, aqua, violet, cyan,
+     yellow, magenta, brown: a fixed order, never cycled) pass for neighbours, including the donut's
+     wrap-around (colour-vision ΔE ≥ 12, normal ≥ 19), any two differ by ≥ 10 for normal vision, and
+     every one sits clear of the meaning colours and the grey of "Others" (OKLab ΔE ≥ 15), so no
+     category looks like "spending", "income" or "net" on the cards beside it. Every chart also has a
+     legend or labels, so colour is never the only key. */
+  :root {
+    --vz-inc: #0e6e3a; --vz-spend: #e8644a; --vz-net: #334155; --vz-ctx: #9aa4b2; --vz-other: #a8b0bc;
+    --vz-c1: #2f79d6; --vz-c2: #23ac74; --vz-c3: #6044cd; --vz-c4: #079cba; --vz-c5: #cfaf02; --vz-c6: #a82fae; --vz-c7: #8e4208;
+    --vz-grid: rgba(15,23,42,.08); --vz-axis: rgba(15,23,42,.24); --vz-surface: #f3f6f9; --vz-hover: rgba(15,23,42,.06); --vz-cell: rgba(15,23,42,.06);
+    --vz-heat-hi: var(--text); --an-warn: #b45309;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --vz-inc: #4cc38a; --vz-spend: #e05d40; --vz-net: #cbd5e1; --vz-ctx: #5f6b80; --vz-other: #566175;
+      --vz-c1: #3c86e4; --vz-c2: #228f61; --vz-c3: #8f7ffd; --vz-c4: #0097ac; --vz-c5: #967f06; --vz-c6: #bc45c1; --vz-c7: #944e00;
+      --vz-grid: rgba(255,255,255,.07); --vz-axis: rgba(255,255,255,.2); --vz-surface: #141d2f; --vz-hover: rgba(255,255,255,.07); --vz-cell: rgba(255,255,255,.07);
+      --vz-heat-hi: #0f172a; --an-warn: var(--warn);
+    }
+  }
+  .vz { display: block; overflow: visible; font-family: inherit; -webkit-user-select: none; user-select: none; max-width: 100%; }
+  .vz text { fill: var(--muted); font-size: 10px; }
+  .vz .tk { font-variant-numeric: tabular-nums; }
+  .vz .t1 { fill: var(--text); font-weight: 600; }
+  .vz .grid { stroke: var(--vz-grid); stroke-width: 1; }
+  .vz .axis { stroke: var(--vz-axis); stroke-width: 1; }
+  .vz .band { fill: var(--vz-hover); }
+  .vz .ln { fill: none; stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
+  .vz .dot { stroke: var(--vz-surface); stroke-width: 2; }
+  .vz .xh { stroke: var(--muted); stroke-width: 1; pointer-events: none; }
+  .vz .hit { fill: transparent; cursor: pointer; }
+  .vz .hit:hover, .vz .hit.hot, .vz .hit:focus { fill: var(--vz-hover); }
+  .vz [data-go] { cursor: pointer; outline: none; }
+  .vz .slice:hover, .vz .slice.hot, .vz .slice:focus { opacity: .72; }
+  .vz .cell { fill: var(--vz-cell); }
+  .vz .cell.fut { fill: none; stroke: var(--vz-grid); }
+  .vz .cell.today { stroke: var(--text); stroke-width: 1.5; }
+  .vz .cell[data-go]:hover, .vz .cell[data-pick]:hover, .vz .cell.hot, .vz .cell:focus { stroke: var(--text); stroke-width: 2; }
+  .vz .cell.pick { stroke: var(--text); stroke-width: 2; }
+  .vz[data-heat] { cursor: pointer; }
+  .vz [data-go]:focus-visible { stroke: var(--accent); stroke-width: 2; }
+  .an-chart { margin-top: 4px; touch-action: pan-y; }
+  .an-legend { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; font-size: 12px; color: var(--muted); margin: 10px 0 2px; }
+  .an-legend i { display: inline-block; width: 10px; height: 10px; border-radius: 3px; margin-right: 5px; vertical-align: -1px; }
+  .an-legend i.ln { width: 14px; height: 2px; border-radius: 1px; vertical-align: 3px; }
+  .an-legend i.dash { width: 14px; height: 0; border-radius: 0; border-top: 2px dashed; vertical-align: 3px; }
+  .an-scale { gap: 4px; }
+  .an-scale i { margin: 0; width: 14px; height: 14px; }
+  .an-scale .an-bands { margin-left: 8px; font-variant-numeric: tabular-nums; }
+  .an-tip { font-size: 12px; color: var(--text); min-height: 32px; margin: 4px 0 2px; line-height: 16px; font-variant-numeric: tabular-nums; }
+  .an-tip .chip { padding: 4px 12px; font-size: 13px; margin-left: 6px; vertical-align: middle; }
+  .an-head { display: grid; grid-template-columns: 132px minmax(0, 1fr); gap: 14px; align-items: center; margin-top: 8px; }
+  /* a headline amount stays on one line: when it is wider than its column it is drawn smaller (anFit) */
+  .an-big { font-size: 26px; font-weight: 700; line-height: 1.15; margin: 2px 0 4px; white-space: nowrap; overflow: hidden; }
+  .an-status { font-size: 12px; font-weight: 600; margin-bottom: 4px; }
+  .an-d { display: block; font-size: 12px; color: var(--muted); margin-top: 3px; }
+  .an-d b { font-weight: 650; }
+  .an-good { color: var(--income); } .an-bad { color: var(--danger); } .an-warn { color: var(--an-warn); }
+  .an-kpis { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 14px; }
+  .an-kpi { padding: 10px 12px; border-radius: 16px; background: var(--vz-hover); cursor: pointer; min-width: 0; }
+  .an-kpi:active { transform: scale(.98); }
+  .an-kpi .v { font-size: 17px; font-weight: 700; margin: 2px 0 2px; white-space: nowrap; overflow: hidden; }
+  .an-ins { display: grid; grid-template-columns: 24px minmax(0, 1fr) 12px; gap: 8px; align-items: start; padding: 10px 0; border-top: 1px solid var(--glass-line); font-size: 14px; line-height: 1.4; }
+  .an-ins:first-of-type { border-top: 0; }
+  .an-ins .ic { font-size: 16px; line-height: 1.25; text-align: center; }
+  .an-ins .chev { color: var(--muted); font-size: 18px; line-height: 1; }
+  .an-ins[data-go], .an-row[data-go], .an-tbl tr[data-go] { cursor: pointer; }
+  .an-ins[data-go]:active, .an-row[data-go]:active, .an-tbl tr[data-go]:active { background: var(--vz-hover); }
+  .an-donut { display: grid; grid-template-columns: 150px minmax(0, 1fr); gap: 14px; align-items: center; margin-top: 10px; }
+  .an-dleg { font-size: 12px; min-width: 0; }
+  .an-dleg div { display: grid; grid-template-columns: 10px minmax(0, 1fr) auto; gap: 6px; align-items: center; padding: 2px 0; }
+  .an-dleg i { width: 10px; height: 10px; border-radius: 3px; }
+  .an-dleg span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .an-dleg b { font-variant-numeric: tabular-nums; font-weight: 600; }
+  .an-rows { margin-top: 2px; }
+  .an-row { display: grid; grid-template-columns: 10px minmax(0, 1fr) 56px auto; gap: 10px; align-items: center; padding: 9px 0; border-top: 1px solid var(--glass-line); }
+  .an-row .nm { min-width: 0; font-size: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .an-row small { display: block; font-size: 12px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .an-row .v { text-align: right; font-weight: 650; font-size: 14px; white-space: nowrap; font-variant-numeric: tabular-nums; }
+  .an-row .v small { text-align: right; font-weight: 600; }
+  .an-row .v small.an-good { color: var(--income); } .an-row .v small.an-bad { color: var(--danger); }
+  .an-sw { width: 10px; height: 10px; border-radius: 3px; }
+  .an-em { font-size: 18px; text-align: center; }
+  .an-toggle { margin-top: 8px; gap: 6px; }
+  .an-toggle .chip { padding: 5px 11px; font-size: 13px; }
+  .an-tbl { width: 100%; border-collapse: collapse; font-size: 13px; font-variant-numeric: tabular-nums; margin-top: 10px; }
+  .an-tbl th { color: var(--muted); font-weight: 600; text-align: right; font-size: 11px; text-transform: uppercase; letter-spacing: .04em; padding: 4px 0; }
+  .an-tbl td { text-align: right; padding: 9px 0 9px 6px; border-top: 1px solid var(--glass-line); white-space: nowrap; }
+  .an-tbl th:first-child, .an-tbl td:first-child { text-align: left; padding-left: 0; white-space: normal; }
+  .an-tbl .c { display: none; }
+  .an-tbl.short .f { display: none; } .an-tbl.short .c { display: inline; }   /* too wide for the card: ₹36L instead of ₹35,98,056 */
+  /* small phones (iPhone SE, 320pt): a smaller gauge; donut legends under the donut, at full width */
+  @media (max-width: 359px) {
+    .an-head { grid-template-columns: 108px minmax(0, 1fr); gap: 10px; }
+    .an-head > .vz { width: 108px; height: auto; }
+    .an-donut { grid-template-columns: minmax(0, 1fr); justify-items: center; }
+    .an-dleg { width: 100%; }
+  }
+  @media (prefers-reduced-motion: no-preference) {
+    .an-fade .an-grow { animation: anIn .5s ease-out; }
+    .vz .hit, .vz .slice, .vz .cell { transition: fill .15s, opacity .15s; }
+  }
+  @keyframes anIn { from { opacity: 0; } }
 </style>
 </head>
 <body>
@@ -446,6 +553,11 @@
       <h2 id="chartTitle">Spending, last 6 months</h2>
       <div class="chart" id="chart"></div>
     </div>
+  </section>
+
+  <!-- Analysis view: charts of the period shown, built by renderAnalysis -->
+  <section id="view-analysis" class="hidden">
+    <div id="anRoot"></div>
   </section>
 
   <!-- Settings view -->
@@ -586,6 +698,7 @@
 <nav>
   <button data-view="list" class="active" style="position:relative"><span>🧾</span>Expenses<b class="badge hidden" id="navBadge"></b></button>
   <button data-view="summary"><span>📊</span>Summary</button>
+  <button data-view="analysis"><span>📈</span>Analysis</button>
   <button data-view="settings"><span>⚙️</span>Settings</button>
 </nav>
 
@@ -1736,6 +1849,9 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
       groups.map(g => `<button class="chip ${groupFilter === g ? 'sel' : ''}" data-grp="${esc(g)}">🏷️ ${esc(g)}</button>`).join('') +
       `<button class="chip ${groupFilter === '' ? 'sel' : ''}" data-grp="">No group</button>` + $('amtBar').innerHTML;
     if (kindFilter) $('amtBar').innerHTML = `<button class="chip sel" data-kindoff="1">${esc(kindLabel())} ✕</button>` + $('amtBar').innerHTML;
+    if (catFilter) $('amtBar').innerHTML = `<button class="chip sel" data-catoff="1">${esc(catOf(catFilter).emoji || '')} ${esc(catFilter)} ✕</button>` + $('amtBar').innerHTML;
+    if (idFilter) $('amtBar').innerHTML = `<button class="chip sel" data-idsoff="1">💥 ${idFilter.size === 1 ? 'The large payment' : `${idFilter.size} large payments`} ✕</button>` + $('amtBar').innerHTML;
+    if (dayFilter) $('amtBar').innerHTML = `<button class="chip sel" data-dayoff="1">📅 ${esc(new Date(dayFilter + 'T00:00').toLocaleDateString(undefined, { weekday: 'short', day: 'numeric', month: 'short' }))} ✕</button>` + $('amtBar').innerHTML;
   }
   function keepGroupFilter(g) {
     groupFilter = g;
@@ -1774,7 +1890,7 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
   const prevPeriodDate = () => period === 'fy' ? new Date(current.getFullYear() - 1, current.getMonth(), 1) : new Date(current.getFullYear(), current.getMonth() - 1, 1);
   const periodWord = () => period === 'fy' ? 'this financial year' : 'this month';
   function setPeriod(p) {
-    period = p === 'fy' ? 'fy' : 'month';
+    period = p === 'fy' ? 'fy' : 'month'; dayFilter = ''; idFilter = null;
     try { localStorage.setItem('expense-tracker-v1:period', period); } catch (e) {}
     render();
   }
@@ -2460,6 +2576,7 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     $('navBadge').classList.toggle('hidden', !unread);
     if (view === 'list') renderList();
     if (view === 'summary') renderSummary();
+    if (view === 'analysis') renderAnalysis();
     if (view === 'settings') renderSettings();
   }
 
@@ -2486,6 +2603,9 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
   // "Spent" / "Income" tapped: the list shows only the entries that make up that total. "Invested"
   // ('invest') or one kind of investment ('inv:Gold'): the Investment entries behind it.
   let kindFilter = '';
+  // a category, a day or a handful of payments (an insight's) opened from Analysis: the list shows only
+  // those; ✕ on its chip turns it off. None of them is remembered.
+  let catFilter = '', dayFilter = '', idFilter = null;
   const kindOk = e => !kindFilter || (kindFilter === 'spent' || kindFilter === 'income'
     ? counted(e) && e.type === (kindFilter === 'spent' ? 'debit' : 'credit')
     : e.category === investCat() && (kindFilter === 'invest' || investType(e)[1] === kindFilter.slice(4)));
@@ -2494,7 +2614,7 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
   // A shortcut to the list (Spent, Income, Invested, a kind of investment, a repeating payment, a group)
   // turns the other filters off, so the list shows what was tapped
   function openListWith(set) {
-    $('search').value = ''; reviewOnly = false; payerFilter = ''; kindFilter = '';
+    $('search').value = ''; reviewOnly = false; payerFilter = ''; kindFilter = ''; catFilter = ''; dayFilter = ''; idFilter = null;
     if (minAmt) { minAmt = 0; try { localStorage.setItem('expense-tracker-v1:minAmt', '0'); } catch (e) {} }
     keepGroupFilter(null);
     set();
@@ -2502,7 +2622,7 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     render(); window.scrollTo(0, 0);
   }
   function showKind(k) {
-    if (kindFilter === k && view === 'list') { kindFilter = ''; $('search').value = ''; reviewOnly = false; payerFilter = ''; render(); window.scrollTo(0, 0); return; }   // tapped again: off
+    if (kindFilter === k && view === 'list') { kindFilter = ''; catFilter = ''; dayFilter = ''; idFilter = null; $('search').value = ''; reviewOnly = false; payerFilter = ''; render(); window.scrollTo(0, 0); return; }   // tapped again: off
     openListWith(() => { kindFilter = k; });
   }
   document.addEventListener('click', e => {
@@ -2549,6 +2669,9 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
         if (minAmt && e.amount <= minAmt) return false;
         if (reviewOnly && !e.unread) return false;
         if (!kindOk(e)) return false;
+        if (catFilter && e.category !== catFilter) return false;
+        if (dayFilter && e.date !== dayFilter) return false;
+        if (idFilter && !idFilter.has(e.id)) return false;
         if (groupFilter !== null && groupOf(e) !== groupFilter) return false;
         if (!q) return true;
         let app;
@@ -2564,16 +2687,16 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
       .sort((a, b) => b.date.localeCompare(a.date) || b.createdAt - a.createdAt);
 
     renderAmtBar(base);
-    const filtering = minAmt || q || reviewOnly || kindFilter || groupFilter !== null;
+    const filtering = minAmt || q || reviewOnly || kindFilter || catFilter || dayFilter || idFilter || groupFilter !== null;
     const fd = shown.filter(e => e.type === 'debit' && counted(e)), fc = shown.filter(e => e.type === 'credit' && counted(e));
     const invOnly = kindFilter && kindFilter !== 'spent' && kindFilter !== 'income', si = invOnly ? investedOf(shown) : null;
     $('filterSummary').innerHTML = filtering && shown.length
       ? `${shown.length} transaction${shown.length > 1 ? 's' : ''}${minAmt ? ` over ${fmt(minAmt).replace(/\.00$/, '')}` : ''}${si
         ? ` · put in <b>${fmt(si.out)}</b>${si.back ? ` · came back <b style="color:var(--income)">${fmt(si.back)}</b>` : ''}`
         : `${fd.length || !fc.length ? ` · spent <b>${fmt(sum(fd))}</b>` : ''}${fc.length ? ` · received <b style="color:var(--income)">${fmt(sum(fc))}</b>` : ''}`}${
-        // Spent / Income narrowed further (amount, search, group, review): say what the whole total is (not under
-        // a payee's history, which covers every date)
-        (kindFilter === 'spent' || kindFilter === 'income') && !payerFilter && (minAmt || q || reviewOnly || groupFilter !== null)
+        // Spent / Income narrowed further (amount, search, group, review, a category or day from Analysis): say what
+        // the whole total is (not under a payee's history, which covers every date)
+        (kindFilter === 'spent' || kindFilter === 'income') && !payerFilter && (minAmt || q || reviewOnly || catFilter || dayFilter || idFilter || groupFilter !== null)
           ? ` <span class="sub" style="display:inline">· of ${fmt(kindFilter === 'spent' ? spent : income)} ${periodWord()} (other filters on)</span>` : ''}`
       : '';
     if (!shown.length) {
@@ -2728,6 +2851,860 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     try { return new Intl.NumberFormat(undefined, { notation: 'compact', maximumFractionDigits: 1 }).format(n); }
     catch (e) { return Math.round(n); }
   }
+
+  // ================= Analysis =================
+  // A visual read of the period shown (month or financial year, the chosen account only). Every figure
+  // follows Summary's rules: counted() entries only (never transfers, investments, loans, cross entries,
+  // refund-linked credits or categories you set as not counted) and payments net of linked refunds (amtOf).
+  // Charts are inline SVG drawn by the small helpers below (vz…); nothing is loaded from the network.
+  const AN_SLOTS = 7;   // categorical colours --vz-c1 … --vz-c7 (validated order, see the CSS)
+  const anNf = {};
+  function anNum(key, opts) {
+    const k = state.settings.currency + '|' + key;
+    if (!(k in anNf)) {
+      try { anNf[k] = new Intl.NumberFormat(undefined, Object.assign({ style: 'currency', currency: state.settings.currency, minimumFractionDigits: 0 }, opts)); }
+      catch (e) { anNf[k] = null; }
+    }
+    return anNf[k];
+  }
+  // whole amounts (₹12,400) for sentences, compact ones (₹1.2L) for axes and chart labels
+  const fmt0 = n => { n = Math.round(n) || 0; const f = anNum('0', { maximumFractionDigits: 0 }); return f ? f.format(n) : fmt(n); };
+  const cmp = n => { n = Math.round(n) || 0; const f = anNum('c', { notation: 'compact', maximumFractionDigits: 1 }); return f ? f.format(n) : fmt0(n); };
+  const pct = x => x > 0 && x < 0.005 ? '<1%' : Math.round(x * 100) + '%';
+  // a change as ▲ 12%, or ▲ 3.4× once it has more than tripled
+  const chg = (cur, base) => { const r = cur / base; return r >= 3 ? (r >= 10 ? Math.round(r) : f1(r)) + '×' : pct(Math.abs(cur - base) / base); };
+  const sgn = n => (n < 0 ? '−' : '+') + '\u2060' + fmt0(Math.abs(n));   // the sign stays with its amount
+  const mkStart = mk => new Date(+mk.slice(0, 4), +mk.slice(5, 7) - 1, 1);
+  const mkAdd = (mk, n) => { const d = mkStart(mk); return monthKey(new Date(d.getFullYear(), d.getMonth() + n, 1)); };
+  const mkDays = mk => { const d = mkStart(mk); return new Date(d.getFullYear(), d.getMonth() + 1, 0).getDate(); };
+  const anLbl = new Map();
+  const anL = (k, f) => { if (!anLbl.has(k)) anLbl.set(k, f()); return anLbl.get(k); };
+  const mName = (mk, f) => anL(mk + f, () => mkStart(mk).toLocaleDateString(undefined, f === 's' ? { month: 'short' } : f === 'l' ? { month: 'long' } : { month: 'short', year: 'numeric' }));
+  const dName = (iso, wd) => anL(iso + (wd ? 'w' : 'd'), () => new Date(iso + 'T00:00').toLocaleDateString(undefined, wd ? { weekday: 'short', day: 'numeric', month: 'short' } : { day: 'numeric', month: 'short' }));
+  const WD = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'], WDL = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+  const plural = (n, w, ws) => `${n} ${n === 1 ? w : (ws || w + 's')}`;
+  const trunc = (s, n) => s.length > n ? s.slice(0, n - 1) + '…' : s;
+
+  // ---------- chart helpers (inline SVG) ----------
+  const f1 = n => Math.round(n * 10) / 10;
+  const hl = n => Math.round(n) + 0.5;   // a crisp 1px hairline
+  // clean axis ticks over lo…hi (always including 0 when it is in range)
+  function vzScale(lo, hi, n = 4) {
+    if (!(hi > lo)) hi = lo + 1;
+    const raw = (hi - lo) / n, p = Math.pow(10, Math.floor(Math.log10(raw))), f = raw / p;
+    const st = (f <= 1 ? 1 : f <= 2 ? 2 : f <= 2.5 ? 2.5 : f <= 5 ? 5 : 10) * p;
+    const a = Math.floor(lo / st + 1e-9) * st, b = Math.ceil(hi / st - 1e-9) * st, ticks = [];
+    for (let v = a; v <= b + st / 2; v += st) ticks.push(Math.abs(v) < st / 1e6 ? 0 : v);
+    return { lo: a, hi: b, ticks };
+  }
+  const vzSvg = (w, h, body, label, extra = '') =>
+    `<svg class="vz" width="${w}" height="${h}" viewBox="0 0 ${w} ${h}" role="group" aria-label="${esc(label)}"${extra}>${body}</svg>`;
+  // a column on baseline y0, h px tall: 4px rounded at the data end, square at the baseline
+  function vzCol(x, y0, w, h, r = 4) {
+    if (h < 0.5) return '';
+    r = Math.min(r, w / 2, h);
+    const y1 = y0 - h;
+    return `M${f1(x)},${f1(y0)}V${f1(y1 + r)}Q${f1(x)},${f1(y1)} ${f1(x + r)},${f1(y1)}H${f1(x + w - r)}Q${f1(x + w)},${f1(y1)} ${f1(x + w)},${f1(y1 + r)}V${f1(y0)}Z`;
+  }
+  // a horizontal bar, rl / rr: corner radius of the left / right end
+  function vzBar(x, y, w, h, rl, rr) {
+    if (w < 0.5) return '';
+    rl = Math.min(rl, h / 2, w / 2); rr = Math.min(rr, h / 2, w / 2);
+    return `M${f1(x + rl)},${f1(y)}H${f1(x + w - rr)}Q${f1(x + w)},${f1(y)} ${f1(x + w)},${f1(y + rr)}V${f1(y + h - rr)}Q${f1(x + w)},${f1(y + h)} ${f1(x + w - rr)},${f1(y + h)}` +
+      `H${f1(x + rl)}Q${f1(x)},${f1(y + h)} ${f1(x)},${f1(y + h - rl)}V${f1(y + rl)}Q${f1(x)},${f1(y)} ${f1(x + rl)},${f1(y)}Z`;
+  }
+  // gridlines with their values on the left
+  const vzYAxis = (sc, y, x0, x1) => sc.ticks.map(v => `<line class="${v === 0 ? 'axis' : 'grid'}" x1="${x0}" x2="${x1}" y1="${hl(y(v))}" y2="${hl(y(v))}"/>` +
+    `<text class="tk" x="${x0 - 5}" y="${f1(y(v) + 3.5)}" text-anchor="end">${esc(cmp(v))}</text>`).join('');
+  // a tappable / hoverable area: data-tip feeds the card's readout line, data-go opens the list
+  const vzHit = (x, y, w, h, tip, go, rx = 6) => `<rect class="hit" x="${f1(x)}" y="${f1(y)}" width="${f1(Math.max(1, w))}" height="${f1(Math.max(1, h))}" rx="${rx}"` +
+    ` data-tip="${esc(tip)}"${go ? ` data-go="${esc(go)}" tabindex="0" role="button"` : ''} aria-label="${esc(tip)}"/>`;
+  const vzLegend = items => `<div class="an-legend">${items.map(([kind, color, name]) =>
+    `<span><i class="${kind}" style="${kind === 'dash' ? 'border-color' : 'background'}:${color}"></i>${esc(name)}</span>`).join('')}</div>`;
+  const vzTip = def => `<div class="an-tip" aria-live="polite" data-def="${esc(def)}">${esc(def)}</div>`;
+
+  // semicircle gauge: the share of income kept, 0 … 100%, with the 20% mark
+  function vzGauge(rate) {
+    const w = 132, h = 84, cx = 66, cy = 72, R = 54, sw = 13;
+    const pt = f => [f1(cx - R * Math.cos(Math.PI * f)), f1(cy - R * Math.sin(Math.PI * f))];
+    const arc = (a, b) => { const p = pt(a), q = pt(b); return `M${p[0]},${p[1]}A${R},${R} 0 0 1 ${q[0]},${q[1]}`; };
+    const f = rate == null ? 0 : Math.max(0, Math.min(1, rate));
+    const col = rate == null ? 'var(--vz-other)' : rate < 0 ? 'var(--danger)' : rate < 0.2 ? 'var(--warn)' : 'var(--vz-inc)';
+    const t0 = [cx - (R - sw / 2 - 3) * Math.cos(Math.PI * 0.2), cy - (R - sw / 2 - 3) * Math.sin(Math.PI * 0.2)], t1 = [cx - (R + sw / 2 + 3) * Math.cos(Math.PI * 0.2), cy - (R + sw / 2 + 3) * Math.sin(Math.PI * 0.2)];
+    const body = `<path d="${arc(0, 1)}" fill="none" stroke-width="${sw}" stroke-linecap="round" style="stroke:${col};opacity:.18"/>` +
+      (f > 0.004 ? `<path class="an-grow" d="${arc(0, f)}" fill="none" stroke-width="${sw}" stroke-linecap="round" style="stroke:${col}"/>` : '') +
+      `<line x1="${f1(t0[0])}" y1="${f1(t0[1])}" x2="${f1(t1[0])}" y2="${f1(t1[1])}" class="axis" style="stroke:var(--muted)"/>` +
+      `<text x="${f1(t1[0] - 4)}" y="${f1(t1[1] - 2)}" text-anchor="end">20%</text>` +
+      `<text x="${cx}" y="${cy - 8}" text-anchor="middle" class="t1" style="font-size:24px;font-weight:700">${rate == null ? '—' : esc((Math.round(rate * 100) < 0 ? '−' : '') + Math.abs(Math.round(rate * 100)) + '%')}</text>` +
+      `<text x="${cx}" y="${cy + 8}" text-anchor="middle">${rate == null ? 'no income' : rate < 0 ? 'overspent' : 'saved'}</text>` +
+      `<text x="${cx - R}" y="${h - 1}" text-anchor="middle">0</text><text x="${cx + R}" y="${h - 1}" text-anchor="middle">100%</text>`;
+    return vzSvg(w, h, body, rate == null ? 'Savings rate: no income' : `Savings rate ${Math.round(rate * 100)}% of income`);
+  }
+
+  // combo: paired columns (income, spending) per month with the net as a line with dots, one ₹ axis
+  function vzCombo(W, ms, cur) {
+    const H = 196, L = 40, R = 6, T = 14, B = 20, pw = W - L - R, ph = H - T - B, n = ms.length, sw = pw / n;
+    const lo = Math.min(0, ...ms.map(m => m.net)), hi = Math.max(1, ...ms.map(m => Math.max(m.i, m.s, m.net)));
+    const sc = vzScale(lo, hi, 4), y = v => T + ph - (v - sc.lo) / (sc.hi - sc.lo) * ph, y0 = y(0);
+    const cw = Math.max(3, Math.min(14, (sw - 8) / 2));
+    let body = vzYAxis(sc, y, L, W - R), marks = '', labels = '';
+    ms.forEach((m, k) => {
+      const cx = L + sw * k + sw / 2;
+      const tip = m.fut ? `${mName(m.mk, 'y')}: still to come` : `${mName(m.mk, 'y')}: income ${fmt0(m.i)} · spent ${fmt0(m.s)} · net ${sgn(m.net)}`;
+      body += (m.mk === cur ? `<rect class="band" x="${f1(cx - sw / 2 + 1)}" y="${T - 8}" width="${f1(sw - 2)}" height="${ph + 8}" rx="6"/>` : '') +
+        vzHit(cx - sw / 2, T - 8, sw, ph + B + 8, tip, m.fut ? '' : 'month:' + m.mk);
+      marks += `<path class="mk" style="fill:var(--vz-inc)" d="${vzCol(cx - 1 - cw, y0, cw, y0 - y(m.i), 3)}"/><path class="mk" style="fill:var(--vz-spend)" d="${vzCol(cx + 1, y0, cw, y0 - y(m.s), 3)}"/>`;
+      labels += `<text x="${f1(cx)}" y="${H - 5}" text-anchor="middle"${m.mk === cur ? ' class="t1"' : ''}>${esc(mName(m.mk, 's').slice(0, sw < 19 ? 1 : 3))}</text>`;
+    });
+    const pts = ms.map((m, k) => [f1(L + sw * k + sw / 2), f1(y(m.net))]).filter((p, k) => !ms[k].fut);
+    marks += `<polyline class="ln" style="stroke:var(--vz-net)" points="${pts.map(p => p.join(',')).join(' ')}"/>` +
+      pts.map(p => `<circle class="dot" cx="${p[0]}" cy="${p[1]}" r="4" style="fill:var(--vz-net)"/>`).join('');
+    return vzSvg(W, H, body + `<g class="an-grow" style="pointer-events:none">${marks}</g>` + labels, 'Income, spending and net by month');
+  }
+
+  // running total line / area: a = this period (accent), b = the one before (grey context), dashed forecast
+  const anXh = {};
+  function vzPace(W, p) {
+    const H = 184, L = 40, R = 46, T = 14, B = 20, pw = W - L - R, ph = H - T - B, n = p.n;
+    const hi = Math.max(1, ...p.a, ...(p.b || []), p.fc ? p.fc.v : 0), sc = vzScale(0, hi, 4);
+    const x = i => L + (n > 1 ? i / (n - 1) * pw : pw / 2), y = v => T + ph - v / sc.hi * ph;
+    const line = arr => arr.map((v, i) => `${f1(x(i))},${f1(y(v))}`).join(' ');
+    let body = vzYAxis(sc, y, L, L + pw);
+    p.labels.forEach((t, i) => { if (t) body += `<text x="${f1(x(i))}" y="${H - 5}" text-anchor="middle">${esc(t)}</text>`; });
+    const ai = p.a.length - 1, ends = [];
+    if (p.b) { body += `<polyline class="ln" style="stroke:var(--vz-ctx)" points="${line(p.b)}"/>`; ends.push({ v: p.b[p.b.length - 1], x: x(p.b.length - 1), t: cmp(p.b[p.b.length - 1]) }); }
+    if (ai >= 0) {
+      body += `<path class="an-grow" style="fill:var(--vz-spend);opacity:.12" d="M${f1(x(0))},${f1(y(0))}L${line(p.a).replace(/ /g, 'L')}L${f1(x(ai))},${f1(y(0))}Z"/>` +
+        `<polyline class="ln an-grow" style="stroke:var(--vz-spend)" points="${line(p.a)}"/>`;
+      if (p.fc) {
+        body += `<line class="ln" x1="${f1(x(ai))}" y1="${f1(y(p.a[ai]))}" x2="${f1(x(p.fc.at))}" y2="${f1(y(p.fc.v))}" style="stroke:var(--vz-spend)" stroke-dasharray="5 4"/>` +
+          `<circle class="dot" cx="${f1(x(p.fc.at))}" cy="${f1(y(p.fc.v))}" r="3.5" style="fill:var(--vz-surface);stroke:var(--vz-spend);stroke-width:2"/>`;
+        ends.push({ v: p.fc.v, x: x(p.fc.at), t: '~' + cmp(p.fc.v), main: true });
+      } else ends.push({ v: p.a[ai], x: x(ai), t: cmp(p.a[ai]), main: true });
+      if (p.today) {
+        body += `<circle class="dot" cx="${f1(x(ai))}" cy="${f1(y(p.a[ai]))}" r="4.5" style="fill:var(--vz-spend)"/>`;
+        const tx = Math.min(x(ai), L + pw - 30), ty = y(p.a[ai]) - 10;
+        body += `<text x="${f1(tx)}" y="${f1(Math.max(10, ty))}" text-anchor="middle" class="t1">${esc(p.todayLabel)}</text>`;
+      }
+    }
+    // end labels in the right margin; when two would collide only this period's stays (the legend and readout carry the other)
+    const main = ends.find(e => e.main), other = ends.find(e => !e.main);
+    const lab = e => `<text class="tk${e.main ? ' t1' : ''}" x="${L + pw + 6}" y="${f1(y(e.v) + 3.5)}">${esc(e.t)}</text>`;
+    if (main) body += lab(main);
+    if (other && (!main || Math.abs(y(other.v) - y(main.v)) >= 12)) body += lab(other);
+    anXh[p.id] = { x0: L, dx: n > 1 ? pw / (n - 1) : 0, n, tips: p.tips, T, ph };
+    body += `<line class="xh" x1="0" x2="0" y1="${T}" y2="${T + ph}" style="display:none"/>` +
+      `<rect class="xhit" x="${L}" y="${T}" width="${pw}" height="${ph}" fill="transparent"/>`;
+    return vzSvg(W, H, body, p.label, ` data-xh="${p.id}"`);
+  }
+
+  // donut: one whole split into ≤ 8 parts (2px surface gaps), the total in the centre
+  function vzDonut(size, parts, c1, c2, label) {
+    const R = size / 2, r = R - 24, cx = R, cy = R, tot = parts.reduce((t, p) => t + p.v, 0) || 1;
+    const P = (rad, a) => `${f1(cx + rad * Math.cos(a))},${f1(cy + rad * Math.sin(a))}`;
+    let a = -Math.PI / 2, body = '';
+    const pad = parts.length > 1 ? 1 / ((R + r) / 2) : 0;   // 1px each side: a 2px gap at mid-ring
+    parts.forEach(p => {
+      const da = p.v / tot * Math.PI * 2, a0 = a + pad, a1 = a + da - pad; a += da;
+      let d;
+      if (parts.length === 1) d = `M${P(R, -Math.PI / 2)}A${R},${R} 0 1 1 ${P(R, Math.PI * 1.5 - 0.0001)}ZM${P(r, -Math.PI / 2)}A${r},${r} 0 1 0 ${P(r, Math.PI * 1.5 - 0.0001)}Z`;
+      else if (a1 - a0 <= 0.002) return;
+      else { const lg = a1 - a0 > Math.PI ? 1 : 0; d = `M${P(R, a0)}A${R},${R} 0 ${lg} 1 ${P(R, a1)}L${P(r, a1)}A${r},${r} 0 ${lg} 0 ${P(r, a0)}Z`; }
+      body += `<path class="mk slice" fill-rule="evenodd" d="${d}" style="fill:${p.color}" data-tip="${esc(p.tip)}"${p.go ? ` data-go="${esc(p.go)}" tabindex="0" role="button"` : ''} aria-label="${esc(p.tip)}"/>`;
+    });
+    body += `<text x="${cx}" y="${cy + 2}" text-anchor="middle" class="t1" style="font-size:${c1.length > 9 ? 14 : 16}px;font-weight:700">${esc(c1)}</text>` +
+      `<text x="${cx}" y="${cy + 17}" text-anchor="middle">${esc(c2)}</text>`;
+    return vzSvg(size, size, `<g class="an-grow">${body}</g>`, label);
+  }
+
+  // waterfall (horizontal, one row per step): income, minus each big category, ending at what was kept
+  function vzWaterfall(W, steps) {
+    const rowH = 32, H = steps.length * rowH + 4;
+    let run = 0, lo = 0, hi = 0;
+    const rows = steps.map(s => {
+      let a, b;
+      if (s.kind === 'inc') { a = run; b = run += s.v; }
+      else if (s.kind === 'sp') { a = run - s.v; b = run; run -= s.v; }
+      else { a = Math.min(0, run); b = Math.max(0, run); }
+      lo = Math.min(lo, a, b); hi = Math.max(hi, a, b);
+      return Object.assign({ a, b, run }, s);
+    });
+    const x = v => (v - lo) / ((hi - lo) || 1) * (W - 2) + 1;
+    let body = lo < 0 ? `<line class="axis" x1="${hl(x(0))}" x2="${hl(x(0))}" y1="0" y2="${H}"/>` : '';
+    rows.forEach((s, k) => {
+      const y = k * rowH, by = y + 17, bh = 11;
+      const col = s.kind === 'inc' ? 'var(--vz-inc)' : s.kind === 'sp' ? 'var(--vz-spend)' : s.run < 0 ? 'var(--danger)' : 'var(--vz-net)';
+      body += vzHit(0, y, W, rowH - 1, s.tip, s.go, 4);
+      body += `<text x="0" y="${y + 12}" class="t1" style="font-weight:500;font-size:12px">${esc(trunc(s.name, Math.max(14, Math.floor((W - 96) / 6.6))))}</text>` +
+        `<text x="${W}" y="${y + 12}" text-anchor="end" class="tk t1" style="font-size:12px">${esc(s.label)}</text>` +
+        `<path class="mk" style="fill:${col}" d="${vzBar(x(s.a), by, Math.max(1.5, x(s.b) - x(s.a)), bh, 3, 3)}"/>`;
+      if (k < rows.length - 1 && s.kind !== 'end') body += `<line class="grid" style="stroke:var(--vz-axis)" x1="${hl(x(s.run))}" x2="${hl(x(s.run))}" y1="${by + bh}" y2="${by + rowH}"/>`;
+    });
+    return vzSvg(W, H, body, 'How income was used');
+  }
+
+  // stacked columns per month: one segment per group, 2px surface gaps, rounded top
+  function vzStacked(W, ms, keys, colors, cur) {
+    const H = 176, L = 40, R = 6, T = 12, B = 20, pw = W - L - R, ph = H - T - B, n = ms.length, sw = pw / n;
+    const hi = Math.max(1, ...ms.map(m => m.parts.reduce((t, v) => t + v, 0))), sc = vzScale(0, hi, 4);
+    const y = v => T + ph - v / sc.hi * ph, y0 = y(0), cw = Math.max(4, Math.min(22, sw - 8));
+    let body = vzYAxis(sc, y, L, W - R), marks = '';
+    ms.forEach((m, k) => {
+      const cx = L + sw * k + sw / 2, tot = m.parts.reduce((t, v) => t + v, 0);
+      const tip = `${mName(m.mk, 'y')}: ` + (m.fut ? 'still to come' : tot ? keys.map((g, j) => m.parts[j] ? `${g} ${fmt0(m.parts[j])}` : '').filter(Boolean).join(' · ') : 'nothing spent');
+      body += (m.mk === cur ? `<rect class="band" x="${f1(cx - sw / 2 + 1)}" y="${T - 6}" width="${f1(sw - 2)}" height="${ph + 6}" rx="6"/>` : '') + vzHit(cx - sw / 2, T - 6, sw, ph + B + 6, tip, m.fut ? '' : 'month:' + m.mk);
+      let acc = 0;
+      const last = m.parts.reduce((li, v, j) => v > 0 ? j : li, -1);
+      m.parts.forEach((v, j) => {
+        if (!(v > 0)) return;
+        const yb = y(acc) - (acc > 0 ? 2 : 0), yt = y(acc + v);
+        acc += v;
+        if (yb - yt < 0.6) return;
+        marks += j === last ? `<path class="mk" style="fill:${colors[j]}" d="${vzCol(cx - cw / 2, yb, cw, yb - yt, 4)}"/>`
+          : `<rect class="mk" x="${f1(cx - cw / 2)}" y="${f1(yt)}" width="${f1(cw)}" height="${f1(yb - yt)}" style="fill:${colors[j]}"/>`;
+      });
+      body += `<text x="${f1(cx)}" y="${H - 5}" text-anchor="middle"${m.mk === cur ? ' class="t1"' : ''}>${esc(mName(m.mk, 's').slice(0, sw < 19 ? 1 : 3))}</text>`;
+    });
+    return vzSvg(W, H, body + `<g class="an-grow" style="pointer-events:none">${marks}</g>`, 'Spending by group and month');
+  }
+
+  // heatmap fill for a day: one hue (spending), stronger = more; bins from the period's own spread
+  const heatFill = (v, bins) => { if (!(v > 0)) return ''; const k = bins.findIndex(t => v <= t); return [0.2, 0.42, 0.68, 1][k < 0 ? 3 : k]; };
+  // pick: the year's small cells — a tap selects the day and the readout offers to open it (see the click handler)
+  function heatCell(x, y, w, h, iso, d, bins, today, rx, numbered, pick) {
+    const v = d ? d.s : 0, op = heatFill(v, bins), ahead = iso > today, future = ahead && !v;   // a day ahead with money already dated on it is shown like any other
+    const tip = `${dName(iso, true)}: ${future ? 'still to come' : v ? `spent ${fmt0(v)} (${plural(d.n, 'payment')})${ahead ? ' · dated ahead' : ''}` : 'nothing spent'}`;
+    let s = `<rect class="cell${future ? ' fut' : ''}${iso === today ? ' today' : ''}" x="${f1(x)}" y="${f1(y)}" width="${f1(w)}" height="${f1(h)}" rx="${rx}"` +
+      (op ? ` style="fill:var(--vz-spend);fill-opacity:${op}"` : '') +
+      ` data-tip="${esc(tip)}"${future ? '' : ` ${pick ? 'data-pick' : 'data-go'}="day:${iso}" tabindex="0" role="button"`} aria-label="${esc(tip)}"/>`;
+    // day numbers in text ink (dark on the pale light-mode coral, light on the dim dark-mode one); the strongest band takes --vz-heat-hi
+    if (numbered) s += `<text x="${f1(x + 5)}" y="${f1(y + 13)}" style="pointer-events:none;font-size:10px;${op === 1 ? 'fill:var(--vz-heat-hi);font-weight:600' : future ? '' : 'fill:var(--text)'}">${+iso.slice(8)}</text>`;
+    return s;
+  }
+  // a month as a calendar (Mon … Sun)
+  function vzHeatMonth(W, mk, byDay, bins, today) {
+    const first = mkStart(mk), off = (first.getDay() + 6) % 7, nd = mkDays(mk), rows = Math.ceil((off + nd) / 7), gap = 4;
+    const cw = Math.min(44, Math.floor((W - gap * 6) / 7)), ch = Math.min(34, cw), x0 = Math.floor((W - (cw * 7 + gap * 6)) / 2), H = 16 + rows * (ch + gap);
+    let body = ['M', 'T', 'W', 'T', 'F', 'S', 'S'].map((t, i) => `<text x="${x0 + i * (cw + gap) + cw / 2}" y="10" text-anchor="middle">${t}</text>`).join('');
+    for (let d = 1; d <= nd; d++) {
+      const k = off + d - 1, iso = `${mk}-${pad(d)}`;
+      body += heatCell(x0 + (k % 7) * (cw + gap), 16 + Math.floor(k / 7) * (ch + gap), cw, ch, iso, byDay.get(iso), bins, today, 6, true);
+    }
+    return vzSvg(W, H, body, 'Daily spending calendar');
+  }
+  // a financial year as weeks × weekdays, in two halves (Apr–Sep, Oct–Mar) so cells stay tappable
+  function vzHeatYear(W, y, byDay, bins, today) {
+    const halves = [[new Date(y, 3, 1), new Date(y, 8, 30)], [new Date(y, 9, 1), new Date(y + 1, 2, 31)]];
+    const lw = 16, weeksOf = ([a, b]) => Math.ceil((((a.getDay() + 6) % 7) + Math.round((b - a) / 864e5) + 1) / 7);
+    const cs = Math.max(7, Math.min(16, Math.floor((W - lw) / Math.max(...halves.map(weeksOf))))), c = cs - 2, hh = 14 + cs * 7;
+    let body = '';
+    halves.forEach(([a, b], hi) => {
+      const top = hi * (hh + 10), off = (a.getDay() + 6) % 7;
+      ['M', '', 'W', '', 'F', '', ''].forEach((t, i) => { if (t) body += `<text x="0" y="${top + 14 + i * cs + c - 1}">${t}</text>`; });
+      for (let d = new Date(a), k = off; d <= b; d.setDate(d.getDate() + 1), k++) {
+        const iso = isoDate(d), wx = lw + Math.floor(k / 7) * cs;
+        if (d.getDate() === 1) body += `<text x="${wx}" y="${top + 9}">${esc(mName(iso.slice(0, 7), 's'))}</text>`;
+        body += heatCell(wx, top + 14 + (k % 7) * cs, c, c, iso, byDay.get(iso), bins, today, 2, false, true);
+      }
+    });
+    return vzSvg(W, hh * 2 + 10, body, 'Daily spending through the year', ' data-heat="year"');
+  }
+
+  // horizontal bars, one hue: label line above each bar, value at the right
+  function vzHbars(W, rows, color) {
+    const rowH = 36, max = Math.max(1, ...rows.map(r => r.v)), maxCh = Math.max(14, Math.floor((W - 90) / 6.8));
+    const body = rows.map((r, k) => {
+      const y = k * rowH;
+      return vzHit(0, y, W, rowH - 2, r.tip, r.go, 4) +
+        `<text x="0" y="${y + 13}" style="font-size:12px"><tspan class="t1" style="font-weight:500">${esc(trunc(r.name, maxCh - String(r.sub).length))}</tspan> ${esc(r.sub)}</text>` +
+        `<text x="${W}" y="${y + 13}" text-anchor="end" class="tk t1" style="font-size:12px">${esc(r.label)}</text>` +
+        `<path class="mk" style="fill:${color}" d="${vzBar(0, y + 19, Math.max(2, r.v / max * W), 10, 0, 4)}"/>`;
+    }).join('');
+    return vzSvg(W, rows.length * rowH, body, 'Top payees by spending');
+  }
+
+  // columns with their values on the caps; the highest in the accent, the rest grey (emphasis)
+  function vzColumns(W, vals, labels, tips, gos) {
+    const H = 132, T = 16, B = 18, ph = H - T - B, n = vals.length, sw = W / n, cw = Math.min(24, sw - 12);
+    const max = Math.max(...vals), hiK = vals.indexOf(max), y0 = T + ph;
+    let body = `<line class="axis" x1="0" x2="${W}" y1="${hl(y0)}" y2="${hl(y0)}"/>`;
+    vals.forEach((v, k) => {
+      const cx = sw * k + sw / 2, h = max ? v / max * ph : 0;
+      body += vzHit(cx - sw / 2, 0, sw, H, tips[k], gos && gos[k]) +
+        `<path class="mk an-grow" style="pointer-events:none;fill:${k === hiK && max ? 'var(--vz-spend)' : 'var(--vz-ctx)'}" d="${vzCol(cx - cw / 2, y0, cw, h, 4)}"/>` +
+        `<text x="${f1(cx)}" y="${f1(y0 - h - 4)}" text-anchor="middle" class="tk${k === hiK ? ' t1' : ''}" style="pointer-events:none">${v ? esc(cmp(v)) : ''}</text>` +
+        `<text x="${f1(cx)}" y="${H - 4}" text-anchor="middle"${k === hiK ? ' class="t1"' : ''}>${esc(labels[k])}</text>`;
+    });
+    return vzSvg(W, H, body, 'Average spending by weekday');
+  }
+
+  // sparkline: grey line, the last point in the entity's colour
+  function vzSpark(vals, color, w = 56, h = 22) {
+    const max = Math.max(...vals), n = vals.length, x = i => 2 + i / (n - 1) * (w - 6), y = v => h - 3 - (max ? v / max * (h - 7) : 0);
+    return `<svg class="vz spark" width="${w}" height="${h}" viewBox="0 0 ${w} ${h}" aria-hidden="true">` +
+      `<polyline points="${vals.map((v, i) => `${f1(x(i))},${f1(y(v))}`).join(' ')}" style="fill:none;stroke:var(--vz-ctx);stroke-width:1.5;stroke-linejoin:round;stroke-linecap:round"/>` +
+      `<circle cx="${f1(x(n - 1))}" cy="${f1(y(vals[n - 1]))}" r="3" style="fill:${color};stroke:var(--vz-surface);stroke-width:1.5"/></svg>`;
+  }
+
+  // ---------- the numbers (worked out once per data change / period / account) ----------
+  // Categorical colours follow the entity, not its rank in one period: the 8 biggest all-time own a
+  // slot each; a rarer one shown beside them borrows a slot nobody else on screen is using.
+  function slotsFor(ranked, shown) {
+    const own = new Map(ranked.slice(0, AN_SLOTS).map((k, i) => [k, i])), used = new Set(), out = new Map();
+    shown.forEach(k => { if (own.has(k)) used.add(own.get(k)); });
+    shown.forEach(k => {
+      if (own.has(k)) { out.set(k, own.get(k)); return; }
+      let s = 0; while (used.has(s)) s++;
+      used.add(s); out.set(k, s < AN_SLOTS ? s : -1);
+    });
+    return out;
+  }
+  const slotColor = s => s == null || s < 0 ? 'var(--vz-other)' : `var(--vz-c${s + 1})`;
+  // payees: entries grouped by payer, a bank's shortened name joined to the full one (as tapping it shows)
+  function byPayer(list) {
+    const m = new Map();
+    list.forEach(e => { const k = payerKey(e); if (!k) return; const g = m.get(k) || { key: k, amt: 0, n: 0 }; g.amt += amtOf(e); g.n++; m.set(k, g); });
+    const buckets = new Map();
+    m.forEach((g, k) => { const w = k.split(' ')[0]; if (!buckets.has(w)) buckets.set(w, []); buckets.get(w).push(k); });
+    const out = [];
+    buckets.forEach(keys => {
+      keys.sort((a, b) => a.split(' ').length - b.split(' ').length || a.length - b.length || (a < b ? -1 : 1));
+      const taken = new Set();
+      keys.forEach(k => {
+        if (taken.has(k)) return;
+        const g = { key: k, amt: 0, n: 0 };
+        keys.forEach(x => { if (!taken.has(x) && samePayer(x, k)) { taken.add(x); g.amt += m.get(x).amt; g.n += m.get(x).n; } });
+        out.push(g);
+      });
+    });
+    return out.sort((a, b) => b.amt - a.amt);
+  }
+  const tally = (list, keyFn) => {
+    const m = new Map();
+    list.forEach(e => { const k = keyFn(e); const g = m.get(k) || { key: k, amt: 0, n: 0 }; g.amt += amtOf(e); g.n++; m.set(k, g); });
+    return m;
+  };
+  let anMemo = { key: '', arr: null, m: null };
+  function anModel() {
+    const today = isoDate(new Date());
+    const key = [dataStamp, state.expenses.length, period, monthKey(current), acctFilter, today, state.settings.currency,
+      JSON.stringify(state.categories), (state.accounts || []).map(a => a.id + (a.business ? '>' + a.business.group : '')).join()].join('|');
+    if (anMemo.key === key && anMemo.arr === state.expenses) return anMemo.m;
+    const t0 = performance.now();
+    const fy = period === 'fy', r = periodRange(), curMk = monthKey(current);
+    const realTo = fy ? r.to : `${curMk}-${pad(mkDays(curMk))}`, isCur = r.from <= today && today <= realTo;
+    const items = inPeriod(), spent = spentOf(items), income = incomeOf(items);   // exactly Summary's totals
+    const groupsOn = allGroups().length > 0;
+    // one pass: counted money by month and by day (this account), and all-time amounts by category (for colours)
+    const byMonth = new Map(), byDay = new Map(), allCat = new Map(), allInc = new Map();
+    let firstMk = '';
+    state.expenses.forEach(e => {
+      if ((e.type !== 'debit' && e.type !== 'credit') || !counted(e)) return;
+      const a = amtOf(e); if (!(a > 0)) return;
+      const deb = e.type === 'debit', all = deb ? allCat : allInc;
+      all.set(e.category, (all.get(e.category) || 0) + a);
+      if (acctFilter && e.account !== acctFilter) return;
+      const mk = e.date.slice(0, 7);
+      let M = byMonth.get(mk); if (!M) byMonth.set(mk, M = { s: 0, i: 0, cat: new Map(), grp: groupsOn ? new Map() : null });
+      let D = byDay.get(e.date); if (!D) byDay.set(e.date, D = { s: 0, i: 0, n: 0 });
+      if (deb) { M.s += a; D.s += a; D.n++; M.cat.set(e.category, (M.cat.get(e.category) || 0) + a); } else { M.i += a; D.i += a; }
+      if (groupsOn) { const g = groupOf(e); const G = M.grp.get(g) || { s: 0, i: 0 }; G[deb ? 's' : 'i'] += a; M.grp.set(g, G); }
+      if (!firstMk || mk < firstMk) firstMk = mk;
+    });
+    const has = mk => !!firstMk && mk >= firstMk;
+    const mTot = mk => byMonth.get(mk) || { s: 0, i: 0, cat: new Map(), grp: null };
+    const sumDays = (from, to) => { let s = 0, i = 0; byDay.forEach((v, d) => { if (d >= from && d <= to) { s += v.s; i += v.i; } }); return { s, i }; };
+    const thru = (mk, day) => sumDays(mk + '-01', `${mk}-${pad(Math.min(day, mkDays(mk)))}`);
+    const todayMk = today.slice(0, 7), todayD = +today.slice(8);
+    // A month's forecast: spent to today + what the rest of a month typically adds (the median over up to 6
+    // months before, so one big one-off payment doesn't sway it). Payments already dated later in the month
+    // count towards that rest, so the forecast is never below what is already recorded for the month.
+    // usual: a typical month (that median), used to project a financial year's remaining months.
+    const median = a => { const b = a.slice().sort((x, y) => x - y), k = b.length >> 1; return b.length % 2 ? b[k] : (b[k - 1] + b[k]) / 2; };
+    const histOf = mk => [1, 2, 3, 4, 5, 6].map(k => mkAdd(mk, -k)).filter(has);
+    const monthFc = (mk, day) => {
+      const soFar = thru(mk, day).s, all = mTot(mk).s, hist = histOf(mk);
+      if (!hist.length) return { total: Math.max(all, day ? soFar / day * mkDays(mk) : soFar), usual: null, n: 0, soFar, ahead: all - soFar };
+      return { total: Math.max(all, soFar + Math.max(0, median(hist.map(x => mTot(x).s - thru(x, day).s)))), usual: median(hist.map(x => mTot(x).s)), n: hist.length, soFar, ahead: all - soFar };
+    };
+    // the same stretch before: last month (to the same day while this one runs) and the 3 months before;
+    // for a year, the last financial year (to the same date while this one runs)
+    let prev = null, avg = null;
+    if (!fy) {
+      const pmk = mkAdd(curMk, -1), cut = isCur ? todayD : 31, pd = Math.min(cut, mkDays(pmk));
+      if (has(pmk)) prev = Object.assign(thru(pmk, cut), { from: pmk + '-01', to: `${pmk}-${pad(pd)}`,
+        label: !isCur ? mName(pmk, 'l') : pd === 1 ? `1 ${mName(pmk, 's')}` : `1–${pd} ${mName(pmk, 's')}`,
+        word: !isCur ? mName(pmk, 'l') : pd === 1 ? `1 ${mName(pmk, 'l')}` : `the same days of ${mName(pmk, 'l')}` });
+      // the 3 months before: to the same day while this month runs (the headline), and whole (insights on a month's total)
+      const ams = [1, 2, 3].map(k => mkAdd(curMk, -k)).filter(has);
+      if (ams.length) {
+        let s = 0, i = 0, w = 0; ams.forEach(x => { const t = thru(x, cut); s += t.s; i += t.i; w += mTot(x).s; });
+        avg = { s: s / ams.length, i: i / ams.length, full: w / ams.length, n: ams.length, label: `${ams.length}-mo avg`, word: `your ${ams.length}-month average${isCur ? ' for these days' : ''}`,
+          fullWord: ams.length === 1 ? `${mName(ams[0], 'l')}'s total` : `your ${ams.length}-month average` };
+      }
+    } else {
+      const y = fyStartYear(current), pf = `${y - 1}-04-01`;
+      let pt = `${y}-03-31`;
+      if (isCur) { const t = new Date(today + 'T00:00'); pt = isoDate(new Date(t.getFullYear() - 1, t.getMonth(), t.getDate())); }
+      if (firstMk && firstMk <= pt.slice(0, 7)) prev = Object.assign(sumDays(pf, pt), { from: pf, to: pt, label: isCur ? `last FY to ${dName(pt)}` : fyLabel(y - 1), word: isCur ? `last financial year to ${dName(pt)}` : fyLabel(y - 1) });
+    }
+    const prevItems = prev ? inRange({ from: prev.from, to: prev.to }) : [];
+    const deb = items.filter(e => e.type === 'debit' && counted(e)), cred = items.filter(e => e.type === 'credit' && counted(e));
+    const pDeb = prevItems.filter(e => e.type === 'debit' && counted(e)), pCred = prevItems.filter(e => e.type === 'credit' && counted(e));
+    // categories, with last period's amount and 6 months of history
+    const endMk = realTo.slice(0, 7) < todayMk ? realTo.slice(0, 7) : todayMk;
+    const sparkMs = [5, 4, 3, 2, 1, 0].map(k => mkAdd(endMk, -k));
+    const pCat = tally(pDeb, e => e.category), cats = [...tally(deb, e => e.category).values()].sort((a, b) => b.amt - a.amt);
+    cats.forEach(c => { c.prev = prev ? (pCat.get(c.key) || { amt: 0 }).amt : null; c.spark = sparkMs.map(mk => mTot(mk).cat.get(c.key) || 0); });
+    const catRank = [...allCat.entries()].sort((a, b) => b[1] - a[1]).map(x => x[0]);
+    const pICat = tally(pCred, e => e.category), icats = [...tally(cred, e => e.category).values()].sort((a, b) => b.amt - a.amt);
+    icats.forEach(c => { c.prev = prev ? (pICat.get(c.key) || { amt: 0 }).amt : null; });
+    const icatRank = [...allInc.entries()].sort((a, b) => b[1] - a[1]).map(x => x[0]);
+    const ipay = byPayer(cred), pIpay = prev ? byPayer(pCred) : [];
+    const ipayAll = byPayer(state.expenses.filter(e => e.type === 'credit' && counted(e)));   // all-time, all accounts: payer colours
+    ipay.forEach(g => { g.prev = prev ? pIpay.filter(x => samePayer(x.key, g.key) || samePayer(g.key, x.key)).reduce((t, x) => t + x.amt, 0) : null; });
+    const payees = byPayer(deb);
+    // days of the period: heatmap values, weekday averages (days so far only)
+    const elapsedTo = realTo < today ? realTo : today, wdSum = [0, 0, 0, 0, 0, 0, 0], wdN = [0, 0, 0, 0, 0, 0, 0], dayVals = [];
+    for (let d = new Date(r.from + 'T00:00'); isoDate(d) <= elapsedTo; d.setDate(d.getDate() + 1)) {
+      const v = byDay.get(isoDate(d)), s = v ? v.s : 0; wdSum[d.getDay()] += s; wdN[d.getDay()]++; if (s > 0) dayVals.push(s);
+    }
+    dayVals.sort((a, b) => a - b);
+    const q = f => dayVals[Math.min(dayVals.length - 1, Math.floor(f * dayVals.length))];
+    const dmax = dayVals.length ? dayVals[dayVals.length - 1] : 0;
+    const bins = dayVals.length >= 8 ? [q(0.25), q(0.5), q(0.75), Infinity] : dayVals.length ? [dmax / 8, dmax / 3, dmax * 2 / 3, Infinity] : [];
+    // months for the by-month charts: the last 12 (from the first with records), or the year's 12
+    let months;
+    if (fy) { const y = fyStartYear(current); months = Array.from({ length: 12 }, (_, i) => monthKey(new Date(y, 3 + i, 1))); }
+    else { months = Array.from({ length: 12 }, (_, i) => mkAdd(curMk, i - 11)); while (months.length > 6 && !(mTot(months[0]).s || mTot(months[0]).i)) months.shift(); }
+    // running totals: day by day through the month, or month by month through the year
+    let pace;
+    if (!fy) {
+      const pmk = mkAdd(curMk, -1), n = mkDays(curMk), upto = isCur ? todayD : n, cum = (mk, k) => { const o = []; let t = 0; for (let d = 1; d <= k; d++) { const v = byDay.get(`${mk}-${pad(d)}`); t += v ? v.s : 0; o.push(t); } return o; };
+      const a = cum(curMk, upto), b = has(pmk) ? cum(pmk, mkDays(pmk)) : null, fc = isCur && upto < n ? monthFc(curMk, todayD) : null;
+      pace = { id: 'pace', n: Math.max(n, b ? b.length : 0), a, b, fc: fc ? { v: Math.max(fc.total, a[a.length - 1] || 0), at: n - 1 } : null, today: isCur, todayLabel: 'Today',
+        labels: Array.from({ length: Math.max(n, b ? b.length : 0) }, (_, i) => [1, 8, 15, 22, 29].includes(i + 1) ? String(i + 1) : ''),
+        aName: mName(curMk, 'l'), bName: b ? mName(pmk, 'l') : '', label: 'Spending through the month, day by day' };
+      pace.tips = pace.labels.map((_, i) => `Day ${i + 1}: ` + [i < a.length ? `${fmt0(a[i])} in ${mName(curMk, 's')}` : '', b && i < b.length ? `${fmt0(b[i])} in ${mName(pmk, 's')}` : ''].filter(Boolean).join(' · '));
+    } else {
+      const y = fyStartYear(current), cum = ms => { let t = 0; return ms.map(mk => (t += mTot(mk).s)); };
+      const upto = isCur ? months.indexOf(todayMk) + 1 : 12, a = cum(months.slice(0, upto));
+      const pms = Array.from({ length: 12 }, (_, i) => monthKey(new Date(y - 1, 3 + i, 1))), b = has(pms[11]) ? cum(pms) : null;
+      let fc = null;
+      if (isCur && upto < 12) {   // this month's forecast, then a typical month for each one left (or what is already dated in it, if more)
+        const mf = monthFc(todayMk, todayD), per = mf.usual != null ? mf.usual : mf.total;
+        fc = { v: (a[upto - 2] || 0) + mf.total + months.slice(upto).reduce((t, mk) => t + Math.max(per, mTot(mk).s), 0), at: 11 };
+      }
+      pace = { id: 'pace', n: 12, a, b, fc, today: isCur, todayLabel: 'Now', labels: months.map(mk => mName(mk, 's').slice(0, 1)),
+        aName: fyLabel(y), bName: b ? fyLabel(y - 1) : '', label: 'Spending through the financial year, month by month' };
+      pace.tips = months.map((mk, i) => `${mName(mk, 's')}: ` + [i < a.length ? `${fmt0(a[i])} so far in ${fyLabel(y)}` : '', b ? `${fmt0(b[i])} in ${fyLabel(y - 1)}` : ''].filter(Boolean).join(' · '));
+    }
+    const curFc = !fy && isCur ? monthFc(curMk, todayD) : null;
+    if (curFc) pace.ahead = curFc.ahead;
+    // groups (Hospital, Personal…): income, spending and net for the period, and spending by month
+    let groups = null;
+    if (groupsOn) {
+      const gl = allGroups().concat(['']);
+      const g = new Map(gl.map(k => [k, { g: k, s: 0, i: 0, n: 0 }]));
+      deb.concat(cred).forEach(e => { const x = g.get(groupOf(e)); if (!x) return; x[e.type === 'debit' ? 's' : 'i'] += amtOf(e); x.n++; });
+      groups = { keys: gl, rows: gl.map(k => g.get(k)).filter(x => x.n) };
+    }
+    const m = { fy, r, isCur, today, curMk, realTo, items, spent, income, deb, cred, byMonth, byDay, mTot, firstMk, prev, avg, cats, pCat, catRank, icats, icatRank, ipay, ipayAll,
+      payees, wdSum, wdN, bins, months, pace, curFc, groups };
+    m.insights = anInsights(m);
+    m.ms = performance.now() - t0;
+    anMemo = { key, arr: state.expenses, m };
+    return m;
+  }
+
+  // ---------- insights: short sentences from the numbers, most important first ----------
+  function anInsights(m) {
+    const out = [], { spent, income, prev, avg } = m, w = m.fy ? 'this financial year' : 'this month';
+    const add = (score, ic, html, go) => out.push({ score, ic, html, go });
+    const b = s => `<b>${esc(s)}</b>`, catName = k => `${catOf(k).emoji || ''} ${k}`.trim();
+    if (income > 0 && spent > income) add(0.95, '⚠️', `You spent ${b(fmt0(spent - income))} more than came in ${w}.`, 'kind:spent');
+    // where this month is heading, and a month or year against the same baseline the headline uses
+    // (the 3-month average for a month, last financial year for a year), so the two never disagree
+    const more = (cur, base, up, down) => b((cur / base >= 3 ? chg(cur, base) : pct(Math.abs(cur - base) / base)) + (cur > base ? up : down));
+    if (m.curFc && spent > 0) {
+      const f = m.curFc, base = avg && avg.full > 0 ? avg.full : null, d = base ? (f.total - base) / base : 0;
+      const already = f.ahead >= 1 ? ` (${esc(fmt0(f.ahead))} of it already dated later this month)` : '';
+      add(0.9, '🧭', base && Math.abs(d) >= 0.05
+        ? `At this pace you'll spend about ${b(fmt0(f.total))} this month${already} — ${more(f.total, base, ' more', ' less')} than ${esc(avg.fullWord)} of ${esc(fmt0(base))}.`
+        : `At this pace you'll spend about ${b(fmt0(f.total))} this month${already}${base ? `, close to ${esc(avg.fullWord)} of ${esc(fmt0(base))}` : ''}.`, 'kind:spent');
+    } else if (m.fy && m.isCur && m.pace.fc && spent > 0) add(0.6, '🧭', `On course for about ${b(fmt0(m.pace.fc.v))} of spending this financial year.`, 'kind:spent');
+    if (!m.fy && !m.isCur && avg && avg.s > 0 && spent > 0) {
+      const d = (spent - avg.s) / avg.s;
+      add(0.45 + Math.min(0.3, Math.abs(d) / 2), d > 0.05 ? '📈' : d < -0.05 ? '📉' : '📊', Math.abs(d) >= 0.05
+        ? `You spent ${b(fmt0(spent))}, ${more(spent, avg.s, ' more', ' less')} than ${esc(avg.fullWord)} of ${esc(fmt0(avg.s))}.`
+        : `You spent ${b(fmt0(spent))}, about ${esc(avg.fullWord)} of ${esc(fmt0(avg.s))}.`, 'kind:spent');
+    }
+    if (m.fy && prev && prev.s > 0 && spent > 0) {
+      const d = (spent - prev.s) / prev.s;
+      add(0.5, d > 0 ? '📈' : '📉', `Spending is ${more(spent, prev.s, ' higher', ' lower')} than ${esc(prev.word)} (${esc(fmt0(prev.s))}).`, 'kind:spent');
+    }
+    // the biggest moves by category
+    if (prev && spent > 0) {
+      const pc = new Map(); m.pCat.forEach((v, k) => pc.set(k, v.amt));
+      const ch = new Map(); m.cats.forEach(c => ch.set(c.key, c.amt)); pc.forEach((v, k) => { if (!ch.has(k)) ch.set(k, 0); });
+      const moves = [...ch.entries()].map(([k, v]) => ({ k, v, p: pc.get(k) || 0, d: v - (pc.get(k) || 0) })).filter(x => Math.abs(x.d) >= Math.max(500, spent * 0.04));
+      const up = moves.filter(x => x.d > 0).sort((a, c) => c.d - a.d)[0], dn = moves.filter(x => x.d < 0).sort((a, c) => a.d - c.d)[0];
+      if (up) add(0.5 + Math.min(0.4, up.d / spent), '🔺', up.p > 0
+        ? `${b(catName(up.k))} went up by ${b(fmt0(up.d))} (${up.v / up.p >= 3 ? chg(up.v, up.p) : '+' + pct(up.d / up.p)}) compared with ${esc(prev.word)}.`
+        : `${b(catName(up.k))} is new: ${b(fmt0(up.v))}, against nothing in ${esc(prev.word)}.`, 'cat:spent:' + up.k);
+      if (dn) add(0.4 + Math.min(0.4, -dn.d / spent), '🔻', `${b(catName(dn.k))} came down by ${b(fmt0(-dn.d))} (−${pct(-dn.d / dn.p)}) compared with ${esc(prev.word)}.`, dn.v > 0 ? 'cat:spent:' + dn.k : 'kind:spent');
+    }
+    // a few large one-off payments
+    const rec = recurringList().filter(x => x.type === 'debit');
+    const isRec = e => { const k = payerKey(e); return !!k && rec.some(x => samePayer(k, x.key) || samePayer(x.key, k)); };
+    if (spent > 0 && m.deb.length >= 5) {
+      const big = m.deb.filter(e => amtOf(e) >= spent * 0.1 && !isRec(e)).sort((a, c) => amtOf(c) - amtOf(a)).slice(0, 3);
+      const share = big.reduce((t, e) => t + amtOf(e), 0) / spent;
+      if (big.length && share >= 0.25) {
+        const top = big[0], who = payerKey(top) ? payerName(payerKey(top)) : catOf(top.category).name;
+        add(0.85 * share + 0.2, '💥', `${b(big.length === 1 ? 'One large payment' : `${big.length} large payments`)} made up ${b(pct(share))} of spending${big.length > 1 ? ' — the biggest' : ':'} ${b(fmt0(amtOf(top)))} to ${esc(who)} on ${esc(dName(top.date))}.`,
+          'ids:' + big.map(e => e.id).join(','));   // the list shows exactly these payments
+      }
+    }
+    // groups with income: what a business one (Hospital, a business account's) made, what a personal one kept
+    const bizAcct = new Set((state.accounts || []).map(a => a.business && a.business.group).filter(Boolean));
+    if (m.groups) m.groups.rows.filter(g => g.g && g.i > 0).forEach(g => {
+      const net = g.i - g.s;
+      if (bizAcct.has(g.g) || !/^(personal|home|family|household|self|me)$/i.test(g.g))
+        add(0.62, '🏷️', `${b(g.g)}: income ${esc(fmt0(g.i))} − spending ${esc(fmt0(g.s))} = ${b(fmt0(Math.abs(net)) + (net >= 0 ? ' profit' : ' loss'))} (${pct(Math.abs(net) / g.i)} ${net >= 0 ? 'margin' : 'of its income'}).`, 'group:' + g.g);
+      else add(0.4, '🏷️', `${b(g.g)}: ${esc(fmt0(g.i))} came in and ${esc(fmt0(g.s))} went out — ${b(fmt0(Math.abs(net)) + (net >= 0 ? ' kept' : ' more spent than earned'))}.`, 'group:' + g.g);
+    });
+    // cash hides what it bought; "Other" hides what it was
+    const cashC = m.cats.find(c => c.key === catAlias('Cash'));
+    if (cashC && spent > 0 && cashC.amt / spent >= 0.03) add(Math.min(0.7, 0.2 + cashC.amt / spent * 2), '🏧', `${b(fmt0(cashC.amt))} was taken out as cash (${plural(cashC.n, 'withdrawal')}) — ${pct(cashC.amt / spent)} of spending with no record of what it bought.`, 'cat:spent:' + cashC.key);
+    const otherC = m.cats.find(c => c.key === catAlias('Other'));
+    if (otherC && spent > 0 && otherC.amt / spent >= 0.15) add(Math.min(0.7, otherC.amt / spent), '📦', `${b(fmt0(otherC.amt))} (${pct(otherC.amt / spent)} of spending, ${plural(otherC.n, 'payment')}) is under ${esc(otherC.key)} — giving those a category makes this picture sharper.`, 'cat:spent:' + otherC.key);
+    // still to review
+    const rv = m.items.filter(e => e.unread);
+    if (rv.length) {   // money out and money in kept apart, counted as the list it opens adds them up
+      const rs = sum(rv.filter(e => e.type === 'debit' && counted(e))), ri = sum(rv.filter(e => e.type === 'credit' && counted(e)));
+      const amts = [rs >= 0.5 ? `${fmt0(rs)} spent` : '', ri >= 0.5 ? `${fmt0(ri)} received` : ''].filter(Boolean).join(' and ');
+      add(0.36, '📝', `${b(plural(rv.length, 'transaction'))} ${rv.length === 1 ? 'is' : 'are'} still marked to review${amts ? ` — ${esc(amts)}` : ''}.`, 'review:');
+    }
+    // repeating payments (recurringList): what they actually took in the period shown, from the account
+    // shown, counted like all spending here (counted(), net of refunds; SIPs and transfers aren't spending)
+    if (rec.length && spent > 0) {
+      const took = new Map();
+      m.deb.forEach(e => {
+        const k = payerKey(e), r = k && rec.find(x => samePayer(k, x.key) || samePayer(x.key, k)); if (!r) return;
+        const g = took.get(r.key) || { r, amt: 0, n: 0 }; g.amt += amtOf(e); g.n++; took.set(r.key, g);
+      });
+      const reps = [...took.values()].filter(g => g.amt > 0).sort((a, c) => c.amt - a.amt);
+      if (reps.length) {
+        const tot = reps.reduce((t, g) => t + g.amt, 0), top = reps[0];
+        add(0.3, '🔁', `${b(plural(reps.length, 'repeating payment'))} took ${b(fmt0(tot))} ${w} (${pct(tot / spent)} of spending)${reps.length > 1 ? ' — the most' : ':'} ${esc(fmt0(top.amt))} to ${esc(top.r.name)}${top.n > 1 ? ` over ${plural(top.n, 'payment')}` : ''}.`, 'payee:' + top.r.key);
+      }
+    }
+    // where income comes from
+    if (income > 0) {
+      const src = m.ipay[0], share = src ? src.amt / income : 0;
+      if (src && share >= 0.3) add(0.3 + share * 0.2, '💰', `${b(pct(share))} of income came from ${b(payerName(src.key))} (${esc(fmt0(src.amt))}, ${plural(src.n, 'payment')}).`, 'payee:' + src.key);
+      else if (m.icats[0] && m.icats[0].amt / income >= 0.3) add(0.3, '💰', `${b(pct(m.icats[0].amt / income))} of income was ${b(catName(m.icats[0].key))} (${esc(fmt0(m.icats[0].amt))}).`, 'cat:income:' + m.icats[0].key);
+    }
+    if (m.payees[0] && spent > 0) { const p = m.payees[0]; add(0.25, '🏪', `Your biggest payee was ${b(payerName(p.key))}: ${esc(fmt0(p.amt))} over ${plural(p.n, 'payment')} (${pct(p.amt / spent)} of spending).`, 'payee:' + p.key); }
+    const avgs = m.wdSum.map((s, i) => m.wdN[i] ? s / m.wdN[i] : 0), mx = Math.max(...avgs);
+    if (mx > 0 && m.deb.length >= 10) add(0.1, '📅', `${b(WDL[avgs.indexOf(mx)] + 's')} cost the most: ${esc(fmt0(mx))} on average.`, '');
+    return out.sort((a, c) => c.score - a.score).slice(0, 8);
+  }
+
+  // ---------- the cards ----------
+  let anIncBy = '', anAnimKey = '', anW = 0;
+  function anDelta(cur, base, upGood, label, money) {
+    if (base == null) return '';
+    const d = cur - base;
+    if (Math.abs(d) < 0.5) return `<span class="an-d">= same as ${esc(label)}</span>`;
+    const up = d > 0, good = up === upGood, txt = money || !(base > 0) ? fmt0(Math.abs(d)) : chg(cur, base);
+    return `<span class="an-d"><b class="${good ? 'an-good' : 'an-bad'}">${up ? '▲' : '▼'} ${esc(txt)}</b> vs ${esc(label)}</span>`;
+  }
+  function anCardHead(m) {
+    const { spent, income } = m, saved = income - spent, rate = income > 0 ? saved / income : null, { prev, avg } = m;
+    const status = rate == null ? 'No income recorded' : rate < 0 ? '✕ Spent more than came in' : rate < 0.2 ? '⚠ Kept less than 20% of income' : '✓ Kept 20% or more of income';
+    const stCls = rate == null ? '' : rate < 0 ? 'an-bad' : rate < 0.2 ? 'an-warn' : 'an-good';
+    const ds = (cur, k, good, money) => anDelta(cur, prev ? prev[k] : null, good, prev ? prev.label : '', money) + anDelta(cur, avg ? avg[k] : null, good, avg ? avg.label : '', money);
+    return `<div class="card an-head-card">
+      <div class="total-label">${m.isCur ? `${esc(m.r.label)} so far` : esc(m.r.label)}</div>
+      <div class="an-head">${vzGauge(rate)}
+        <div><div class="total-label" style="font-size:11px">${saved < 0 ? 'Overspent' : 'Saved'}</div>
+          <div class="an-big" id="anSaved" style="${saved < 0 ? 'color:var(--danger)' : ''}">${esc(fmt(saved))}</div>
+          <div class="an-status ${stCls}">${esc(status)}</div>
+          ${anDelta(saved, prev ? prev.i - prev.s : null, true, prev ? prev.label : '', true)}${anDelta(saved, avg ? avg.i - avg.s : null, true, avg ? avg.label : '', true)}</div></div>
+      <div class="an-kpis">
+        <div class="an-kpi" data-go="kind:spent" role="button" tabindex="0"><div class="total-label">Spent ›</div><div class="v" id="anSpent">${esc(fmt(spent))}</div>${ds(spent, 's', false)}</div>
+        <div class="an-kpi" data-go="kind:income" role="button" tabindex="0"><div class="total-label">Income ›</div><div class="v" id="anIncome" style="color:var(--income)">${esc(fmt(income))}</div>${ds(income, 'i', true)}</div>
+      </div>
+      ${!prev && !avg ? `<div class="sub">No earlier ${m.fy ? 'financial year' : 'months'} on record to compare with.</div>` : prev && m.isCur ? `<div class="sub">Compared like for like: the same days of the period before.</div>` : ''}
+    </div>`;
+  }
+  function anCardInsights(m) {
+    if (!m.insights.length) return '';
+    return `<div class="card"><h2>💡 Insights</h2>${m.insights.map(x => `<div class="an-ins"${x.go ? ` data-go="${esc(x.go)}" role="button" tabindex="0"` : ''}>
+      <span class="ic" aria-hidden="true">${esc(x.ic)}</span><div>${x.html}</div><span class="chev" aria-hidden="true">${x.go ? '›' : ''}</span></div>`).join('')}</div>`;
+  }
+  function anCardCombo(m, W) {
+    const ms = m.months.map(mk => { const t = m.mTot(mk); return { mk, i: t.i, s: t.s, net: t.i - t.s, fut: mk > m.today.slice(0, 7) }; });
+    if (!ms.some(x => x.i || x.s)) return '';
+    const cur = m.fy ? (m.isCur ? m.today.slice(0, 7) : '') : m.curMk, c = ms.find(x => x.mk === (cur || ms[ms.length - 1].mk)) || ms[ms.length - 1];
+    const def = `${mName(c.mk, 'y')}: income ${fmt0(c.i)} · spent ${fmt0(c.s)} · net ${sgn(c.net)}`;
+    return `<div class="card"><h2>Income vs spending by month</h2>
+      <div class="sub">${m.fy ? esc(m.r.label) : ms.length < 12 ? `Since ${esc(mName(ms[0].mk, 'y'))}` : 'Last 12 months'} · tap a month to open it</div>
+      ${vzLegend([['', 'var(--vz-inc)', 'Income'], ['', 'var(--vz-spend)', 'Spending'], ['ln', 'var(--vz-net)', 'Net (saved)']])}${vzTip(def)}
+      <div class="an-chart">${vzCombo(W, ms, cur)}</div></div>`;
+  }
+  function anCardPace(m, W) {
+    const p = m.pace;
+    if (!p.a.some(v => v > 0) && !(p.b && p.b.some(v => v > 0))) return '';
+    const last = p.a.length ? p.a[p.a.length - 1] : 0, bAt = p.b && p.a.length ? p.b[Math.min(p.b.length, p.a.length) - 1] : null;
+    let def = `${fmt0(last)} spent ${m.isCur ? 'so far' : `in ${p.aName}`}${p.ahead >= 1 ? ` (+${fmt0(p.ahead)} dated later this month)` : ''}`;
+    if (bAt != null) def += m.isCur ? ` · ${fmt0(bAt)} by the same ${m.fy ? 'month' : 'day'} in ${p.bName}` : ` · ${fmt0(p.b[p.b.length - 1])} in ${p.bName}`;
+    if (p.fc) def += ` · heading for ~${fmt0(p.fc.v)}`;
+    return `<div class="card"><h2>Spending pace</h2>
+      <div class="sub">${m.fy ? 'Running total month by month' : 'Running total day by day'}${p.b ? `, against ${esc(p.bName)}` : ''}${p.fc ? ' · dashed: where it is heading' : ''}</div>
+      ${vzLegend([['ln', 'var(--vz-spend)', p.aName]].concat(p.b ? [['ln', 'var(--vz-ctx)', p.bName]] : [], p.fc ? [['dash', 'var(--vz-spend)', 'Forecast']] : []))}${vzTip(def)}
+      <div class="an-chart">${vzPace(W, p)}</div></div>`;
+  }
+  // a part-to-whole card: donut + legend, then the ranked rows
+  function anDonutCard(title, sub, total, parts, rows, extra) {
+    return `<div class="card"><h2>${title}</h2><div class="sub">${sub}</div>${extra || ''}
+      <div class="an-donut">${vzDonut(150, parts, cmp(total), parts.kind, title)}
+        <div class="an-dleg">${parts.map(p => `<div><i style="background:${p.color}"></i><span>${esc(p.name)}</span><b>${esc(pct(p.v / (total || 1)))}</b></div>`).join('')}</div></div>
+      ${vzTip(parts.def)}<div class="an-rows">${rows}</div></div>`;
+  }
+  function anChange(cur, prev, upGood) {
+    if (prev == null) return '';
+    if (!(prev > 0)) return cur > 0 ? '<small>new</small>' : '';
+    const d = (cur - prev) / prev;
+    if (Math.abs(d) < 0.01) return '<small>same</small>';
+    return `<small class="${(d > 0) === upGood ? 'an-good' : 'an-bad'}">${d > 0 ? '▲' : '▼'} ${esc(chg(cur, prev))}</small>`;
+  }
+  function anCardCats(m) {
+    if (!m.cats.length) return '';
+    const top = m.cats.slice(0, 7), rest = m.cats.slice(7), slots = slotsFor(m.catRank, top.map(c => c.key)), total = m.spent;
+    const col = k => slots.has(k) ? slotColor(slots.get(k)) : 'var(--vz-other)';
+    const parts = top.map(c => ({ name: catName2(c.key), v: c.amt, color: col(c.key), go: 'cat:spent:' + c.key, tip: `${catName2(c.key)}: ${fmt0(c.amt)} · ${pct(c.amt / (total || 1))} of spending · ${plural(c.n, 'payment')}` }));
+    if (rest.length === 1) { const c = rest[0]; parts.push({ name: catName2(c.key), v: c.amt, color: 'var(--vz-other)', go: 'cat:spent:' + c.key, tip: `${catName2(c.key)}: ${fmt0(c.amt)} · ${pct(c.amt / (total || 1))} of spending · ${plural(c.n, 'payment')}` }); }
+    else if (rest.length) { const v = rest.reduce((t, c) => t + c.amt, 0); parts.push({ name: `Others (${rest.length})`, v, color: 'var(--vz-other)', tip: `${rest.length} other categories: ${fmt0(v)} · ${pct(v / (total || 1))}` }); }
+    parts.kind = 'spent'; parts.def = `${fmt(total)} spent in ${m.cats.length} ${m.cats.length === 1 ? 'category' : 'categories'} · tap one to see its payments`;
+    const rows = m.cats.map(c => `<div class="an-row" data-go="cat:spent:${esc(c.key)}" role="button" tabindex="0">
+        <span class="an-sw" style="background:${col(c.key)}"></span>
+        <div class="nm">${esc(catName2(c.key))}<small>${pct(c.amt / (total || 1))} · ${plural(c.n, 'payment')}</small></div>
+        ${vzSpark(c.spark, col(c.key))}
+        <div class="v">${esc(fmt0(c.amt))}${anChange(c.amt, c.prev, false)}</div></div>`).join('');
+    return anDonutCard('Where the money went', `${m.prev ? `Change against ${esc(m.prev.word)}` : 'Spending by category'} · lines: last 6 months`, total, parts, rows);
+  }
+  const catName2 = k => `${catOf(k).emoji || ''} ${k}`.trim();
+  function anCardIncome(m) {
+    if (!m.cred.length) return '';
+    const total = m.income, byCatShare = m.icats[0] ? m.icats[0].amt / total : 1;
+    const by = m.ipay.length ? anIncBy || (m.ipay.length > 1 && byCatShare > 0.6 ? 'payer' : 'cat') : 'cat';
+    let list, slots, rank;
+    if (by === 'payer') {
+      const unnamed = m.income - m.ipay.reduce((t, g) => t + g.amt, 0);
+      list = m.ipay.map(g => ({ key: g.key, name: payerName(g.key), amt: g.amt, n: g.n, prev: g.prev, go: 'payee:' + g.key }));
+      if (unnamed > 0.5) list.push({ key: '\u0000', name: 'No payer name', amt: unnamed, n: m.cred.filter(e => !payerKey(e)).length, prev: null, go: 'kind:income' });
+      list.sort((a, b) => b.amt - a.amt);
+      // a payer keeps its colour from month to month: ranked by all-time income, keyed by its all-time name
+      const canon = k => (m.ipayAll.find(g => samePayer(k, g.key) || samePayer(g.key, k)) || { key: k }).key;
+      list.forEach((x, i) => { x.slot = x.key === '\u0000' || i >= 12 ? x.key : canon(x.key); });
+      rank = m.ipayAll.map(g => g.key);
+    } else {
+      list = m.icats.map(c => ({ key: c.key, slot: c.key, name: catName2(c.key), amt: c.amt, n: c.n, prev: c.prev, go: 'cat:income:' + c.key }));
+      rank = m.icatRank;
+    }
+    const top = list.slice(0, 7), rest = list.slice(7);
+    slots = slotsFor(rank, top.map(x => x.slot));
+    const col = k => slots.has(k) ? slotColor(slots.get(k)) : 'var(--vz-other)';
+    const parts = top.map(x => ({ name: x.name, v: x.amt, color: col(x.slot), go: x.go, tip: `${x.name}: ${fmt0(x.amt)} · ${pct(x.amt / total)} of income · ${plural(x.n, 'payment')}` }));
+    if (rest.length === 1) { const x = rest[0]; parts.push({ name: x.name, v: x.amt, color: 'var(--vz-other)', go: x.go, tip: `${x.name}: ${fmt0(x.amt)} · ${pct(x.amt / total)} of income · ${plural(x.n, 'payment')}` }); }
+    else if (rest.length) { const v = rest.reduce((t, x) => t + x.amt, 0); parts.push({ name: `Others (${rest.length})`, v, color: 'var(--vz-other)', tip: `${rest.length} more: ${fmt0(v)} · ${pct(v / total)}` }); }
+    parts.kind = 'income'; parts.def = `${fmt(total)} came in from ${plural(list.length, by === 'payer' ? 'source' : 'category', by === 'payer' ? 'sources' : 'categories')}`;
+    const rows = list.slice(0, 12).map(x => `<div class="an-row" data-go="${esc(x.go)}" role="button" tabindex="0">
+        <span class="an-sw" style="background:${col(x.slot)}"></span>
+        <div class="nm">${esc(x.name)}<small>${pct(x.amt / total)} · ${plural(x.n, 'payment')}</small></div><span></span>
+        <div class="v" style="color:var(--income)">${esc(fmt0(x.amt))}${anChange(x.amt, x.prev, true)}</div></div>`).join('') +
+      (list.length > 12 ? `<div class="sub">…and ${list.length - 12} more</div>` : '');
+    const tg = !m.ipay.length ? '' : `<div class="chips an-toggle"><button class="chip ${by === 'payer' ? 'sel' : ''}" data-incby="payer">By payer</button><button class="chip ${by === 'cat' ? 'sel' : ''}" data-incby="cat">By category</button></div>`;
+    return anDonutCard('Where the income came from', m.prev ? `Change against ${esc(m.prev.word)}` : 'Income by source', total, parts, rows, tg);
+  }
+  function anCardWaterfall(m, W) {
+    if (!(m.income > 0) || !m.cats.length) return '';
+    // the 5 biggest categories, then the rest in one bar (a 6th category on its own rather than "everything else (1)")
+    const nTop = m.cats.length <= 6 ? m.cats.length : 5, nRest = m.cats.length - nTop;
+    const top = m.cats.slice(0, nTop), restV = m.cats.slice(nTop).reduce((t, c) => t + c.amt, 0), saved = m.income - m.spent;
+    const steps = [{ kind: 'inc', v: m.income, name: '💰 Income', label: '+' + fmt0(m.income), tip: `Income: ${fmt0(m.income)}`, go: 'kind:income' }]
+      .concat(top.map(c => ({ kind: 'sp', v: c.amt, name: catName2(c.key), label: '−' + fmt0(c.amt), tip: `${catName2(c.key)}: −${fmt0(c.amt)} (${pct(c.amt / m.income)} of income)`, go: 'cat:spent:' + c.key })),
+        restV > 0 ? [{ kind: 'sp', v: restV, name: `Everything else (${nRest})`, label: '−' + fmt0(restV), tip: `${plural(nRest, 'smaller category', 'smaller categories')}: −${fmt0(restV)}`, go: 'kind:spent' }] : [],
+        [{ kind: 'end', v: saved, name: saved >= 0 ? '🏦 Saved' : '✕ Overspent', label: (saved < 0 ? '−' : '') + fmt0(Math.abs(saved)), tip: saved >= 0 ? `Kept ${fmt0(saved)}: ${pct(saved / m.income)} of income` : `Spent ${fmt0(-saved)} more than came in` }]);
+    return `<div class="card"><h2>How income was used</h2><div class="sub">From ${esc(fmt0(m.income))} in to ${esc(fmt0(Math.abs(saved)))} ${saved >= 0 ? 'kept' : 'overspent'}, biggest categories first</div>
+      ${vzTip(`Each bar takes its share out of what came in`)}<div class="an-chart">${vzWaterfall(W, steps)}</div></div>`;
+  }
+  function anCardGroups(m, W) {
+    if (!m.groups || !m.groups.rows.length) return '';
+    const keys = m.groups.keys, colors = keys.map((g, i) => g && i < AN_SLOTS ? slotColor(i) : 'var(--vz-other)');
+    const ms = m.months.map(mk => { const t = m.mTot(mk).grp; return { mk, fut: mk > m.today.slice(0, 7), parts: keys.map(g => t && t.get(g) ? t.get(g).s : 0) }; });
+    const used = keys.map((g, j) => ms.some(x => x.parts[j] > 0));
+    const k2 = keys.filter((g, j) => used[j]), c2 = colors.filter((c, j) => used[j]), ms2 = ms.map(x => ({ mk: x.mk, fut: x.fut, parts: x.parts.filter((v, j) => used[j]) }));
+    const name = g => g || 'No group', cur = m.fy ? (m.isCur ? m.today.slice(0, 7) : '') : m.curMk;
+    // each amount in full and compact (₹36L): anFit shows the compact ones when the full table is wider than the card
+    const amt = (v, neg) => `<span class="f">${esc((neg ? '−' : '') + fmt0(v))}</span><span class="c">${esc((neg ? '−' : '') + cmp(v))}</span>`;
+    const rows = m.groups.rows.map(g => `<tr data-go="group:${esc(g.g)}" role="button" tabindex="0"><td><i class="an-sw" style="display:inline-block;margin-right:6px;background:${colors[keys.indexOf(g.g)]}"></i>${esc(name(g.g))}</td>
+      <td${g.i ? ' style="color:var(--income)"' : ''}>${g.i ? amt(g.i) : '—'}</td><td>${amt(g.s)}</td><td${g.i && g.i - g.s < 0 ? ' style="color:var(--danger)"' : ''}>${g.i ? amt(Math.abs(g.i - g.s), g.i - g.s < 0) : '—'}</td></tr>`).join('');
+    return `<div class="card"><h2>Groups</h2><div class="sub">Spending by group each month · the table is ${esc(m.r.label)}</div>
+      ${k2.length ? vzLegend(k2.map((g, j) => ['', c2[j], name(g)])) + vzTip('Tap a month to open it, or a group below') + `<div class="an-chart">${vzStacked(W, ms2, k2.map(name), c2, cur)}</div>` : ''}
+      <table class="an-tbl"><thead><tr><th>Group</th><th>Income</th><th>Spent</th><th>Net</th></tr></thead><tbody>${rows}</tbody></table></div>`;
+  }
+  function anCardHeat(m, W) {
+    if (!m.deb.length) return '';
+    const b = m.bins, legend = `<div class="an-legend an-scale"><span>Less</span>${[0, 0.2, 0.42, 0.68, 1].map(o => `<i style="background:${o ? 'var(--vz-spend)' : 'var(--vz-cell)'};opacity:${o || 1}"></i>`).join('')}<span>More</span>` +
+      `<span class="an-bands">${b.length ? `≤${esc(cmp(b[0]))} · ≤${esc(cmp(b[1]))} · ≤${esc(cmp(b[2]))} · more` : ''}</span></div>`;
+    const days = [...m.byDay.entries()].filter(([d, v]) => d >= m.r.from && d <= m.realTo && v.s > 0).sort((a, c) => c[1].s - a[1].s), top = days[0];
+    const def = top ? `Biggest day: ${dName(top[0], true)} — ${fmt0(top[1].s)} (${plural(top[1].n, 'payment')}) · ${m.fy ? 'tap a day to pick it' : 'tap a day to see it'}` : '';
+    return `<div class="card"><h2>Daily spending</h2><div class="sub">${plural(days.length, 'day')} with spending${m.isCur ? ' so far' : ''}</div>${legend}${vzTip(def)}
+      <div class="an-chart">${m.fy ? vzHeatYear(W, fyStartYear(current), m.byDay, b, m.today) : vzHeatMonth(W, m.curMk, m.byDay, b, m.today)}</div></div>`;
+  }
+  function anCardPayees(m, W) {
+    const top = m.payees.slice(0, 8);
+    if (!top.length) return '';
+    const rows = top.map(p => ({ name: payerName(p.key), sub: `· ${p.n}×`, v: p.amt, label: fmt0(p.amt), go: 'payee:' + p.key,
+      tip: `${payerName(p.key)}: ${fmt0(p.amt)} over ${plural(p.n, 'payment')} (${pct(p.amt / (m.spent || 1))} of spending) · tap for its history` }));
+    return `<div class="card"><h2>Top payees</h2><div class="sub">Who got the most ${m.fy ? 'this financial year' : 'this month'} · tap one for its history</div>
+      ${vzTip(rows[0].tip)}<div class="an-chart">${vzHbars(W, rows, 'var(--vz-spend)')}</div></div>`;
+  }
+  function anCardWeek(m, W) {
+    if (!m.deb.length) return '';
+    const order = [1, 2, 3, 4, 5, 6, 0], vals = order.map(i => m.wdN[i] ? m.wdSum[i] / m.wdN[i] : 0);
+    const tips = order.map((i, k) => `${WDL[i]}s: ${fmt0(vals[k])} on average (${plural(m.wdN[i], WDL[i])}, ${fmt0(m.wdSum[i])} in all)`);
+    const big = m.deb.slice().sort((a, c) => amtOf(c) - amtOf(a)).slice(0, 5);
+    const rows = big.map(e => `<div class="an-row" data-go="edit:${esc(e.id)}" role="button" tabindex="0" style="grid-template-columns:28px minmax(0,1fr) auto">
+        <span class="an-em">${esc(catOf(e.category).emoji || '')}</span>
+        <div class="nm">${esc(payerKey(e) ? payerName(payerKey(e)) : e.comment || noteText(e) || e.category)}<small>${esc(dName(e.date, true))} · ${esc(e.category)}${e.comment && payerKey(e) ? ' · ' + esc(e.comment) : ''}</small></div>
+        <div class="v">${esc(fmt(amtOf(e)))}</div></div>`).join('');
+    const hi = vals.indexOf(Math.max(...vals));
+    return `<div class="card"><h2>Spending by weekday</h2><div class="sub">Average spent on each day of the week${m.isCur ? ' so far' : ''}</div>
+      ${vzTip(tips[hi])}<div class="an-chart">${vzColumns(W, vals, order.map(i => WD[i]), tips)}</div>
+      <h2 style="margin-top:14px">Largest payments</h2><div class="an-rows">${rows}</div></div>`;
+  }
+
+  function renderAnalysis() {
+    const root = $('anRoot');
+    anW = root.clientWidth;
+    const W = Math.max(260, Math.min(608, (anW || 358) - 34));
+    const m = anModel(), fa = acctById(acctFilter);
+    const animate = anAnimKey !== anMemo.key; anAnimKey = anMemo.key;
+    const acct = fa ? `<div class="filters" style="margin:0 0 8px"><button class="chip sel" data-anacct="1">${esc(acctLabel(fa))} only ✕</button></div>` : '';
+    let html = acct + anCardHead(m);
+    if (!m.items.some(e => counted(e))) {
+      html += `<div class="card"><div class="empty" style="padding:28px 8px"><div>🔍</div>Nothing ${m.items.length ? 'counted' : 'recorded'} ${m.fy ? 'in ' + esc(m.r.label) : 'in ' + esc(m.r.label)}${fa ? ' for ' + esc(acctName(fa)) : ''}.<br>
+        <span class="sub">${m.items.length ? 'Transfers, investments and categories set as not counted are left out.' : 'Import a statement with 📥 or add entries with +.'}</span></div></div>`;
+      html += anCardCombo(m, W);
+    } else {
+      html += anCardInsights(m) + anCardCombo(m, W) + anCardPace(m, W) + anCardCats(m) + anCardIncome(m) + anCardWaterfall(m, W) +
+        anCardGroups(m, W) + anCardHeat(m, W) + anCardPayees(m, W) + anCardWeek(m, W);
+    }
+    root.classList.toggle('an-fade', animate);
+    root.innerHTML = html;
+    anFit(root);
+    root.dataset.ms = m.ms.toFixed(1);
+  }
+  // Amounts never break inside the number: a headline figure wider than its column is drawn smaller,
+  // and a table too wide for its card shows compact amounts (₹36L), so the page never scrolls sideways
+  function anFit(root) {
+    root.querySelectorAll('.an-big, .an-kpi .v').forEach(el => {
+      el.style.fontSize = '';
+      const w = el.clientWidth, sw = el.scrollWidth; if (!w || sw <= w) return;
+      const fs = parseFloat(getComputedStyle(el).fontSize);
+      el.style.fontSize = Math.max(10, Math.floor(fs * w / sw * 10) / 10) + 'px';
+    });
+    root.querySelectorAll('.an-tbl').forEach(t => {
+      t.classList.remove('short');
+      const card = t.parentElement, cs = getComputedStyle(card), avail = card.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight);
+      if (avail > 0 && t.offsetWidth > avail + 0.5) t.classList.add('short');
+    });
+  }
+  // Analysis: what to open when a chart, row or insight is tapped (the list, with only that filter on)
+  function anGo(s) {
+    const i = s.indexOf(':'), k = s.slice(0, i), v = s.slice(i + 1);
+    if (k === 'edit') { const e = state.expenses.find(x => x.id === v); if (e) openSheet(e); return; }
+    openListWith(() => {
+      if (k === 'kind') kindFilter = v;
+      else if (k === 'cat') { const j = v.indexOf(':'); kindFilter = v.slice(0, j); catFilter = v.slice(j + 1); }
+      else if (k === 'payee') payerFilter = v;
+      else if (k === 'group') keepGroupFilter(v);
+      else if (k === 'review') reviewOnly = true;
+      else if (k === 'day') dayFilter = v;
+      else if (k === 'ids') { kindFilter = 'spent'; idFilter = new Set(v.split(',')); }
+      else if (k === 'month') { period = 'month'; try { localStorage.setItem('expense-tracker-v1:period', 'month'); } catch (e) {} current = mkStart(v); }
+    });
+  }
+  (() => {
+    const sec = $('view-analysis');
+    // a readout shows what is under the pointer, else the day picked on the year's calendar (with its Open button), else the card's own line
+    const tipFor = (el, card) => {
+      const t = card && card.querySelector('.an-tip'); if (!t) return;
+      const pk = !el && card.querySelector('.cell.pick');
+      if (el) t.textContent = el.getAttribute('data-tip');
+      else if (pk) t.innerHTML = `${esc(pk.getAttribute('data-tip'))}<button class="chip sel" data-go="${esc(pk.getAttribute('data-pick'))}">Open ›</button>`;
+      else t.textContent = t.getAttribute('data-def');
+    };
+    // The year's calendar has a cell per day, too small to aim a finger at: a touch picks the nearest day and
+    // the readout names it with an Open button; a mouse click (a precise pointer) opens the day at once.
+    let lastPtr = 'mouse';
+    sec.addEventListener('pointerdown', e => { lastPtr = e.pointerType || 'mouse'; }, true);
+    const pickAt = e => {
+      const svg = e.target.closest && e.target.closest('svg[data-heat]'); if (!svg) return null;
+      const own = e.target.closest('[data-pick]'); if (own) return own;
+      let best = null, bd = Infinity;   // a tap in the gap between days: the nearest day, if it is close
+      svg.querySelectorAll('[data-pick]').forEach(c => { const r = c.getBoundingClientRect(), d = Math.hypot(r.left + r.width / 2 - e.clientX, r.top + r.height / 2 - e.clientY); if (d < bd) { bd = d; best = c; } });
+      return best && bd <= best.getBoundingClientRect().width * 1.5 ? best : null;
+    };
+    const hot = el => { sec.querySelectorAll('.vz .hot').forEach(x => x.classList.remove('hot')); if (el) el.classList.add('hot'); };
+    sec.addEventListener('pointerover', e => { const el = e.target.closest('[data-tip]'); if (el) { tipFor(el, el.closest('.card')); hot(el); } });
+    sec.addEventListener('focusin', e => { const el = e.target.closest('[data-tip]'); if (el) { tipFor(el, el.closest('.card')); hot(el); } });
+    sec.addEventListener('pointerout', e => {
+      const el = e.target.closest('[data-tip]'), to = e.relatedTarget && e.relatedTarget.closest && e.relatedTarget.closest('[data-tip]');
+      if (el && !to) { tipFor(null, el.closest('.card')); hot(null); }
+    });
+    // the pace chart's crosshair follows the finger / pointer and snaps to the nearest day (or month)
+    const xh = (e, off) => {
+      const svg = e.target.closest && e.target.closest('svg[data-xh]'); if (!svg) return;
+      const meta = anXh[svg.dataset.xh], line = svg.querySelector('.xh'), card = svg.closest('.card'); if (!meta || !line) return;
+      if (off) { line.style.display = 'none'; tipFor(null, card); return; }
+      const rc = svg.getBoundingClientRect(), x = (e.clientX - rc.left) * (svg.viewBox.baseVal.width / rc.width);
+      const i = Math.max(0, Math.min(meta.n - 1, Math.round((x - meta.x0) / (meta.dx || 1)))), px = hl(meta.x0 + i * meta.dx);
+      line.setAttribute('x1', px); line.setAttribute('x2', px); line.style.display = '';
+      const t = card.querySelector('.an-tip'); if (t && meta.tips[i]) t.textContent = meta.tips[i];
+    };
+    sec.addEventListener('pointermove', e => xh(e, false));
+    sec.addEventListener('pointerdown', e => xh(e, false));
+    sec.addEventListener('pointerleave', e => { if (e.pointerType !== 'touch') xh(e, true); }, true);   // a finger lifted: its reading stays
+    sec.addEventListener('click', e => {
+      if (e.target.closest('[data-anacct]')) { acctFilter = ''; render(); return; }
+      const t = e.target.closest('[data-incby]'); if (t) { anIncBy = t.dataset.incby; renderAnalysis(); return; }
+      const pk = pickAt(e);
+      if (pk) {
+        if (lastPtr === 'mouse') { anGo(pk.getAttribute('data-pick')); return; }
+        const card = pk.closest('.card');
+        card.querySelectorAll('.cell.pick').forEach(x => x.classList.remove('pick'));
+        pk.classList.add('pick'); tipFor(null, card);
+        return;
+      }
+      const g = e.target.closest('[data-go]'); if (g && g.getAttribute('data-go')) anGo(g.getAttribute('data-go'));
+    });
+    sec.addEventListener('keydown', e => {
+      const g = (e.key === 'Enter' || e.key === ' ') && e.target.closest('[data-go], [data-pick]');
+      if (g) { e.preventDefault(); anGo(g.getAttribute('data-go') || g.getAttribute('data-pick')); }
+    });
+    // charts are drawn at the card's width: draw again when it changes (rotation, split view)
+    let rt = null;
+    window.addEventListener('resize', () => {
+      if (view !== 'analysis') return;
+      clearTimeout(rt); rt = setTimeout(() => { if (view === 'analysis' && $('anRoot').clientWidth !== anW) renderAnalysis(); }, 150);
+    });
+  })();
 
   function renderSettings() {
     const sel = $('currency');
@@ -3176,6 +4153,7 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
   });
   $('fHistory').addEventListener('click', () => {
     payerFilter = $('fHistory').dataset.key || '';
+    catFilter = ''; dayFilter = ''; idFilter = null;   // a payee's history is all of it: a day, category or payments picked on Analysis don't narrow it
     returnToMail = false; closeAll();
     view = 'list'; syncNav(); render();
     requestAnimationFrame(() => {
@@ -4570,7 +5548,7 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
   });
 
   // ---------- navigation ----------
-  const step = n => { current = new Date(current.getFullYear(), current.getMonth() + n * (period === 'fy' ? 12 : 1), 1); render(); };
+  const step = n => { current = new Date(current.getFullYear(), current.getMonth() + n * (period === 'fy' ? 12 : 1), 1); dayFilter = ''; idFilter = null; render(); };
   $('prevM').addEventListener('click', () => step(-1));
   $('nextM').addEventListener('click', () => {
     step(1);
@@ -4581,6 +5559,9 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
   $('search').addEventListener('input', renderList);
   $('amtBar').addEventListener('click', e => {
     if (e.target.closest('[data-kindoff]')) { kindFilter = ''; renderList(); return; }
+    if (e.target.closest('[data-catoff]')) { catFilter = ''; renderList(); return; }
+    if (e.target.closest('[data-dayoff]')) { dayFilter = ''; renderList(); return; }
+    if (e.target.closest('[data-idsoff]')) { idFilter = null; renderList(); return; }
     if (e.target.closest('[data-review]')) { reviewOnly = !reviewOnly; renderList(); return; }
     const gb = e.target.closest('[data-grp]');
     if (gb) { setGroupFilter(gb.dataset.grp === '*' ? null : gb.dataset.grp); return; }
@@ -4676,7 +5657,7 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
   });
   function syncNav() {
     document.querySelectorAll('nav button').forEach(x => x.classList.toggle('active', x.dataset.view === view));
-    ['list', 'summary', 'settings'].forEach(v => $('view-' + v).classList.toggle('hidden', v !== view));
+    ['list', 'summary', 'analysis', 'settings'].forEach(v => $('view-' + v).classList.toggle('hidden', v !== view));
     $('fab').classList.toggle('hidden', view === 'settings');
     document.querySelector('header').classList.toggle('hidden', view === 'settings');
   }
