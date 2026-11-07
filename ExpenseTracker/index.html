@@ -438,9 +438,9 @@
       <button class="btn ghost" id="smsBtn">💬 Add from bank SMS</button>
       <label class="native-only" style="display:flex;gap:10px;align-items:center;margin-top:14px;color:var(--text)">
         <input type="checkbox" id="autoAdd" style="width:22px;height:22px;flex:none;accent-color:var(--accent)">
-        Add messages from Shortcuts and Share automatically (skip review)
+        Add shared &amp; Siri messages automatically (skip review)
       </label>
-      <div class="sub native-only">Duplicates are still skipped. Set up the automation in the Shortcuts app with the <b>Add Bank Message</b> action.</div>
+      <div class="sub native-only">Duplicates are still skipped.</div>
       <div class="sub native-only" style="margin-top:8px">🎙️ <b>Siri:</b> copy a bank message and say <i>“Hey Siri, send copied message to Kharcha”</i>. Also: <i>“Add expense in Kharcha”</i> (Siri asks how much and what for) and <i>“How much have I spent in Kharcha”</i>.</div>
       <div class="sub">Copy one or more bank SMS (long-press → Copy), then tap 💬 and paste.</div>
       <input type="file" id="importFile" accept=".csv,.txt,.tsv,.xls,.xlsx,.ods,.pdf,application/pdf,text/csv,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" class="hidden">
@@ -1366,7 +1366,7 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
       </div>`;
     }).join('');
     $('balNote').innerHTML = (known > 1 ? `Total across accounts: <b>${esc(fmt(Math.round(total * 100) / 100))}</b><br>` : '') +
-      '📞 rings your bank’s missed-call balance service from your phone; the bank replies by SMS. With the Shortcuts automation that reply updates the balance here automatically, or paste it with 💬. Call from the mobile number registered with the bank.';
+      '📞 rings your bank’s missed-call balance service from your phone; the bank replies by SMS. Copy that reply and paste it with 💬 (or say “Hey Siri, send copied message to Kharcha”) to update the balance here. Call from the mobile number registered with the bank.';
   }
   function renderSummary() {
     renderBalances();
