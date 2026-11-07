@@ -531,6 +531,7 @@
       <div class="sub" id="folderStatus">No folder chosen.</div>
       <button class="btn primary" id="folderPick">Choose a folder (e.g. in iCloud Drive)</button>
       <button class="btn ghost hidden" id="folderCheck">↻ Check the folder now</button>
+      <button class="btn ghost hidden" id="folderRescan">↺ Import everything in the folder again</button>
       <button class="btn ghost hidden" id="folderClear">Stop watching this folder</button>
       <div class="sub" id="folderLog" style="margin-top:10px"></div>
       <div class="sub" style="margin-top:10px">Save statements into this folder from Mail, WhatsApp, Files or your computer: bank CSV/Excel, PhonePe CSV/PDF, Google Pay PDF (any PDF with a DeepSeek key). Each time Kharcha opens it imports new files by itself: duplicates are skipped or merged, accounts are created and categories applied. Files stay in the folder; a replaced file is read again.</div>
@@ -3290,7 +3291,10 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     if (!confirm('Delete ALL transactions, rules and settings? This cannot be undone.')) return;
     // marked so the iCloud safety net knows this emptiness is on purpose and syncs it
     state = defaultState(); state.settings.wipedAt = Date.now(); loadProblem = '';
-    save(); $('currency').innerHTML = ''; render(); toast('All data deleted');
+    save(); $('currency').innerHTML = ''; render();
+    try { localStorage.removeItem(FOLDER_LOG); } catch (e) {}
+    if (NATIVE && folderInfo.name) { native({ type: 'folderRescan' }); toast('All data deleted · importing the statements in your folder again…', 4000); }
+    else toast('All data deleted');
   });
 
   selfRe = selfPatterns();
@@ -3826,7 +3830,7 @@ Rules: include only completed transactions — skip OTPs, offers, ads, due/bill 
     const n = folderInfo.name;
     $('folderPick').textContent = n ? 'Choose a different folder' : 'Choose a folder (e.g. in iCloud Drive)';
     $('folderPick').classList.toggle('primary', !n); $('folderPick').classList.toggle('ghost', !!n);
-    ['folderCheck', 'folderClear'].forEach(id => $(id).classList.toggle('hidden', !n));
+    ['folderCheck', 'folderRescan', 'folderClear'].forEach(id => $(id).classList.toggle('hidden', !n));
     const when = folderInfo.checked ? new Date(folderInfo.checked).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' }) : '';
     $('folderStatus').innerHTML = !n ? 'No folder chosen.' : `Watching <b>📂 ${esc(n)}</b>${when ? ` · checked ${esc(when)}` : ''}` +
       (folderBusy || folderQ.length ? ` · importing ${folderQ.length + (folderBusy ? 1 : 0)}…` : '') +
@@ -3842,6 +3846,10 @@ Rules: include only completed transactions — skip OTPs, offers, ads, due/bill 
   }
   $('folderPick').addEventListener('click', () => native({ type: 'folderPick' }));
   $('folderCheck').addEventListener('click', () => { folderInfo.msg = 'Checking…'; renderFolder(); native({ type: 'folderCheck' }); });
+  $('folderRescan').addEventListener('click', () => {
+    if (!confirm('Read every file in the folder again? Transactions already in Kharcha are recognised and skipped.')) return;
+    folderInfo.msg = 'Reading every file again…'; renderFolder(); native({ type: 'folderRescan' });
+  });
   $('folderClear').addEventListener('click', () => {
     if (!confirm('Stop watching this folder? Transactions already imported stay.')) return;
     native({ type: 'folderClear' });

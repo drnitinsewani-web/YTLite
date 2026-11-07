@@ -155,6 +155,10 @@ final class WebViewController: UIViewController, WKScriptMessageHandler, WKUIDel
             webView.evaluateJavaScript("window.expensesBackupData && window.expensesBackupData(\(jsString(name)), \(text))")
         case "folderPick":
             pickFolder()
+        case "folderRescan":
+            FolderSync.shared.forgetSeen()
+            folderRetries = 0
+            checkFolder()
         case "folderCheck":
             folderRetries = 0
             checkFolder()

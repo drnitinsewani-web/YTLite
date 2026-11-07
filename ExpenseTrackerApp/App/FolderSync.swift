@@ -37,6 +37,9 @@ final class FolderSync {
         }
     }
 
+    /// Forget which files were imported, so the next check imports everything in the folder again.
+    func forgetSeen() { defaults.removeObject(forKey: seenKey) }
+
     func clear() {
         defaults.removeObject(forKey: bookmarkKey)
         defaults.removeObject(forKey: seenKey)
