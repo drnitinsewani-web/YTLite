@@ -990,7 +990,7 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
   function ownAccountFor(k) {
     const m = String(k || '').match(/^ACCT (\d+)$/);
     if (!m || givenOther(k)) return null;
-    const mine = (state.accounts || []).filter(a => (a.digits || []).some(z => z.endsWith(m[1]) || m[1].endsWith(z)));
+    const mine = acctMatches(m[1]);
     return mine.length === 1 ? mine[0] : null;
   }
   const payerName = k => payeeAlias(k) || k.toLowerCase().replace(/\b\w/g, c => c.toUpperCase()).replace(/^Acct /, 'A/c ••');
@@ -1247,6 +1247,8 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
       else e.autoXfer = { ...base, why: 'acct' };   // re-checked below; undone if it isn't one
     });
   }
+  // what tidyTransfers changed, for the end of a toast
+  const tidyNote = t => { const m = t.self + t.acct + t.pair; return (m ? ` · ${m} marked as transfers between your accounts` : '') + (t.undone ? ` · ${t.undone} transfer mark${t.undone > 1 ? 's' : ''} undone` : ''); };
   // Keep categories and review marks consistent with transfers, cross-entry comments and excluded
   // categories. Returns what changed: { total, self, acct, pair, undone }.
   function tidyTransfers() {
@@ -1375,7 +1377,10 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     const last = ds[ds.length - 1];
     let next;
     if (every === 'week') next = addDaysIso(last, 7);
-    else { const t = new Date(last + 'T00:00'); next = isoDate(new Date(t.getFullYear(), t.getMonth() + 1, Math.min(t.getDate(), 28))); }
+    else {   // the same day next month (the 31st → 30 Apr, 28 Feb)
+      const t = new Date(last + 'T00:00'), y = t.getFullYear(), m = t.getMonth() + 1;
+      next = isoDate(new Date(y, m, Math.min(t.getDate(), new Date(y, m + 1, 0).getDate())));
+    }
     return { every, last, next, day: +last.slice(8) };
   }
   const amtRange = a => { const lo = Math.min(...a), hi = Math.max(...a); return hi - lo < 1 ? fmt(lo) : `${fmt(lo)}–${fmt(hi)}`; };
@@ -1383,8 +1388,9 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
   function suggestFor(e) {
     if (!e || !(e.amount > 0)) return [];
     let past = pastLike(e), basis = 'payer';
-    if (!past.length && !isRound(e.amount)) {   // no payer name (e.g. "Paid to ******9880"): same exact amount, commented before
-      past = state.expenses.filter(x => x !== e && (!e.id || x.id !== e.id) && x.type === e.type && x.comment && Math.abs(x.amount - e.amount) < 0.005);
+    const k = payerKey(e);
+    if (!past.length && !isRound(e.amount) && (!k || /^ACCT /.test(k))) {   // no payer name (e.g. "Paid to ******9880"): same exact amount, commented before
+      past = state.expenses.filter(x => x !== e && (!e.id || x.id !== e.id) && x.type === e.type && x.comment && !x.autoXfer && Math.abs(x.amount - e.amount) < 0.005);
       basis = 'amount';
       if (past.length < 2) return [];
     }
@@ -1393,12 +1399,13 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     const day = +String(e.date || '').slice(8) || 0;
     const groups = new Map();
     past.forEach(x => {
+      if (x.autoXfer) return;   // Kharcha marked it a transfer itself: not something you chose
       const c = String(x.comment || '').trim();
       if (!c && /^Other/.test(x.category)) return;
       const key = c ? c.toLowerCase() : '#' + x.category;
       let w = 1;
       const r = Math.abs(x.amount - e.amount) / Math.max(e.amount, 1);
-      w += r < 0.005 ? 3 : r < 0.1 ? 1.5 : r < 0.3 ? 0.5 : 0;
+      if (basis === 'payer') w += r < 0.005 ? 3 : r < 0.1 ? 1.5 : r < 0.3 ? 0.5 : 0;   // by amount every one matches: only a repeat counts
       if (day) { const dd = Math.abs(+x.date.slice(8) - day); if (Math.min(dd, 31 - dd) <= 3) w += 0.7; }
       if (e.date && dayDiff(x.date, e.date) <= 120) w += 0.5;
       const g = groups.get(key) || { comment: c, cats: {}, n: 0, w: 0, amts: [], last: '' };
@@ -1418,18 +1425,25 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
   function recurringList() {
     const today = isoDate(new Date()), since = addDaysIso(today, -400);
     const seen = new Set(), out = [];
-    payerIndex().forEach(list => list.forEach(x => {
-      const k = payerKey(x), id = k + '|' + x.type;
-      if (seen.has(id) || x.date < since) return;
-      const grp = list.filter(y => y.type === x.type && y.date >= since && samePayer(payerKey(y), k));
-      grp.forEach(y => seen.add(payerKey(y) + '|' + y.type));
-      if (grp.every(y => y.category === 'Transfer')) return;
-      const rec = recurrence(grp); if (!rec) return;
-      if (dayDiff(rec.last, today) > (rec.every === 'month' ? 45 : 14)) return;   // stopped
-      const recent = grp.sort((a, b) => b.date.localeCompare(a.date)).slice(0, 3);
-      const amt = recent.map(y => y.amount).sort((a, b) => a - b)[1] ?? recent[0].amount;
-      out.push({ name: payerName(k), key: k, type: x.type, amt, rec, comment: (recent.find(y => y.comment) || {}).comment || '', count: grp.length, category: recent[0].category });
-    }));
+    const idOf = y => payerKey(y) + '|' + y.type;
+    payerIndex().forEach(all => {
+      const list = all.filter(y => y.date >= since);
+      // broadest name first ("SWIGGY" takes "SWIGGY INSTAMART" and "SWIGGY DINEOUT", as tapping it
+      // shows), and each payment in one row only
+      const ids = [...new Set(list.map(idOf))].sort((a, b) => a.split(' ').length - b.split(' ').length || a.length - b.length || (a < b ? -1 : 1));
+      ids.forEach(id => {
+        if (seen.has(id)) return;
+        const type = id.slice(id.lastIndexOf('|') + 1), k = id.slice(0, id.lastIndexOf('|'));
+        const grp = list.filter(y => y.type === type && !seen.has(idOf(y)) && samePayer(payerKey(y), k));
+        grp.forEach(y => seen.add(idOf(y)));
+        if (grp.every(y => y.category === 'Transfer')) return;
+        const rec = recurrence(grp); if (!rec) return;
+        if (dayDiff(rec.last, today) > (rec.every === 'month' ? 45 : 14)) return;   // stopped
+        const recent = grp.sort((a, b) => b.date.localeCompare(a.date)).slice(0, 3);
+        const amt = recent.map(y => y.amount).sort((a, b) => a - b)[1] ?? recent[0].amount;
+        out.push({ name: payerName(k), key: k, type, amt, rec, comment: (recent.find(y => y.comment) || {}).comment || '', count: grp.length, category: recent[0].category });
+      });
+    });
     return out.sort((a, b) => a.rec.next.localeCompare(b.rec.next));
   }
   function renderRecurring() {
@@ -1443,7 +1457,7 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     $('recList').innerHTML = list.map(r => {
       const late = r.rec.next < addDaysIso(today, -4), soon = !late && r.rec.next <= addDaysIso(today, 5);
       return `<div class="rec" data-rec="${esc(r.key)}" role="button">
-        <div>${esc(catOf(r.category).emoji || '')} ${esc(r.name)}<small>${r.rec.every === 'month' ? `Monthly, ~${ordinal(+r.rec.next.slice(8))}` : 'Weekly'} · ${r.count} payments${r.comment ? ' · ' + esc(r.comment) : ''}</small></div>
+        <div>${esc(catOf(r.category).emoji || '')} ${esc(r.name)}<small>${r.rec.every === 'month' ? `Monthly, ~${ordinal(r.rec.day)}` : 'Weekly'} · ${r.count} payments${r.comment ? ' · ' + esc(r.comment) : ''}</small></div>
         <div style="text-align:right;white-space:nowrap"><span class="amt ${r.type}">${r.type === 'credit' ? '+' : '−'}${fmt(r.amt)}</span>
           <small style="${late ? 'color:var(--warn)' : soon ? 'color:var(--accent)' : ''}">${late ? `expected ${short(r.rec.next)} — not seen` : `next ~${short(r.rec.next)}`}</small></div>
       </div>`;
@@ -1668,6 +1682,7 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
   const BANKS = [
     [/\bhdfc\b/i, 'HDFC Bank'], [/\bicici\b/i, 'ICICI Bank'], [/\bsbi card\b/i, 'SBI Card'],
     [/\b(sbi|state bank of india)\b/i, 'SBI'], [/\baxis\b/i, 'Axis Bank'], [/\bkotak\b/i, 'Kotak Bank'],
+    [/\bsouth indian bank\b/i, 'South Indian Bank'], [/\bcity union bank\b/i, 'City Union Bank'],   // found before "Indian Bank" / "Union Bank" inside them
     [/\bindian bank\b/i, 'Indian Bank'], [/\bindian overseas\b|\biob\b/i, 'Indian Overseas Bank'],
     [/\bcanara\b/i, 'Canara Bank'], [/\bunion bank\b/i, 'Union Bank'], [/\bidfc\b/i, 'IDFC First Bank'],
     [/\byes bank\b/i, 'Yes Bank'], [/\bindusind\b/i, 'IndusInd Bank'], [/\bfederal bank\b/i, 'Federal Bank'],
@@ -1685,6 +1700,36 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     let best = null;
     BANKS.forEach(([re, name]) => { const i = String(t || '').search(re); if (i >= 0 && (!best || i < best.i)) best = { i, name }; });
     return best ? best.name : '';
+  }
+  const bankRe = name => (BANKS.find(b => b[1] === name) || [])[0];
+  // UPI IDs ("swiggy@icici", "x@okhdfcbank") name the other party's app or bank, never yours
+  const noVpa = t => String(t || '').replace(/[\w.\-]*@[\w.\-]*/g, ' ');
+  // the text names a bank, and not the one this account is at
+  function otherBank(a, text) {
+    if (!text) return false;
+    const t = noVpa(text), mine = bankFromText(a.name), named = bankFromText(t);
+    return !!mine && !!named && named !== mine && !bankRe(mine).test(t);
+  }
+  // How many final digits a number from a text shares with an account's saved digits z (0: none)
+  const digitFit = (z, c) => z && c && (c.endsWith(z) || z.endsWith(c)) ? Math.min(z.length, c.length) : 0;
+  // The accounts a number belongs to: those whose digits fit it best (several: can't tell, unless
+  // only one is at the bank `bank` names). A 2-digit PhonePe ending ("••38") fits only a clearly
+  // masked number ("XX5538", not a MICR or phone number), and not when the text names another bank;
+  // beside the real ending it learned ("7238") it says nothing more. min: digits that must fit.
+  function acctMatches(c, { masked = true, bank = '', min = 1 } = {}) {
+    let best = 0, hits = [];
+    (state.accounts || []).forEach(a => {
+      const ds = a.digits || [];
+      let f = 0;
+      ds.forEach(z => { if (!(z.length < 4 && ds.some(y => y.length > z.length && y.endsWith(z)))) f = Math.max(f, digitFit(z, c)); });
+      if (f < min || (f < 3 && (!masked || otherBank(a, bank)))) f = 0;
+      if (f && f > best) { best = f; hits = [a]; } else if (f && f === best) hits.push(a);
+    });
+    if (hits.length > 1 && bank) {
+      const at = hits.filter(a => { const b = bankFromText(a.name); return !!b && bankRe(b).test(noVpa(bank)); });
+      if (at.length === 1) hits = at;
+    }
+    return hits;
   }
   // Accounts found in imports but not yet in Settings are created automatically.
   function ensureAccounts(items) {
@@ -1705,7 +1750,10 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
       }
       if (!x.acctDigits) return;
       const d = x.acctDigits;
-      let a = (state.accounts || []).find(y => y.digits.some(z => (z.endsWith(d) || d.endsWith(z)) && (x.acctKind !== 'card' || (z.length >= 4 && d.length >= 4))));
+      // all the digits seen must fit (a "••38" account isn't "XX5538": that was checked when the text was read)
+      const hits = acctMatches(d, { bank: x.acctBank, min: x.acctKind === 'card' ? 4 : Math.min(4, d.length) });
+      if (hits.length > 1) return;   // several of your accounts end in these digits: left without one
+      let a = hits[0];
       if (!a) {
         const kind = x.acctKind || 'bank';
         const base = x.acctBank || (kind === 'card' ? 'Card' : 'Bank account');
@@ -1722,22 +1770,27 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
   // Finds the account a text refers to; changes nothing. `learn` is set when an account known only by
   // PhonePe's 2 visible digits could learn its real ending ("••38" → "••7238") from a clearly masked
   // number, or the only account number in the text; callers apply it once the import is confirmed.
+  // A message is about the first account number in it (later ones are the other side of the payment);
+  // a statement heading (longNumbers) may also show other numbers, and its own unmasked.
   function matchAccount(text, longNumbers) {
-    const cands = acctDigitsIn(text, longNumbers);
-    const masked = new Set(acctDigitsIn(text, false));
-    const longs = new Set(String(text || '').match(/\b\d{9,18}\b/g) || []);
-    for (const c of cands) for (const a of state.accounts || []) for (const d of a.digits || []) {
-      if (d && (c.endsWith(d) || (c.length >= 3 && d.endsWith(c)))) {
-        const sure = masked.has(c) || (longs.size === 1 && longs.has(c));
-        const learn = sure && c.length >= 4 && (a.digits || []).every(z => z.length < 4) ? c.slice(-4) : '';
-        return { id: a.id, digits: c.slice(-4), ...(learn ? { learn } : {}) };
-      }
+    const t = String(text || '');
+    const masked = new Set(acctDigitsIn(t, false));
+    const cands = longNumbers ? acctDigitsIn(t, true) : acctDigitsIn(t, false).slice(0, 1);
+    const longs = new Set(t.match(/\b\d{9,18}\b/g) || []);
+    for (const c of cands) {
+      const hits = acctMatches(c, { masked: masked.has(c), bank: t });
+      if (hits.length > 1) return { id: '', digits: '' };   // several of your accounts end in these digits
+      const a = hits[0]; if (!a) continue;
+      const sure = masked.has(c) || (longs.size === 1 && longs.has(c));
+      const learn = sure && c.length >= 4 && (a.digits || []).every(z => z.length < 4) ? c.slice(-4) : '';
+      return { id: a.id, digits: c.slice(-4), ...(learn ? { learn } : {}) };
     }
     return { id: '', digits: cands.length ? cands[0].slice(-4) : '' };
   }
+  // the real ending replaces PhonePe's 2 digits ("38" → "7238")
   function learnDigits(id, d) {
     const a = acctById(id);
-    if (a && d && (a.digits || []).every(z => z.length < 4) && a.digits.some(z => d.endsWith(z))) a.digits = [d, ...a.digits];
+    if (a && d && (a.digits || []).every(z => z.length < 4) && a.digits.some(z => d.endsWith(z))) a.digits = [d, ...a.digits.filter(z => !d.endsWith(z))];
   }
   function acctOptions(selected, firstLabel) {
     return `<option value="">${firstLabel}</option>` + (state.accounts || []).map(a =>
@@ -2178,12 +2231,15 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
   const SETTLERS = [[/\bphone ?pe (?:limited|ltd|pvt|private)\b|\bphone ?pe\b.*\baggregat/i, 'PHONEPE LIMITED'],
     [/\bbharat ?pe(?![.@\w])|\bresilient innovations\b/i, 'BHARATPE']];
   const isPayout = t => /\b(?:neft|rtgs|imps)|aggregat|settle/i.test(t) && !/\bupi/i.test(t);
-  function merchantKey(desc, legacy = false) {
+  // Labels Kharcha adds after " · " (UTR, the app, the bank or email sender of an alert) are not the payee.
+  // keepBank: the key as versions before 2026-11 made it (the bank or sender's words counted)
+  function merchantKey(desc, legacy = false, keepBank = legacy) {
     if (!legacy && isPayout(String(desc))) {
       const t = String(desc).replace(/[\w.\-]*@[\w.\-]*/g, ' ');
       const s = SETTLERS.find(([re]) => re.test(t)); if (s) return s[1];
     }
-    const text = String(desc).replace(/\s·\s(?:UTR\s*\d+|PhonePe|GPay|Paytm)\b/gi, ' ').toUpperCase().replace(/[\w.\-]*@[\w.\-]*/g, ' ');
+    const text = (keepBank ? String(desc).replace(/\s·\s(?:UTR\s*\d+|PhonePe|GPay|Paytm)\b/gi, ' ') : String(desc).replace(/\s·\s[\s\S]*$/, ''))
+      .toUpperCase().replace(/[\w.\-]*@[\w.\-]*/g, ' ');
     const seen = [];
     text.split(/[^A-Z0-9&]+/).filter(t => !/\d/.test(t)).forEach(t => {
       if (t.length >= 3 && !/^X+$/.test(t) && !STOP.has(t) && !seen.includes(t)) seen.push(t);
@@ -2410,7 +2466,7 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     'Kotak Bank': '18002740110', 'PNB': '18001802223', 'Bank of Baroda': '8468001111', 'Canara Bank': '09015483483',
     'Indian Bank': '180042500000', 'Union Bank': '09223008586', 'Yes Bank': '09223920000'
   };
-  const enquiryFor = a => a.enquiry || (a.kind === 'bank' ? ENQUIRY[bankFromText(a.name) || ''] || '' : '');
+  const enquiryFor = a => typeof a.enquiry === 'string' ? a.enquiry : a.kind === 'bank' ? ENQUIRY[bankFromText(a.name) || ''] || '' : '';   // '': you cleared it
   // last confirmed balance, then every entry dated after it moves the estimate
   function estimate(a) {
     if (!a.bal) return null;
@@ -2431,7 +2487,7 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
       const est = estimate(a), num = enquiryFor(a);
       if (est) { total += est.amount; known++; }
       return `<div class="balrow">
-        <div><div class="nm">${esc(a.emoji || '🏦')} ${esc(acctName(a))} <small style="color:var(--muted)">••${esc(a.digits[0] || '')}</small></div>
+        <div><div class="nm">${esc(a.emoji || '🏦')} ${esc(acctName(a))} <small style="color:var(--muted)">${a.digits[0] ? '••' + esc(a.digits[0]) : ''}</small></div>
           <div class="when">${a.bal ? `Confirmed ${esc(fmt(a.bal.amount))} on ${short(a.bal.date)}` : 'No balance yet'}</div></div>
         <div><div class="v">${est ? esc(fmt(est.amount)) : '—'}</div>
           <div class="est">${est && est.n ? `estimated · ${est.n} entr${est.n > 1 ? 'ies' : 'y'} since` : est ? 'up to date' : ''}</div></div>
@@ -2525,7 +2581,7 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     $('autoAdd').checked = !!state.settings.autoAddShared;
     const accts = state.accounts || [];
     $('acctChips').innerHTML = accts.length ? accts.map(a =>
-      `<span class="chip" data-editacct="${esc(a.id)}" role="button">${esc(a.emoji || '🏦')} ${esc(acctName(a))}${a.business ? ` <small>💼 ${esc(a.business.group)}</small>` : ''}${a.nick && a.nick !== a.name ? ` <small>${esc(a.name)}</small>` : ''} <small>••${esc(a.digits.join(', ••'))}${a.bal ? ' · ' + esc(fmt(a.bal.amount)) + ' (' + esc(new Date(a.bal.date + 'T00:00').toLocaleDateString(undefined, { day: 'numeric', month: 'short' })) + ')' : ''}</small><span class="x" data-delacct="${esc(a.id)}" role="button" aria-label="Remove">✕</span></span>`).join('')
+      `<span class="chip" data-editacct="${esc(a.id)}" role="button">${esc(a.emoji || '🏦')} ${esc(acctName(a))}${a.business ? ` <small>💼 ${esc(a.business.group)}</small>` : ''}${a.nick && a.nick !== a.name ? ` <small>${esc(a.name)}</small>` : ''} <small>${a.digits.length ? '••' + esc(a.digits.join(', ••')) : ''}${a.bal ? ' · ' + esc(fmt(a.bal.amount)) + ' (' + esc(new Date(a.bal.date + 'T00:00').toLocaleDateString(undefined, { day: 'numeric', month: 'short' })) + ')' : ''}</small><span class="x" data-delacct="${esc(a.id)}" role="button" aria-label="Remove">✕</span></span>`).join('')
       : '<span class="sub" style="margin:0">No accounts yet.</span>';
     const used = {}; state.expenses.forEach(e => { used[e.category] = (used[e.category] || 0) + 1; });
     const chip = (c, i) => `<button type="button" class="chip" data-editcat="${i}">${esc(c.emoji)} ${esc(c.name)}${c.kind === 'both' ? ' <small>±</small>' : ''}${c.group ? ` <small>· ${esc(c.group)}</small>` : ''}${c.exclude ? ' <small>not counted</small>' : ''} <small>${used[c.name] || 0}</small></button>`;
@@ -2662,12 +2718,14 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     save(); render(); renderRefund(e);
     toast(fullyRefunded(debit) ? `Linked · the ${fmt(debit.amount)} payment came back in full: neither counts as spending or income` : `Linked · the payment now counts ${fmt(amtOf(debit))} (${fmt(refundedOf(debit))} came back)`, 5000);
   });
-  let pendingRef = '', preCat = null, returnToMail = false, pendingTidy = false, pendingLearn = null;
+  let pendingRef = '', preCat = null, returnToMail = false, pendingTidy = false, pendingLearn = null, pendingAcct = null;
   function openSheet(exp, pre) {
     const src = exp || pre;
     pendingRef = !exp && pre && pre.ref ? pre.ref : '';
     preCat = !exp && pre ? pre.category || null : null;
     pendingLearn = !exp && pre && pre.learn && pre.account ? { id: pre.account, d: pre.learn } : null;
+    // an alert from an account not in Kharcha yet: offered in the list, created when you save
+    pendingAcct = !exp && pre && !pre.account && pre.acctDigits ? { acctDigits: pre.acctDigits, acctBank: pre.acctBank, acctKind: pre.acctKind } : null;
     editingId = exp ? exp.id : null;
     editingOrigCat = exp ? exp.category : null;
     formType = src ? src.type : 'debit';
@@ -2696,8 +2754,8 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     $('fDelete').classList.toggle('hidden', !exp);
     let lastAcct = ''; try { lastAcct = localStorage.getItem(KEY + ':acct') || ''; } catch (e) {}
     const defAcct = src ? (src.account || '') : (acctFilter || (acctById(lastAcct) ? lastAcct : ''));
-    $('fAcct').innerHTML = acctOptions(defAcct, 'No account');
-    $('fAcctWrap').classList.toggle('hidden', !(state.accounts || []).length);
+    $('fAcct').innerHTML = acctOptions(defAcct, 'No account') + (pendingAcct ? `<option value="+new" selected>${esc(newAcctLabel(pendingAcct))} (new)</option>` : '');
+    $('fAcctWrap').classList.toggle('hidden', !(state.accounts || []).length && !pendingAcct);
     renderFormCats();
     showBg();
     requestAnimationFrame(() => $('sheet').classList.add('open'));
@@ -2725,6 +2783,8 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
       account: $('fAcct').value || '',
       comment: $('fComment').value.trim()
     };
+    if (data.account === '+new') { const x = { ...pendingAcct }; ensureAccounts([x]); data.account = x.account || ''; }
+    pendingAcct = null;
     if (!data.comment) delete data.comment;
     const ownGroup = formGroup !== null && formGroup !== formDefGroup();
     if (ownGroup) data.group = formGroup;
@@ -2982,7 +3042,7 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     return lines;
   }
   // Account a UPI-app payment used: "XXXXXX9226", "XXXXXXXXXX38" (only 2 digits shown), "0007", "Wallet".
-  function upiAccount(instrument) {
+  function upiAccount(instrument, bank = '') {
     const ins = String(instrument || '').trim();
     if (/wallet/i.test(ins)) {
       const w = (state.accounts || []).find(a => a.kind === 'wallet' && /phonepe/i.test(a.name));
@@ -2990,8 +3050,9 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     }
     const d = ins.replace(/\D/g, '');
     if (d.length < 2) return { account: '', acctDigits: '', walletName: '' };
-    const hits = (state.accounts || []).filter(a => (a.digits || []).some(z => z.endsWith(d) || (d.length >= 3 && d.endsWith(z))));
-    return { account: hits.length === 1 ? hits[0].id : '', acctDigits: d.slice(-4), walletName: '' };
+    const hits = acctMatches(d, { bank });
+    // several of your accounts end in these digits: left without one (not a new account)
+    return { account: hits.length === 1 ? hits[0].id : '', acctDigits: hits.length > 1 ? '' : d.slice(-4), walletName: '' };
   }
   const APP_LABEL = { phonepe: 'PhonePe', gpay: 'GPay', paytm: 'Paytm' };
   // One payment from a UPI app statement (PhonePe, Google Pay). transfer: money between your own
@@ -3000,7 +3061,7 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     details = String(details || '').replace(/\s+/g, ' ').trim();
     utr = String(utr || '').replace(/\D/g, '');
     const party = (details.match(/^(?:Paid to|Received from|Sent to|Payment to|Transfer(?:red)? (?:to|from))\s+(.+)$/i) || [])[1] || '';
-    const acct = upiAccount(instrument);
+    const acct = upiAccount(instrument, bank);
     let category = classify(party || details, type);
     if ((transfer || /wallet top-?up/i.test(details)) && catsFor(type).some(c => c.name === 'Transfer')) category = 'Transfer';   // e.g. bank → PhonePe wallet
     const note = (party ? `${type === 'credit' ? 'From' : 'To'} ${party}` : details || APP_LABEL[app]) + (utr ? ` · UTR ${utr}` : '') + ' · ' + APP_LABEL[app];
@@ -3734,7 +3795,7 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     return words.join(' ').slice(0, 60);
   }
   function bankName(t) {
-    const m = t.match(/-\s*([A-Z][A-Za-z ]{2,25}Bank)\s*$/) || t.match(/\b(HDFC|ICICI|SBI|Axis|Kotak|Indian|Canara|Union|IDFC|Yes|IndusInd|Federal|PNB|Bank of Baroda|BOB)\s*Bank\b/i);
+    const m = t.match(/-\s*([A-Z][A-Za-z ]{2,25}Bank)\s*$/) || t.match(/\b(HDFC|ICICI|SBI|Axis|Kotak|South Indian|Indian|Canara|City Union|Union|IDFC|Yes|IndusInd|Federal|PNB|Bank of Baroda|BOB)\s*Bank\b/i);
     return m ? m[1].replace(/\s*bank$/i, '').trim() + ' Bank' : '';
   }
   // opts.email: text is an excerpt of an alert email (bank footers often mention OTPs, so don't skip on that)
@@ -3754,7 +3815,7 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     if (!(amount > 0)) return null;
     const date = smsDate(t, opts.fallbackDate);
     const party = smsParty(t, type) || narrationParty(raw);
-    const bank = bankName(t);
+    const bank = bankName(t);   // the sender's own signature ("- Axis Bank"), not a payee such as "HDFC ERGO"
     const acctKind = /credit ?card|card (no\.?|number|ending|x+|\*)|\bcard x+\d|\bcc\s*\d*x+/i.test(t) ? 'card' : 'bank';
     const balM = acctKind === 'card' ? null :
       t.match(/\b(?:avl\.?|avail(?:able)?|a\/c|clear|closing|total)?\s*bal(?:ance)?\.?(?:\s+(?:is|of))?\s*[:\-]?\s*(?:rs\.?|inr|₹)\s*([\d,]+(?:\.\d{1,2})?)/i);
@@ -3770,7 +3831,7 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
         /payment|received|thank/i.test(t) && catsFor('credit').some(c => c.name === 'Transfer')) cat = 'Transfer';
     const acct = matchAccount(t);
     return { date, desc, type, amount, payment, category: cat, touched: false, account: acct.id, acctDigits: acct.digits, ...(acct.learn ? { learn: acct.learn } : {}),
-      acctBank: bankFromText(t) || bank, acctKind, balance: smsBalance, seq: 0, utr, utrSure: !!utr && utr === rrn, app: appFrom(t),
+      acctBank: bankFromText(bank) || bankFromText(noVpa(t)) || bank, acctKind, balance: smsBalance, seq: 0, utr, utrSure: !!utr && utr === rrn, app: appFrom(t),
       ref: rrn ? `sms|${rrn}|${type}|${amount.toFixed(2)}` : `sms|${date}|${type}|${amount.toFixed(2)}|${(party || t).toLowerCase()}` };
   }
   // "Avl bal in A/c XX8810 as on 06-NOV-26: INR 1,23,456.78" — a balance reply without a transaction
@@ -3783,7 +3844,7 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     if (!acct.digits && !acct.id) return null;
     let amount = parseFloat(m[1].replace(/,/g, ''));
     if (/dr/i.test(m[2] || '')) amount = -amount;
-    return { balance: amount, date: smsDate(t), account: acct.id, acctDigits: acct.digits, ...(acct.learn ? { learn: acct.learn } : {}), acctBank: bankFromText(t) || bankName(t), acctKind: 'bank' };
+    return { balance: amount, date: smsDate(t), account: acct.id, acctDigits: acct.digits, ...(acct.learn ? { learn: acct.learn } : {}), acctBank: (b => bankFromText(b) || bankFromText(t) || b)(bankName(t)), acctKind: 'bank' };
   }
   let lastBalanceReplies = [];
   function parseSmsBatch(text) {
@@ -4036,28 +4097,31 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
   $('addAcct').addEventListener('click', () => {
     const name = $('newAcctName').value.trim();
     const digits = $('newAcctDigits').value.split(/[^0-9]+/).filter(d => d.length >= 3).map(d => d.slice(-6));
-    if (!name) { toast('Give the account a name'); return; }
-    if (!digits.length) { toast('Enter at least the last 3–4 digits'); return; }
-    const clash = (state.accounts || []).find(a => a.digits.some(d => digits.some(n => d.endsWith(n) || n.endsWith(d))));
-    if (clash) { toast(`Those digits already belong to ${acctName(clash)}`); return; }
     const kind = $('newAcctKind').value;
+    if (!name) { toast('Give the account a name'); return; }
+    if (!digits.length && kind !== 'cash' && kind !== 'wallet') { toast('Enter at least the last 3–4 digits'); return; }   // cash and wallets need none
+    // PhonePe's 2-digit endings ("••38") don't clash: the account with the full number is matched first
+    const clash = (state.accounts || []).find(a => a.digits.some(d => d.length >= 3 && digits.some(n => d.endsWith(n) || n.endsWith(d))));
+    if (clash) { toast(`Those digits already belong to ${acctName(clash)}`); return; }
     const emoji = $('newAcctEmoji').value.trim() || ({ bank: '🏦', card: '💳', wallet: '📱', cash: '👛' })[kind];
     const nick = $('newAcctNick').value.trim().slice(0, 24);
     state.accounts = (state.accounts || []).concat({ id: uid(), name, emoji, kind, digits, ...(nick ? { nick } : {}) });
-    // attach existing imported entries that mention these digits
+    // attach SMS and email alerts about these digits (a statement's or UPI app's narration names the
+    // other side of the payment, never the account it came from)
     let n = 0;
     const a = state.accounts[state.accounts.length - 1];
-    state.expenses.forEach(e => { if (!e.account && e.ref && matchAccount(e.note).id === a.id) { e.account = a.id; n++; } });
+    if (digits.length) state.expenses.forEach(e => { if (!e.account && /^(sms|mail)\|/.test(e.ref || '') && matchAccount(e.note).id === a.id) { e.account = a.id; n++; } });
     ['newAcctName', 'newAcctNick', 'newAcctDigits', 'newAcctEmoji'].forEach(id => $(id).value = '');
-    save(); render(); toast(n ? `Account added · ${n} existing entr${n > 1 ? 'ies' : 'y'} matched` : 'Account added');
+    const t = tidyTransfers();
+    save(); render(); toast((n ? `Account added · ${n} existing entr${n > 1 ? 'ies' : 'y'} matched` : 'Account added') + tidyNote(t), tidyNote(t) ? 4000 : undefined);
   });
   $('acctChips').addEventListener('click', e => {
     const x = e.target.closest('[data-delacct]');
     if (!x) {
       const c = e.target.closest('[data-editacct]'); if (!c) return;
       const a = acctById(c.dataset.editacct); if (!a) return;
-      const done = () => { save(); render(); toast(`Saved · ${acctLabel(a)}`); };
-      const nick = prompt(`Short name for ${a.name} ••${a.digits.join('/')}\n(e.g. Salary, Joint, Savings, Dad) — shown everywhere instead of the bank name. Leave empty to show the bank name.`, a.nick || '');
+      const done = () => { const t = tidyTransfers(); save(); render(); toast(`Saved · ${acctLabel(a)}` + tidyNote(t), tidyNote(t) ? 4000 : undefined); };
+      const nick = prompt(`Short name for ${a.name}${a.digits.length ? ' ••' + a.digits.join('/') : ''}\n(e.g. Salary, Joint, Savings, Dad) — shown everywhere instead of the bank name. Leave empty to show the bank name.`, a.nick || '');
       if (nick === null) return;
       a.nick = nick.trim().slice(0, 24);
       if (a.business || (a.holder && !isSelf(a.holder))) {
@@ -4076,8 +4140,8 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
       const list = digits.split(/[^0-9]+/).filter(d => d.length >= 2).map(d => d.slice(-6));
       if (list.length) a.digits = list;
       if (a.kind !== 'card') {
-        const num = prompt('Balance-enquiry (missed call) number — leave empty for none', enquiryFor(a));
-        if (num !== null) a.enquiry = num.replace(/[^0-9+]/g, '');
+        const was = enquiryFor(a), num = prompt('Balance-enquiry (missed call) number — leave empty for none', was);
+        if (num !== null && num.replace(/[^0-9+]/g, '') !== was) a.enquiry = num.replace(/[^0-9+]/g, '');   // empty: none, not the bank's usual number
       }
       done();
       return;
@@ -4086,7 +4150,8 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     if (!a || !confirm(`Remove "${acctName(a)}"? Its transactions stay, without an account.`)) return;
     state.accounts = state.accounts.filter(y => y.id !== a.id);
     state.expenses.forEach(e => { if (e.account === a.id) e.account = ''; });
-    save(); render();
+    const t = tidyTransfers();
+    save(); render(); toast('Account removed' + tidyNote(t), tidyNote(t) ? 4000 : undefined);
   });
   function syncNav() {
     document.querySelectorAll('nav button').forEach(x => x.classList.toggle('active', x.dataset.view === view));
@@ -4348,27 +4413,33 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
   });
 
   selfRe = selfPatterns();
-  // When Kharcha's rules improve, entries it categorised itself are re-checked once (never ones you set,
-  // commented, or that are transfers): today "Other" that a rule now recognises, and UPI payments that a
-  // branch name ("ATM SERVICE BRANCH") had wrongly filed as Cash.
-  const RULES_VERSION = 5;   // 5: loans
-  if ((state.settings.rulesV || 1) < 3) {
-    // 3: payouts from PhonePe / BharatPe got one payee key each (see SETTLERS). A name, category or
-    // comment rule saved under an old key moves to the new one, when every entry with the old key moved.
+  // A name, category or comment rule saved under an old payee key moves to the new one, when every
+  // entry with the old key moved.
+  function carryKeys(oldKey) {
     const to = new Map(), bad = new Set();
+    let moved = 0;
     state.expenses.forEach(e => {
-      const o = merchantKey(e.note || e.desc || '', true), nk = payerKey(e);
+      const o = oldKey(e.note || e.desc || ''), nk = payerKey(e);
       if (o.length < 3 || !nk || o === nk) { if (o) bad.add(o); return; }
       if (to.has(o) && to.get(o) !== nk) bad.add(o); else to.set(o, nk);
     });
     to.forEach((nk, o) => {
       if (bad.has(o)) return;
       const names = state.settings.payeeNames || {};
-      const carry = (obj, from, to) => { if (obj[from] === undefined) return; if (obj[to] === undefined) obj[to] = obj[from]; if (JSON.stringify(obj[to]) === JSON.stringify(obj[from])) delete obj[from]; };
+      const carry = (obj, from, to) => { if (obj[from] === undefined) return; moved++; if (obj[to] === undefined) obj[to] = obj[from]; if (JSON.stringify(obj[to]) === JSON.stringify(obj[from])) delete obj[from]; };
       carry(names, o, nk); carry(state.rules, o, nk);
       const cr = state.settings.commentRules || {};
       Object.keys(cr).forEach(r => { if (r.startsWith(o + '|')) carry(cr, r, nk + r.slice(o.length)); });
     });
+    return moved;
+  }
+  // When Kharcha's rules improve, entries it categorised itself are re-checked once (never ones you set,
+  // commented, or that are transfers): today "Other" that a rule now recognises, and UPI payments that a
+  // branch name ("ATM SERVICE BRANCH") had wrongly filed as Cash.
+  const RULES_VERSION = 5;   // 5: loans
+  if ((state.settings.rulesV || 1) < 3) {
+    // 3: payouts from PhonePe / BharatPe got one payee key each (see SETTLERS)
+    carryKeys(d => merchantKey(d, true));
     // A business account set up with a made-up "Clinic income" / "Business income" while you had
     // already chosen your own money-in category for it: its collections move to yours, and the
     // made-up category goes once nothing uses it.
@@ -4383,6 +4454,18 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
       if (!state.expenses.some(e => e.category === old) && !Object.values(state.rules).includes(old) &&
           !(state.accounts || []).some(b => b.business && b.business.incomeCat === old)) state.categories = state.categories.filter(x => x.name !== old);
     });
+  }
+  if (!state.settings.bankLabelKeys) {   // an alert's bank or sender ("To SWIGGY · Indian Bank") is no longer part of the payee
+    const moved = carryKeys(d => merchantKey(d, false, true));
+    state.settings.bankLabelKeys = 1; if (moved) save();
+  }
+  if (!state.settings.stubsDropped) {   // PhonePe's 2 digits ("38") kept beside the real ending they learned ("7238")
+    let n = 0;
+    (state.accounts || []).forEach(a => {
+      const ds = a.digits || [], keep = ds.filter(z => !(z.length < 4 && ds.some(y => y.length > z.length && y.endsWith(z))));
+      if (keep.length < ds.length) { a.digits = keep; n++; }
+    });
+    state.settings.stubsDropped = 1; if (n) save();
   }
   if ((state.settings.rulesV || 1) < 4) {
     FIXED_KEYS.forEach(k => {
@@ -4583,8 +4666,7 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     const it = mailBrowse.items[+b.dataset.madd];
     returnToMail = true;
     closeAll();
-    if (!it.x.account && it.x.acctDigits) { ensureAccounts([it.x]); save(); }
-    openSheet(null, { ...it.x, note: it.x.desc, ref: 'mail|' + it.e.id });
+    openSheet(null, { ...it.x, note: it.x.desc, ref: 'mail|' + it.e.id });   // a new account is made only when you save
   });
   $('mailFilter').addEventListener('input', renderMailList);
   $('mailClose').addEventListener('click', closeAll);
@@ -4699,7 +4781,33 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     SYNC_LISTS.forEach(([name, k]) => { out[name] = mergeList(B.l[name], local[name] || [], remote[name] || [], k); });
     SYNC_OBJS.forEach(name => { out[name] = mergeObj(B.o[name], local[name] || {}, remote[name] || {}); });
     out.expenses = sameAcross(out.expenses, B.l.expenses, local.expenses || [], remote.expenses || []);
+    joinTwinAccounts(out);
     return out;
+  }
+  // Two devices that found the same new account before syncing each made their own copy ("HDFC Bank
+  // ••1234" twice): they become one again, the older id kept, on every device alike.
+  function joinTwinAccounts(s) {
+    if (!Array.isArray(s.accounts) || s.accounts.length < 2) return;
+    const accts = s.accounts.map(a => ({ ...a, digits: Array.isArray(a.digits) ? a.digits : [] }));   // copies: the merge's inputs stay as they were
+    const bank = a => bankFromText(a.name);
+    const twins = (a, b) => a.kind === b.kind && (bank(a) === bank(b) || !bank(a) || !bank(b)) && (a.digits.length
+      ? a.digits.some(z => b.digits.includes(z))
+      : !b.digits.length && String(a.name).toLowerCase() === String(b.name).toLowerCase());   // wallets: by name
+    const into = new Map();
+    accts.slice().sort((a, b) => (a.id < b.id ? -1 : 1)).forEach(b => {
+      if (into.has(b.id)) return;
+      accts.forEach(c => {
+        if (c === b || into.has(c.id) || c.id < b.id || !twins(b, c)) return;
+        into.set(c.id, b);
+        c.digits.forEach(z => { if (!b.digits.includes(z)) b.digits = b.digits.concat(z); });
+        if (!bank(b) && bank(c)) b.name = c.name;
+        ['nick', 'enquiry', 'holder', 'business'].forEach(k => { if (b[k] === undefined && c[k] !== undefined) b[k] = c[k]; });
+        if (c.bal && (!b.bal || c.bal.date > b.bal.date)) b.bal = c.bal;
+      });
+    });
+    if (!into.size) return;
+    s.accounts = accts.filter(a => !into.has(a.id));
+    if (Array.isArray(s.expenses)) s.expenses = s.expenses.map(e => e && into.has(e.account) ? { ...e, account: into.get(e.account).id } : e);
   }
   // Puts merged data into `state` keeping its objects: code still waiting for an answer (DeepSeek
   // categorising entries, a Gmail check) holds them, and what it writes must land in the data.
@@ -4866,7 +4974,7 @@ Rules: include only completed transactions — skip OTPs, offers, ads, due/bill 
       const party = String(t.party || '').replace(/\s+/g, ' ').trim().slice(0, 60);
       const bank = String(t.bank || '').trim().slice(0, 30);
       const digits = String(t.account || '').replace(/\D/g, '');
-      const acct = digits.length >= 2 ? upiAccount(digits) : { account: '', acctDigits: '' };
+      const acct = digits.length >= 2 ? upiAccount(digits, bank) : { account: '', acctDigits: '' };
       const utr = /^\d{12}$/.test(String(t.utr || '').trim()) ? String(t.utr).trim() : '';
       let category = classify(party || bank, type);
       if ((category === 'Other' || category === 'Other Income') && catsFor(type).some(c => c.name === t.category)) category = t.category;
