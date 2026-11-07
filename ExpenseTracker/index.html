@@ -3214,6 +3214,63 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     $('impSign').value = imp.sign;
   }
 
+  // ---------- credit card statement PDFs ----------
+  // One line per transaction: a date, the details, the amount, "CR"/"Cr"/"C" for money in. Around them
+  // card-specific columns that are dropped: ICICI's serial number, reward points and foreign amount
+  // ("06/04/2026 13189813357 Google Play 650-2530000 US* 0 25 USD 2,375.87"), HDFC's time, SBI's "D".
+  // Purchases are spending; a payment you made to the card is a transfer from your bank (the bank's
+  // "CC BillPay" / "Auto Debit CC…" debit is one already), so the bill is never counted twice.
+  const isCardStatement = lines => {
+    const t = lines.slice(0, 150).join(' \n ');
+    return /credit\s*card/i.test(t) && /(total|minimum)\s+(amount\s+)?due|payment\s+due\s+date|total\s+dues|amount\s+payable/i.test(t);
+  };
+  const CARD_MON = '(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\\.?';
+  const CARD_DATE = String.raw`\d{1,2}[\/\-.]\d{1,2}[\/\-.]\d{2,4}|\d{1,2}[ \-]${CARD_MON}[ \-,]+\d{2,4}`;
+  const CARD_ROW = new RegExp(String.raw`(?:^|\s)(${CARD_DATE})\s+(.*?)\s*((?:\d{1,3}(?:,\d{2,3})+|\d+)\.\d{2})\s*(cr|dr|c|d)?\.?$`, 'i');
+  const ANY_DATE = new RegExp(String.raw`${CARD_DATE}|${CARD_MON} \d{1,2},? \d{4}`, 'gi');
+  const CARD_NOT_ROW = /amount due|total due|minimum|payment due|due date|credit limit|cash limit|available|opening balance|closing balance|previous balance|statement (date|period)/i;
+  function parseCardStatement(lines, fileName = '') {
+    const text = lines.join(' \n ');
+    // card numbers: "4315XXXXXXXX7005", "4386 XXXX XXXX 1234", "XXXX XXXX XXXX 1234"
+    const cards = [];
+    for (const m of text.matchAll(/\b(\d{4})[ -]?[X*x•]{2,4}[ -]?[X*x•]{2,4}[ -]?(\d{4})\b|\b[X*x•]{4}(?:[ -]?[X*x•]{4}){1,2}[ -]?(\d{4})\b/g)) {
+      const last = m[2] || m[3], first = m[1] || '';
+      if (last && !cards.some(c => c.last === last)) cards.push({ first, last });
+    }
+    const main = cards.find(c => c.first && c.first !== '0000') || cards[0];
+    // the period it covers: "Statement period : April 6, 2026 to May 5, 2026", else the statement date
+    const datesIn = t => (String(t).match(ANY_DATE) || []).map(d => parseDate(d.replace(/\.(?=\s)/, ''), 'dmy')).filter(Boolean);
+    let from = '', to = '';
+    const pi = lines.findIndex(l => /statement\s+period/i.test(l));
+    if (pi >= 0) { const ds = datesIn(lines.slice(pi, pi + 2).join(' ').replace(/^.*?statement\s+period/i, '')); if (ds.length >= 2) { from = ds[0]; to = ds[1]; } }
+    if (!to) { const si = lines.findIndex(l => /statement\s+date/i.test(l)); if (si >= 0) to = datesIn(lines.slice(si, si + 3).join(' ').replace(/^.*?statement\s+date/i, ''))[0] || ''; }
+    const today = isoDate(new Date());
+    const bank = bankFromText(text), acct = (state.accounts || []).find(a => (a.digits || []).some(z => z.length >= 4 && cards.some(c => c.last === z.slice(-4))));
+    const items = []; let seq = 0;
+    lines.forEach(l => {
+      const m = l.match(CARD_ROW); if (!m) return;
+      const date = parseDate(m[1].replace(/\.(?=\s)/, ''), 'dmy'); if (!date || date > today) return;
+      if (to && (date > to || (from && date < addDaysIso(from, -45)))) return;   // due dates and other dates in the heading
+      let desc = m[2], serial = '';
+      if (CARD_NOT_ROW.test(desc)) return;
+      desc = desc.replace(/^(\d{6,})\s+/, (_, n) => { serial = n; return ''; }).replace(/^\d{1,2}:\d{2}(:\d{2})?\s+/, '')
+        .replace(/\s+[\d.,]+\s+[A-Z]{3}$/, '').replace(/\s+-?\d{1,6}$/, '').replace(/\s+[\d.,]+\s+[A-Z]{3}$/, '').replace(/\s+/g, ' ').trim();
+      if (!desc || !/[a-z]/i.test(desc)) return;
+      const amount = Math.round(parseFloat(m[3].replace(/,/g, '')) * 100) / 100; if (!(amount > 0)) return;
+      const sfx = (m[4] || '').toLowerCase();
+      const paid = /payment\s*(rec|recd|received)|thank\s*you|auto\s*debit\s*payment|autopay|bbps|payment\s+-?\s*(neft|imps|upi)/i.test(desc);
+      const type = sfx === 'cr' || sfx === 'c' || (!sfx && paid) ? 'credit' : 'debit';
+      // money back on a card that isn't your payment is a refund or reversal, not income
+      let category = type === 'credit' && paid ? 'Transfer' : classify(desc, type);
+      if (type === 'credit' && !paid && /^Other/.test(category) && catsFor('credit').some(c => c.name === 'Refund')) category = 'Refund';
+      items.push({ date, desc, type, amount, ref: refOf(date, type, amount, serial ? `${desc} #${serial}` : desc), payment: 'Card', category, touched: false,
+        balance: null, seq: seq++, account: acct ? acct.id : '', acctDigits: acct ? '' : (main ? main.last : ''), acctBank: bank, acctKind: 'card', bankSure: !!bank,
+        moreDigits: cards.map(c => c.last), stmtTo: to || '' });
+    });
+    if (!to && items.length) { const last = items.reduce((x, i) => i.date > x ? i.date : x, ''); items.forEach(i => { i.stmtTo = last; }); }
+    const label = `${bank || 'Credit'} card${main ? ' ••' + main.last : ''}${to ? ' · to ' + shortD(to) : ''}`;
+    return { items, label };
+  }
   async function startImport(file) {
     toast('Reading ' + file.name + '…');
     if (/\.pdf$/i.test(file.name) || file.type === 'application/pdf') {
@@ -3223,6 +3280,10 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
       if (isFdAdvice(lines)) { const fd = parseFdAdvice(lines); toast(fd ? saveFd(fd) : 'This looks like an FD advice, but its amount or maturity date couldn’t be read', 6000); return; }
       const gp = isGPay(lines) ? parseGPay(lines) : [];
       if (gp.length) { previewStatement(gp, `Google Pay · ${file.name}`, 'No transactions found in this PDF'); return; }
+      if (!isPhonePe(lines) && isCardStatement(lines)) {
+        const cs = parseCardStatement(lines, file.name);
+        if (cs.items.length || !aiOn()) { previewStatement(cs.items, `${cs.label} · ${file.name}`, 'No transactions found in this card statement'); return; }
+      }
       if (!isPhonePe(lines)) {
         if (aiOn()) { aiReadLines(lines, file.name, lines.slice(0, 12).join('\n')); return; }
         toast('This PDF isn’t a PhonePe or Google Pay statement. Download the CSV/Excel version from net banking, or add a DeepSeek key in Settings to read any PDF.', 6000); return;
@@ -3536,6 +3597,10 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     const now = Date.now();
     items.forEach(x => { if (x.learn && x.account) learnDigits(x.account, x.learn); });
     const created = ensureAccounts(items);
+    items.forEach(x => {
+      const a = x.moreDigits && x.account && acctById(x.account); if (!a) return;
+      x.moreDigits.forEach(d => { if (d && !(a.digits || []).some(z => z === d || (z.length >= 4 && z.endsWith(d)))) a.digits = (a.digits || []).concat(d); });
+    });
     coverItems(items);
     const add = items.map((x, i) => ({
       id: uid(), createdAt: now + i, type: x.type, amount: x.amount, category: x.category,
@@ -4463,6 +4528,10 @@ Rules: include only completed transactions — skip OTPs, offers, ads, due/bill 
         const gp = isGPay(lines) ? parseGPay(lines) : [];
         if (gp.length) { r.kind = 'Google Pay'; return commitAuto(gp, r); }
         if (isPhonePe(lines)) { r.kind = 'PhonePe'; return commitAuto(parsePhonePe(lines), r); }
+        if (isCardStatement(lines)) {
+          const cs = parseCardStatement(lines, file.name);
+          if (cs.items.length || !aiOn()) { r.kind = cs.label; if (!cs.items.length) r.note = 'card statement with no transactions found'; return commitAuto(cs.items, r); }
+        }
         if (aiOn()) { r.kind = 'DeepSeek'; return commitAuto(await aiExtractParts(aiSplit(lines), file.name, lines.slice(0, 12).join('\n')), r); }
         r.note = 'not a PhonePe or Google Pay PDF (add a DeepSeek key in Settings to read other PDFs)'; return r;
       }
@@ -4642,7 +4711,7 @@ Rules: include only completed transactions — skip OTPs, offers, ads, due/bill 
   $('autoAdd').checked = !!state.settings.autoAddShared;
   $('autoAdd').addEventListener('change', e => { state.settings.autoAddShared = e.target.checked; save(); toast(e.target.checked ? 'Messages will be added automatically' : 'Messages will wait for your review'); });
   // bump when Kharcha learns a new kind of file, so the statement folder is looked at again
-  const PARSER_VERSION = 6;   // 4: FD advices · 5: broker ledgers and P&L reports · 6: statement periods
+  const PARSER_VERSION = 7;   // 4: FD advices · 5: broker ledgers and P&L reports · 6: statement periods · 7: credit card PDFs
   if (NATIVE) native({ type: 'ready', parser: PARSER_VERSION });
   if (loadProblem) toast('⚠︎ Kharcha couldn’t read its saved data, so nothing will be saved until it is restored. Settings › Data › Automatic backups.', 10000);
   const autoMail = () => {
