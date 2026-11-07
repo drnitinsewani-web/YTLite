@@ -360,6 +360,7 @@
     </div>
     <div class="filters" id="amtBar" style="margin:-4px 0 4px"></div>
     <div class="sub" id="filterSummary" style="margin:0 4px 6px"></div>
+    <div class="card hidden" id="payerBanner" style="padding:12px 14px"></div>
     <div id="list"></div>
   </section>
 
@@ -525,6 +526,7 @@
   <div id="fAcctWrap"><label for="fAcct">Account</label><select id="fAcct"></select></div>
   <label for="fNote">Note</label>
   <input id="fNote" type="text" placeholder="e.g. Lunch with team" maxlength="200">
+  <button type="button" class="btn ghost hidden" id="fHistory"></button>
   <button type="submit" class="btn primary">Save</button>
   <button type="button" class="btn danger hidden" id="fDelete">Delete</button>
   <button type="button" class="btn ghost" id="fCancel">Cancel</button>
@@ -752,6 +754,21 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
   const AMT_PRESETS = [0, 1000, 5000, 10000];
   // "To review": imported transactions above the threshold stay unread until a comment is saved.
   let reviewOnly = false;
+  // "All transactions with this person/merchant" view (all dates), opened from a transaction.
+  let payerFilter = '';
+  const payerName = k => k.toLowerCase().replace(/\b\w/g, c => c.toUpperCase());
+  // Same payer even when one bank shortens the name (UPI: "UPSTOX SEC" vs NEFT: "UPSTOX SECURITIES",
+  // "NIDAAN DIA" vs "NIDAAN DIAGNOSTICS"): first words equal, later words prefixes of each other.
+  function samePayer(a, b) {
+    if (!a || !b) return false;
+    if (a === b) return true;
+    const x = a.split(' '), y = b.split(' ');
+    if (x[0] !== y[0] || x[0].length < 4) return false;
+    for (let i = 1; i < Math.min(x.length, y.length); i++) {
+      if (x[i].length < 3 || y[i].length < 3 || !(x[i].startsWith(y[i]) || y[i].startsWith(x[i]))) return false;
+    }
+    return true;
+  }
   const reviewMin = () => { const v = state.settings.reviewMin; return v == null ? 1000 : v; };
   // Transfers and investments are money moving between your own accounts: never "to review".
   const needsReview = x => reviewMin() > 0 && x.amount > reviewMin() && !catOf(x.category).exclude;
@@ -1068,7 +1085,19 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     ].filter(Boolean).join('<br>');
 
     const q = $('search').value.trim().toLowerCase();
-    const shown = items
+    const base = payerFilter ? state.expenses.filter(e => samePayer(payerKey(e), payerFilter)) : items;
+    $('payerBanner').classList.toggle('hidden', !payerFilter);
+    if (payerFilter) {
+      const paid = sum(base.filter(e => e.type === 'debit')), got = sum(base.filter(e => e.type === 'credit'));
+      const dates = base.map(e => e.date).sort();
+      const span = dates.length ? `${new Date(dates[0] + 'T00:00').toLocaleDateString(undefined, { month: 'short', year: 'numeric' })} – ${new Date(dates[dates.length - 1] + 'T00:00').toLocaleDateString(undefined, { month: 'short', year: 'numeric' })}` : '';
+      $('payerBanner').innerHTML = `<div style="display:flex;justify-content:space-between;align-items:center;gap:10px">
+          <div><div class="total-label">All transactions with</div><div style="font-weight:700;font-size:17px">${esc(payerName(payerFilter))}</div></div>
+          <button class="iconbtn" id="payerClose" aria-label="Close history">✕</button></div>
+        <div class="sub">${base.length} transaction${base.length === 1 ? '' : 's'} · ${esc(span)}<br>
+          Paid <b style="color:var(--danger)">${fmt(paid)}</b> · Received <b style="color:var(--income)">${fmt(got)}</b> · Net <b>${fmt(got - paid)}</b></div>`;
+    }
+    const shown = base
       .filter(e => {
         if (minAmt && e.amount <= minAmt) return false;
         if (reviewOnly && !e.unread) return false;
@@ -1095,7 +1124,7 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     const yest = isoDate(new Date(Date.now() - 864e5));
     $('list').innerHTML = Object.keys(groups).map(d => {
       const label = d === today ? 'Today' : d === yest ? 'Yesterday'
-        : new Date(d + 'T00:00').toLocaleDateString(undefined, { weekday: 'short', day: 'numeric', month: 'short' });
+        : new Date(d + 'T00:00').toLocaleDateString(undefined, { weekday: 'short', day: 'numeric', month: 'short', ...(d.slice(0, 4) !== String(new Date().getFullYear()) ? { year: 'numeric' } : {}) });
       const ds = spentOf(groups[d]), di = incomeOf(groups[d]);
       const right = [ds ? `<span style="color:var(--danger)">−${fmt(ds)}</span>` : '', di ? `<span style="color:var(--income)">+${fmt(di)}</span>` : ''].filter(Boolean).join(' · ');
       return `<div class="day"><span>${label}</span><span>${right}</span></div>
@@ -1279,6 +1308,9 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     $('fNote').value = src ? src.note || '' : '';
     $('fComment').value = exp ? exp.comment || '' : '';
     renderMatchOptions(exp || null);
+    const hk = exp && payerKey(exp), hn = hk ? state.expenses.filter(e => samePayer(payerKey(e), hk)).length : 0;
+    $('fHistory').classList.toggle('hidden', !(hn > 1) || payerFilter === hk);
+    if (hn > 1) { $('fHistory').textContent = `🕘 All transactions with ${payerName(hk)} (${hn})`; $('fHistory').dataset.key = hk; }
     $('fReviewBanner').classList.toggle('hidden', !(exp ? exp.unread : (pre && needsReview(pre))));
     let pay = 'Cash'; try { pay = localStorage.getItem(KEY + ':pay') || pay; } catch (e) {}
     $('fPay').value = src ? (src.payment || 'Other') : pay;
@@ -1357,6 +1389,16 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     state.expenses = state.expenses.filter(e => e.id !== editingId);
     save(); closeAll(); render(); toast('Deleted');
   });
+  $('fHistory').addEventListener('click', () => {
+    payerFilter = $('fHistory').dataset.key || '';
+    returnToMail = false; closeAll();
+    view = 'list'; syncNav(); render();
+    requestAnimationFrame(() => {
+      const top = $('payerBanner').getBoundingClientRect().top + window.scrollY - document.querySelector('header').offsetHeight - 8;
+      window.scrollTo({ top: Math.max(0, top), behavior: 'smooth' });
+    });
+  });
+  document.addEventListener('click', e => { if (e.target.closest('#payerClose')) { payerFilter = ''; renderList(); } });
   $('fCancel').addEventListener('click', () => {
     closeAll();
     if (returnToMail) { returnToMail = false; openMailSheet(); }
