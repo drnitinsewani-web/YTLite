@@ -12,220 +12,129 @@
 <link rel="apple-touch-icon" href="icon.svg">
 <title>Expense Tracker</title>
 <style>
+  /* ================= Design tokens =================
+     Apple's Human Interface Guidelines: iOS text styles (Body 17 pt, nothing under Caption 2's 11 pt),
+     a 44×44 pt hit region for every control, radii concentric with their container (inner radius =
+     outer radius − padding), capsules for controls in a row and rounded rectangles for full-width
+     buttons in a stack. Liquid Glass (blur + highlight) is kept to the layer that floats over content:
+     the header controls, the tab bar, the + button, sheets and toasts. Content (cards, lists, chips)
+     uses plain fills, so only a handful of layers are ever blurred.
+     iOS 15 WebKit: no color-mix(), :has(), nesting, @container or linear() easing in here. */
   :root {
-    --bg: #f4f6f8; --surface: #ffffff; --surface-2: #eef1f4; --text: #0f172a; --muted: #64748b;
+    --bg: #f4f6f8; --surface: #ffffff; --surface-2: #eef1f4; --text: #0f172a; --muted: #64748b; --muted-2: #8a96a8;
     --border: #e2e8f0; --accent: #0f766e; --accent-soft: #ccfbf1; --danger: #dc2626; --warn: #d97706;
     --income: #15803d; --on-accent: #ffffff;
-    --shadow: 0 1px 2px rgba(15,23,42,.06), 0 4px 16px rgba(15,23,42,.06);
+    --shadow: 0 1px 2px rgba(15,23,42,.05), 0 6px 20px rgba(15,23,42,.06);
+    /* content layer: plain fills */
+    --content: rgba(255,255,255,.78); --content-edge: rgba(255,255,255,.92); --sep: rgba(60,60,67,.13);
+    --fill: rgba(118,118,128,.12); --fill-2: rgba(118,118,128,.07); --tile: rgba(255,255,255,.72);
+    --field: rgba(255,255,255,.66); --field-edge: rgba(15,23,42,.09);
+    --tick-off: rgba(60,60,67,.34); --thumb: #ffffff; --thumb-shadow: 0 3px 8px rgba(15,23,42,.12), 0 0 0 .5px rgba(15,23,42,.04);
+    --accent-tint: rgba(15,118,110,.12); --accent-halo: rgba(15,118,110,.16); --accent-glow: rgba(15,118,110,.32);
+    --warn-soft: rgba(217,119,6,.13); --warn-ring: rgba(217,119,6,.28);
+    /* functional layer: Liquid Glass */
+    --glass: rgba(255,255,255,.58); --glass-strong: rgba(255,255,255,.76); --glass-heavy: rgba(250,252,255,.9);
+    --glass-edge: rgba(255,255,255,.8); --glass-rim: rgba(255,255,255,.95);
+    --glass-shadow: 0 1px 2px rgba(15,23,42,.06), 0 10px 32px rgba(15,23,42,.13);
+    --glass-blur: blur(20px) saturate(180%);
+    --glass-accent: rgba(15,118,110,.86); --lens: rgba(255,255,255,.78); --lens-shadow: 0 2px 10px rgba(15,23,42,.10);
+    --spec: rgba(255,255,255,.7);
+    --edge-fade: rgba(238,243,246,.94); --edge-fade-0: rgba(238,243,246,0);
+    --dim: rgba(10,15,30,.24); --sheet-solid: #f6f8fa;
+    --bg-a: #c8f3ea; --bg-b: #cfe3ff; --bg-c: #f3dcff; --bg-base: #eef3f6;
+
+    /* type: iOS text styles at the default (Large) text size */
+    --font-sys: -apple-system, "SF Pro Text", "SF Pro Display", system-ui, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    --fs-lt: 34px; --lh-lt: 41px;   /* Large Title (700) */
+    --fs-t1: 28px; --lh-t1: 34px;   /* Title 1 (700) */
+    --fs-t2: 22px; --lh-t2: 28px;   /* Title 2 (700) */
+    --fs-t3: 20px; --lh-t3: 25px;   /* Title 3 (600) */
+    --fs-hl: 17px; --lh-hl: 22px;   /* Headline (600) */
+    --fs-bd: 17px; --lh-bd: 22px;   /* Body */
+    --fs-co: 16px; --lh-co: 21px;   /* Callout */
+    --fs-sh: 15px; --lh-sh: 20px;   /* Subhead */
+    --fs-fn: 13px; --lh-fn: 18px;   /* Footnote */
+    --fs-c1: 12px; --lh-c1: 16px;   /* Caption 1 */
+    --fs-c2: 11px; --lh-c2: 13px;   /* Caption 2: the smallest text */
+
+    /* controls: Mini 28 / Small 32 / Regular 44 / Large 52 / Extra large 64 */
+    --hit: 44px; --h-mini: 28px; --h-small: 32px; --h-regular: 44px; --h-large: 52px; --h-xl: 64px;
+    --h-chip: 36px;   /* drawn 36 tall, taps reach 44 */
+    /* radii, concentric from the display corner in */
+    --r-display: 47px; --inset-sheet: min(8px, env(safe-area-inset-bottom));
+    --r-sheet: calc(var(--r-display) - 8px);                                   /* 39 */
+    --r-sheet-b: min(var(--r-sheet), calc(env(safe-area-inset-bottom) * 2));   /* square on phones without rounded corners */
+    --pad-sheet: 20px; --r-in-sheet: calc(var(--r-sheet) - var(--pad-sheet));  /* 19 */
+    --r-card: 26px; --pad-card: 16px; --r-in-card: calc(var(--r-card) - var(--pad-card));   /* 10 */
+    --r-field: 12px;
+    --h-tabbar: 64px; --pad-tabbar: 4px; --r-tabbar: calc(var(--h-tabbar) / 2);             /* 32 */
+    --r-tab: calc(var(--r-tabbar) - var(--pad-tabbar));                                     /* 28 */
+    --pad-seg: 4px; --r-seg: calc(var(--h-regular) / 2); --r-seg-thumb: calc(var(--r-seg) - var(--pad-seg));   /* 22 / 18 */
+    --nav-bottom: max(8px, calc(env(safe-area-inset-bottom) - 8px));
+    --fab: var(--h-large);
+    /* spacing */
+    --sp-1: 4px; --sp-2: 8px; --sp-3: 12px; --sp-4: 16px; --sp-5: 20px; --sp-6: 24px; --sp-8: 32px; --margin: 16px;
+    /* motion: springs with a little overshoot (2%), sheets barely any (0.6%) */
+    --spring: cubic-bezier(.32, 1.25, .5, 1); --spring-soft: cubic-bezier(.2, 1.15, .4, 1);
+    --ease-out: cubic-bezier(.2, .8, .2, 1); --ease-in: cubic-bezier(.4, 0, 1, 1);
   }
   @media (prefers-color-scheme: dark) {
     :root {
-      --bg: #0b1220; --surface: #111a2b; --surface-2: #1a2538; --text: #e5e7eb; --muted: #94a3b8;
+      --bg: #0b1220; --surface: #111a2b; --surface-2: #1a2538; --text: #e5e7eb; --muted: #94a3b8; --muted-2: #6b778a;
       --border: #22304a; --accent: #2dd4bf; --accent-soft: #134e4a; --danger: #f87171; --warn: #fbbf24;
       --income: #4ade80; --on-accent: #042f2e;
       --shadow: 0 1px 2px rgba(0,0,0,.3);
-    }
-  }
-  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
-  html, body { margin: 0; height: 100%; }
-  body {
-    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, system-ui, sans-serif;
-    background: var(--bg); color: var(--text); font-size: 16px;
-    padding-bottom: calc(72px + env(safe-area-inset-bottom));
-  }
-  header {
-    position: sticky; top: 0; z-index: 5; background: var(--bg);
-    padding: calc(env(safe-area-inset-top) + 12px) 16px 8px;
-  }
-  .monthbar { display: flex; align-items: center; justify-content: space-between; max-width: 640px; margin: 0 auto; }
-  .monthbar h1 { font-size: 18px; margin: 0; font-weight: 650; }
-  .iconbtn {
-    width: 40px; height: 40px; border-radius: 12px; border: 1px solid var(--border); flex: none;
-    background: var(--surface); color: var(--text); font-size: 20px; cursor: pointer;
-  }
-  main { padding: 0 16px 120px; max-width: 640px; margin: 0 auto; }
-  .card { background: var(--surface); border: 1px solid var(--border); border-radius: 16px; padding: 16px; box-shadow: var(--shadow); margin-bottom: 12px; }
-  .total-label { color: var(--muted); font-size: 13px; text-transform: uppercase; letter-spacing: .04em; }
-  .total { font-size: 34px; font-weight: 700; margin: 4px 0 8px; font-variant-numeric: tabular-nums; }
-  .progress { height: 8px; background: var(--surface-2); border-radius: 99px; overflow: hidden; }
-  .progress > div { height: 100%; background: var(--accent); border-radius: 99px; transition: width .3s; }
-  .progress.over > div { background: var(--danger); }
-  .progress.near > div { background: var(--warn); }
-  .progress.inc > div { background: var(--income); }
-  .sub { color: var(--muted); font-size: 13px; margin-top: 6px; }
-  .searchrow { display: flex; gap: 8px; margin-bottom: 12px; }
-  .search { flex: 1; min-width: 0; padding: 10px 12px; border-radius: 12px; border: 1px solid var(--border); background: var(--surface); color: var(--text); font-size: 16px; }
-  .day { margin: 16px 4px 6px; display: flex; justify-content: space-between; color: var(--muted); font-size: 13px; font-weight: 600; }
-  .list { background: var(--surface); border: 1px solid var(--border); border-radius: 16px; overflow: hidden; }
-  .item { display: flex; align-items: center; gap: 12px; padding: 12px 14px; border-bottom: 1px solid var(--border); cursor: pointer; }
-  .item:last-child { border-bottom: 0; }
-  .item:active { background: var(--surface-2); }
-  .emoji { width: 40px; height: 40px; border-radius: 12px; background: var(--surface-2); display: grid; place-items: center; font-size: 20px; flex: none; }
-  .item .info { flex: 1; min-width: 0; }
-  .item .cat { font-weight: 600; }
-  .item.unread { box-shadow: inset 6px 0 0 var(--warn); background: color-mix(in srgb, var(--warn) 16%, transparent); }
-  .item.unread .cat, .item.unread .amt { font-weight: 800; }
-  .item.unread .note { color: var(--text); opacity: .85; }
-  .item.unread .cat::after { content: ""; display: inline-block; width: 9px; height: 9px; border-radius: 50%; background: var(--warn); margin-left: 8px; vertical-align: middle; box-shadow: 0 0 0 3px color-mix(in srgb, var(--warn) 30%, transparent); }
-  .item .amtwrap { display: flex; flex-direction: column; align-items: flex-end; gap: 4px; flex: none; }
-  .item .rv { font-size: 10px; font-weight: 800; letter-spacing: .06em; padding: 2px 7px; border-radius: 99px; background: var(--warn); color: #1f1300; }
-  .item .comment { font-size: 13px; color: var(--text); opacity: .8; margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  nav button .badge { position: absolute; top: 4px; left: 56%; min-width: 18px; height: 18px; padding: 0 5px; border-radius: 9px; background: var(--danger); color: #fff; font-size: 11px; font-weight: 700; line-height: 18px; display: inline-block; }
-  .mchk { display: flex; gap: 10px; align-items: center; margin: 8px 0 0; color: var(--text); font-size: 14px; }
-  .mchk input { width: 20px; height: 20px; padding: 0; flex: none; accent-color: var(--accent); }
-  .review-banner { margin: 10px 0 0; padding: 10px 12px; border-radius: 12px; font-size: 13px; background: color-mix(in srgb, var(--warn) 16%, transparent); color: var(--text); }
-  .item .note { color: var(--muted); font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .amt { font-weight: 650; font-variant-numeric: tabular-nums; white-space: nowrap; }
-  .amt.credit { color: var(--income); }
-  .amt.debit { color: var(--danger); }
-  .amt.excluded { opacity: .6; font-weight: 500; }
-  .empty { text-align: center; color: var(--muted); padding: 48px 16px; }
-  .empty div { font-size: 44px; margin-bottom: 8px; }
-  .fab {
-    position: fixed; right: 20px; bottom: calc(84px + env(safe-area-inset-bottom)); z-index: 6;
-    width: 60px; height: 60px; border-radius: 20px; border: 0; background: var(--accent); color: var(--on-accent);
-    font-size: 32px; box-shadow: 0 6px 20px rgba(15,118,110,.4); cursor: pointer;
-  }
-  nav {
-    position: fixed; bottom: 0; left: 0; right: 0; z-index: 6; display: flex;
-    background: var(--surface); border-top: 1px solid var(--border); padding-bottom: env(safe-area-inset-bottom);
-  }
-  nav button { flex: 1; background: none; border: 0; color: var(--muted); padding: 10px 0 12px; font-size: 12px; cursor: pointer; }
-  nav button span { display: block; font-size: 22px; margin-bottom: 2px; }
-  nav button.active { color: var(--accent); font-weight: 600; }
-  .bar-row { margin: 12px 0; }
-  .bar-row .top { display: flex; justify-content: space-between; font-size: 14px; margin-bottom: 6px; gap: 8px; }
-  .bar-row .top b { font-variant-numeric: tabular-nums; }
-  .stats { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
-  .stats .card { margin-bottom: 0; }
-  .stats + .card { margin-top: 12px; }
-  .stat .v { font-size: 20px; font-weight: 700; margin-top: 4px; font-variant-numeric: tabular-nums; }
-  .chart { display: flex; align-items: flex-end; gap: 8px; height: 140px; margin-top: 12px; }
-  .chart .col { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: flex-end; height: 100%; gap: 6px; }
-  .chart .track { flex: 1; width: 100%; display: flex; align-items: flex-end; justify-content: center; }
-  .chart .b { width: 100%; max-width: 36px; background: var(--accent-soft); border-radius: 8px 8px 4px 4px; min-height: 2px; }
-  .chart .col.cur .b { background: var(--accent); }
-  .chart .lbl { font-size: 11px; color: var(--muted); }
-  h2 { font-size: 15px; margin: 0 0 4px; }
-  label { display: block; font-size: 13px; color: var(--muted); margin: 12px 0 6px; }
-  input, select, textarea {
-    width: 100%; padding: 12px; border-radius: 12px; border: 1px solid var(--border);
-    background: var(--surface-2); color: var(--text); font-size: 16px; font-family: inherit;
-  }
-  .btn { display: block; width: 100%; padding: 14px; border-radius: 14px; border: 0; font-size: 16px; font-weight: 600; cursor: pointer; margin-top: 12px; }
-  .btn.primary { background: var(--accent); color: var(--on-accent); }
-  .btn.primary:disabled { opacity: .5; }
-  .btn.ghost { background: var(--surface-2); color: var(--text); }
-  .btn.danger { background: transparent; color: var(--danger); border: 1px solid var(--danger); }
-  .chips { display: flex; flex-wrap: wrap; gap: 8px; }
-  .chip { padding: 8px 12px; border-radius: 99px; border: 1px solid var(--border); background: var(--surface-2); color: var(--text); font-size: 14px; cursor: pointer; }
-  .chip.sel { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
-  .chip .x { margin-left: 6px; color: var(--muted); cursor: pointer; }
-  .chip small { color: var(--muted); }
-  .seg { display: grid; grid-template-columns: 1fr 1fr; background: var(--surface-2); border-radius: 12px; padding: 4px; gap: 4px; margin-top: 8px; }
-  .seg button { border: 0; background: transparent; color: var(--muted); padding: 10px; border-radius: 9px; font-size: 15px; font-weight: 600; cursor: pointer; }
-  .seg button.sel { background: var(--surface); color: var(--text); box-shadow: var(--shadow); }
-  .seg button.sel[data-type=credit] { color: var(--income); }
-  .sheet-bg { position: fixed; inset: 0; background: rgba(0,0,0,.4); z-index: 10; display: none; }
-  .sheet {
-    position: fixed; left: 0; right: 0; bottom: 0; z-index: 11; background: var(--surface);
-    border-radius: 22px 22px 0 0; padding: 12px 16px calc(16px + env(safe-area-inset-bottom));
-    max-height: 92vh; overflow-y: auto; transform: translateY(105%); transition: transform .25s ease;
-    max-width: 640px; margin: 0 auto; overscroll-behavior: contain;
-  }
-  .sheet.open { transform: none; }
-  #catSheet { z-index: 13; }   /* opens on top of a transaction being edited */
-  .sheet-bg.over { z-index: 12; }   /* …which then sits behind the backdrop */
-  .chip.add { border-style: dashed; color: var(--accent); }
-  #fCats.editing .chip[data-cat] { outline: 2px dashed var(--accent); outline-offset: -2px; }
-  .sheet.tall { height: 92vh; display: flex; flex-direction: column; padding-bottom: 0; }
-  .sheet .grab { width: 40px; height: 5px; border-radius: 9px; background: var(--border); margin: 0 auto 8px; flex: none; }
-  .amount-input { font-size: 32px; font-weight: 700; text-align: center; padding: 14px; }
-  .row2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
-  .toast { position: fixed; left: 50%; bottom: calc(150px + env(safe-area-inset-bottom)); transform: translateX(-50%); background: var(--text); color: var(--bg); padding: 10px 16px; border-radius: 12px; font-size: 14px; z-index: 30; opacity: 0; transition: opacity .2s; pointer-events: none; max-width: 90vw; text-align: center; }
-  .toast.show { opacity: 1; }
-  .hidden { display: none !important; }
-  .mrow { display: grid; grid-template-columns: 1fr auto; gap: 4px 10px; align-items: center; padding: 12px 0; border-bottom: 1px solid var(--border); }
-  .mrow .subj { font-weight: 600; font-size: 14px; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; word-break: break-word; }
-  .mrow .meta { color: var(--muted); font-size: 12px; margin-top: 2px; }
-  .mrow .snip { color: var(--muted); font-size: 12px; margin-top: 4px; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; word-break: break-word; }
-  .mrow .parsed { font-size: 13px; margin-top: 6px; font-variant-numeric: tabular-nums; }
-  .mrow .parsed.credit b { color: var(--income); }
-  .mrow .parsed.debit b { color: var(--danger); }
-  .mrow.done { opacity: .55; }
-  .balrow { display: grid; grid-template-columns: 1fr auto; gap: 2px 10px; align-items: center; padding: 10px 0; border-bottom: 1px solid var(--glass-line, var(--border)); }
-  .balrow:last-child { border-bottom: 0; }
-  .balrow .nm { font-weight: 600; }
-  .balrow .when { color: var(--muted); font-size: 12px; }
-  .balrow .v { font-weight: 700; font-variant-numeric: tabular-nums; text-align: right; }
-  .balrow .est { color: var(--muted); font-size: 12px; text-align: right; }
-  .balrow .actions { grid-column: 1 / 3; display: flex; gap: 8px; margin-top: 6px; }
-  .balrow .actions .chip { text-decoration: none; padding: 6px 12px; font-size: 13px; }
-
-  /* import sheet */
-  .imp-head { flex: none; }
-  .imp-body { flex: 1; overflow-y: auto; margin: 0 -16px; padding: 0 16px; }
-  .imp-foot { flex: none; padding: 8px 0 calc(12px + env(safe-area-inset-bottom)); border-top: 1px solid var(--border); background: var(--surface); }
-  .imp-foot .btn { margin-top: 8px; }
-  details.map { background: var(--surface-2); border-radius: 12px; padding: 10px 12px; margin: 8px 0; }
-  details.map summary { cursor: pointer; font-size: 14px; font-weight: 600; }
-  details.map select { padding: 8px; background: var(--surface); }
-  details.map label { margin: 8px 0 4px; }
-  .filters { display: flex; gap: 6px; overflow-x: auto; padding: 4px 0 8px; }
-  .filters .chip { white-space: nowrap; padding: 6px 10px; font-size: 13px; }
-  .irow { display: grid; grid-template-columns: 28px 1fr auto; gap: 4px 10px; align-items: center; padding: 10px 0; border-bottom: 1px solid var(--border); }
-  .irow input[type=checkbox] { width: 22px; height: 22px; padding: 0; accent-color: var(--accent); }
-  .irow .d { font-size: 14px; min-width: 0; }
-  .irow .d .desc { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; word-break: break-word; }
-  .irow .d .meta { color: var(--muted); font-size: 12px; margin-top: 2px; }
-  .irow select { grid-column: 2 / 4; padding: 8px 10px; font-size: 14px; border-radius: 10px; }
-  .irow.off { opacity: .45; }
-  .tag { display: inline-block; font-size: 11px; padding: 1px 6px; border-radius: 6px; background: var(--surface-2); color: var(--muted); margin-left: 4px; }
-  .tag.warn { color: var(--warn); }
-  .appb { display: inline-flex; align-items: center; height: 16px; padding: 0 5px; border-radius: 5px; font-size: 10px; font-weight: 800; letter-spacing: -.2px; vertical-align: 2px; margin-left: 6px; line-height: 1; font-family: -apple-system, system-ui, sans-serif; }
-  .appb.phonepe { background: #5f259f; color: #fff; }
-  .appb.gpay { background: #fff; color: #5f6368; border: 1px solid #dadce0; }
-  .appb.gpay b { color: #4285f4; margin-right: 1px; }
-  .appb.paytm { background: #002e6e; color: #fff; }
-  .appb.paytm b { color: #00baf2; font-weight: 800; }
-  .tag.sug { color: var(--accent); background: color-mix(in srgb, var(--accent) 12%, transparent); cursor: pointer; }
-  .tag.sug.on { color: #fff; background: var(--accent); }
-  .sugs { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
-  .sugs .chip { font-size: 13px; text-align: left; }
-  .sugs .chip small { display: block; color: var(--muted); font-size: 11px; font-weight: 400; }
-  .sug-hint { font-size: 12px; color: var(--accent); margin-top: 2px; }
-  .rec { display: flex; justify-content: space-between; gap: 10px; padding: 9px 0; border-top: 1px solid var(--border); font-size: 14px; }
-  .rec:first-child { border-top: 0; }
-  .rec small { color: var(--muted); display: block; font-size: 12px; }
-
-  /* ================= Liquid glass theme ================= */
-  :root {
-    --glass: rgba(255, 255, 255, .52);
-    --glass-strong: rgba(255, 255, 255, .72);
-    --glass-heavy: rgba(250, 252, 255, .86);
-    --glass-edge: rgba(255, 255, 255, .75);
-    --glass-line: rgba(15, 23, 42, .08);
-    --glass-shine: linear-gradient(180deg, rgba(255,255,255,.65) 0%, rgba(255,255,255,0) 42%);
-    --glass-shadow: 0 1px 1px rgba(15,23,42,.04), 0 8px 28px rgba(15,23,42,.10);
-    --glass-blur: blur(22px) saturate(180%);
-    --glass-blur-strong: blur(34px) saturate(200%);
-    --bg-a: #c8f3ea; --bg-b: #cfe3ff; --bg-c: #f3dcff; --bg-base: #eef3f6;
-  }
-  @media (prefers-color-scheme: dark) {
-    :root {
-      --glass: rgba(28, 38, 58, .46);
-      --glass-strong: rgba(24, 33, 52, .70);
-      --glass-heavy: rgba(20, 28, 46, .88);
-      --glass-edge: rgba(255, 255, 255, .16);
-      --glass-line: rgba(255, 255, 255, .08);
-      --glass-shine: linear-gradient(180deg, rgba(255,255,255,.12) 0%, rgba(255,255,255,0) 40%);
-      --glass-shadow: 0 1px 1px rgba(0,0,0,.25), 0 10px 30px rgba(0,0,0,.35);
+      --content: rgba(22,30,47,.8); --content-edge: rgba(255,255,255,.07); --sep: rgba(255,255,255,.09);
+      --fill: rgba(118,118,128,.24); --fill-2: rgba(118,118,128,.14); --tile: rgba(255,255,255,.08);
+      --field: rgba(255,255,255,.06); --field-edge: rgba(255,255,255,.1);
+      --tick-off: rgba(235,235,245,.34); --thumb: rgba(255,255,255,.2); --thumb-shadow: 0 3px 8px rgba(0,0,0,.3);
+      --accent-tint: rgba(45,212,191,.14); --accent-halo: rgba(45,212,191,.2); --accent-glow: rgba(45,212,191,.22);
+      --warn-soft: rgba(251,191,36,.13); --warn-ring: rgba(251,191,36,.3);
+      --glass: rgba(30,40,60,.5); --glass-strong: rgba(26,35,54,.74); --glass-heavy: rgba(20,28,46,.9);
+      --glass-edge: rgba(255,255,255,.14); --glass-rim: rgba(255,255,255,.22);
+      --glass-shadow: 0 1px 2px rgba(0,0,0,.3), 0 12px 34px rgba(0,0,0,.4);
+      --glass-accent: rgba(45,212,191,.88); --lens: rgba(255,255,255,.15); --lens-shadow: 0 2px 10px rgba(0,0,0,.25);
+      --spec: rgba(255,255,255,.26);
+      --edge-fade: rgba(7,12,23,.94); --edge-fade-0: rgba(7,12,23,0);
+      --dim: rgba(0,0,0,.42); --sheet-solid: #131b2c;
       --bg-a: #0f4c45; --bg-b: #1b2a5c; --bg-c: #3b1f52; --bg-base: #070c17;
     }
   }
-  html { background: var(--bg-base); }
-  body { background: transparent; padding-bottom: calc(104px + env(safe-area-inset-bottom)); }
-  /* colourful backdrop the glass refracts */
+  /* Reduce Transparency, Increase Contrast, or no blur support: solid surfaces instead of glass */
+  @supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+    :root { --glass: var(--surface); --glass-strong: var(--surface); --glass-heavy: var(--surface); --glass-accent: var(--accent); }
+  }
+  @media (prefers-reduced-transparency: reduce) {
+    :root { --glass: var(--surface); --glass-strong: var(--surface); --glass-heavy: var(--surface); --glass-accent: var(--accent);
+      --content: var(--surface); --field: var(--surface-2); --spec: transparent; --lens: var(--surface-2); --edge-fade: var(--bg); --edge-fade-0: var(--bg); }
+    body::before { display: none; }
+    html { background: var(--bg); }
+    .glass, .sheet, .toast, .fab { -webkit-backdrop-filter: none; backdrop-filter: none; }
+  }
+  /* the iPhone app's Reduce Transparency setting (WKWebView has no media feature for it): see WebViewController */
+  :root.a11y-solid { --glass: var(--surface); --glass-strong: var(--surface); --glass-heavy: var(--surface); --glass-accent: var(--accent);
+    --content: var(--surface); --field: var(--surface-2); --spec: transparent; --lens: var(--surface-2); --edge-fade: var(--bg); --edge-fade-0: var(--bg); }
+  .a11y-solid body::before { display: none; }
+  html.a11y-solid { background: var(--bg); }
+  .a11y-solid .glass, .a11y-solid .sheet, .a11y-solid .toast, .a11y-solid .fab { -webkit-backdrop-filter: none; backdrop-filter: none; }
+  @media (prefers-contrast: more) {
+    :root { --glass: var(--surface); --glass-strong: var(--surface); --glass-heavy: var(--surface); --glass-accent: var(--accent);
+      --content: var(--surface); --content-edge: var(--border); --glass-edge: var(--muted-2); --sep: var(--border); --field: var(--surface);
+      --field-edge: var(--muted-2); --tick-off: var(--muted); --spec: transparent; --lens: var(--surface-2); --edge-fade: var(--bg); --edge-fade-0: var(--bg);
+      --muted: #475569; }
+    body::before { display: none; }
+    html { background: var(--bg); }
+  }
+  @media (prefers-contrast: more) and (prefers-color-scheme: dark) { :root { --muted: #cbd5e1; } }
+
+  /* ================= Base ================= */
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body { margin: 0; height: 100%; }
+  html { background: var(--bg-base); -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
+  body {
+    font-family: var(--font-sys); font-weight: 400; font-size: var(--fs-bd); line-height: var(--lh-bd); color: var(--text); background: transparent;
+  }
+  /* the soft colour field the glass sits on (static: nothing is redrawn while you scroll) */
   body::before {
     content: ""; position: fixed; inset: -20vmax; z-index: -1; pointer-events: none;
     background:
@@ -233,118 +142,396 @@
       radial-gradient(42vmax 42vmax at 92% 30%, var(--bg-b), transparent 70%),
       radial-gradient(40vmax 40vmax at 40% 95%, var(--bg-c), transparent 70%),
       var(--bg-base);
-    animation: drift 28s ease-in-out infinite alternate;
   }
-  @keyframes drift { to { transform: translate3d(3vmax, -2vmax, 0) rotate(6deg); } }
+  button { font: inherit; color: inherit; }
+  .t-lt { font: 700 var(--fs-lt)/var(--lh-lt) var(--font-sys); } .t-t1 { font: 700 var(--fs-t1)/var(--lh-t1) var(--font-sys); }
+  .t-t2 { font: 700 var(--fs-t2)/var(--lh-t2) var(--font-sys); } .t-t3 { font: 600 var(--fs-t3)/var(--lh-t3) var(--font-sys); }
+  .t-hl { font: 600 var(--fs-hl)/var(--lh-hl) var(--font-sys); } .t-sh { font: 400 var(--fs-sh)/var(--lh-sh) var(--font-sys); }
+  .t-fn { font: 400 var(--fs-fn)/var(--lh-fn) var(--font-sys); } .t-c1 { font: 400 var(--fs-c1)/var(--lh-c1) var(--font-sys); }
+  .hidden { display: none !important; }
+  /* a small control's taps reach 44×44 without changing the layout */
+  .hit44 { position: relative; }
+  .hit44::before, .chip::before, .tag.sug::before, .chip .x::before {
+    content: ""; position: absolute; left: 50%; top: 50%; width: max(100%, var(--hit)); height: max(100%, var(--hit));
+    -webkit-transform: translate(-50%, -50%); transform: translate(-50%, -50%);
+  }
 
-  /* shared glass surface */
-  .card, .list, header .iconbtn, .search, .searchrow .iconbtn, nav, .fab, .sheet, .toast, .chip, .seg, .btn.ghost, details.map {
-    -webkit-backdrop-filter: var(--glass-blur); backdrop-filter: var(--glass-blur);
-  }
-  .card, .list {
-    position: relative; background: var(--glass-shine), var(--glass); border: 1px solid var(--glass-edge);
-    box-shadow: var(--glass-shadow), inset 0 1px 0 var(--glass-edge); border-radius: 22px;
-  }
-  .list { overflow: hidden; }
-  .item { border-bottom-color: var(--glass-line); position: relative; }
-  .item:active { background: rgba(255,255,255,.18); }
-  .emoji { background: rgba(255,255,255,.45); box-shadow: inset 0 1px 0 var(--glass-edge); }
-  @media (prefers-color-scheme: dark) { .emoji { background: rgba(255,255,255,.08); } }
-
-  /* header becomes a glass bar */
+  /* ================= Header: floating glass controls over a scroll-edge fade ================= */
   header {
-    background: color-mix(in srgb, var(--bg-base) 55%, transparent);
-    -webkit-backdrop-filter: var(--glass-blur-strong); backdrop-filter: var(--glass-blur-strong);
-    border-bottom: 1px solid var(--glass-line); padding-bottom: 10px;
+    position: sticky; top: 0; z-index: 5;
+    padding: calc(env(safe-area-inset-top) + 8px) var(--margin) 14px;
+    background: linear-gradient(to bottom, var(--edge-fade) 0%, var(--edge-fade) 62%, var(--edge-fade-0) 100%);
   }
-  header .iconbtn, .searchrow .iconbtn {
-    background: var(--glass); border: 1px solid var(--glass-edge);
-    box-shadow: var(--glass-shadow), inset 0 1px 0 var(--glass-edge); border-radius: 999px;
+  .monthbar {
+    position: relative; display: flex; align-items: center; justify-content: center; width: -webkit-max-content; width: max-content;
+    max-width: 100%; height: var(--h-regular); margin: 0 auto; border-radius: calc(var(--h-regular) / 2);
   }
   .monthbar h1 {
-    padding: 8px 16px; border-radius: 999px; background: var(--glass);
-    -webkit-backdrop-filter: var(--glass-blur); backdrop-filter: var(--glass-blur);
-    border: 1px solid var(--glass-edge); box-shadow: var(--glass-shadow), inset 0 1px 0 var(--glass-edge);
-    font-size: 16px;
+    min-width: 140px; min-height: var(--h-regular); margin: 0; padding: 0 var(--sp-2); display: flex; align-items: center; justify-content: center;
+    font-weight: 600; font-size: var(--fs-hl); line-height: var(--lh-hl); white-space: nowrap; cursor: pointer; border-radius: calc(var(--h-regular) / 2);
   }
+  .iconbtn {
+    width: var(--h-regular); height: var(--h-regular); border-radius: 50%; border: 0; flex: none; padding: 0;
+    display: inline-grid; place-items: center; background: var(--fill); color: var(--text); font-size: var(--fs-hl); line-height: 1; cursor: pointer;
+    transition: transform .3s var(--spring), background-color .2s;
+  }
+  .iconbtn svg { width: 17px; height: 17px; display: block; }
+  .monthbar .iconbtn { background: transparent; }
+  .iconbtn:active { transform: scale(.92); background: var(--fill); }
+  #periodSeg { width: 260px; max-width: 100%; margin: 8px auto 0; }
+  /* a tip on the header's Month / Financial year control (TipKit-style), until it is used once or closed */
+  .tip { display: flex; gap: var(--sp-2); align-items: flex-start; margin: 0 0 var(--sp-3); padding: 12px 8px 12px 16px; border-radius: 18px;
+    background: var(--content); border: 1px solid var(--content-edge); box-shadow: var(--shadow); font-weight: 400; font-size: var(--fs-fn); line-height: var(--lh-fn); color: var(--text); }
+  .tip.off { display: none; }
+  .tip span { flex: 1; }
+  .tip .iconbtn { width: 28px; height: 28px; background: var(--fill); font-size: var(--fs-fn); color: var(--muted); }
+
+  /* ================= Content layer ================= */
+  main { padding: 0 var(--margin) calc(var(--nav-bottom) + var(--h-tabbar) + var(--fab) + 48px); max-width: 640px; margin: 0 auto; }
+  .page-title { font-weight: 700; font-size: var(--fs-lt); line-height: var(--lh-lt); margin: 0 4px 12px; padding-top: calc(env(safe-area-inset-top) + 12px); }
+  .card, .list {
+    position: relative; background: var(--content); border: 1px solid var(--content-edge); border-radius: var(--r-card); box-shadow: var(--shadow);
+  }
+  .card { padding: var(--pad-card); margin-bottom: var(--sp-3); }
+  .list { overflow: hidden; }
+  h2 { font-weight: 600; font-size: var(--fs-hl); line-height: var(--lh-hl); margin: 0 0 4px; }
+  .total-label { color: var(--muted); font-weight: 600; font-size: var(--fs-fn); line-height: var(--lh-fn); }
+  .total { font-weight: 700; font-size: var(--fs-lt); line-height: var(--lh-lt); margin: 4px 0 8px; font-variant-numeric: tabular-nums; }
+  .progress { height: 8px; background: var(--fill); border-radius: 4px; overflow: hidden; }
+  .progress > div { height: 100%; width: 100%; background: var(--accent); border-radius: 4px; -webkit-transform-origin: left center; transform-origin: left center; transition: transform .45s var(--ease-out); }
+  .progress.over > div { background: var(--danger); }
+  .progress.near > div { background: var(--warn); }
+  .progress.inc > div { background: var(--income); }
+  .sub { color: var(--muted); font-weight: 400; font-size: var(--fs-fn); line-height: var(--lh-fn); margin-top: 6px; }
+  /* a line in a card you can tap: a 44 pt row with a disclosure chevron */
+  .linkrow { display: flex; align-items: center; gap: var(--sp-2); min-height: var(--h-regular); font-weight: 400; font-size: var(--fs-sh); line-height: var(--lh-sh); color: var(--muted); cursor: pointer; }
+  .linkrow > span:first-child { flex: 1; min-width: 0; }
+  .linkrow .chev { flex: none; color: var(--muted-2); font-weight: 600; }
+  .linkrow.accent { color: var(--accent); }
+  .linkrow + .linkrow { border-top: 1px solid var(--sep); }
+  .linkrow:active { opacity: .6; }
+  #incomeText { margin-top: 2px; }
+  #incomeText .balline { margin-top: 6px; }
+  .searchrow { display: flex; gap: var(--sp-2); margin-bottom: var(--sp-3); }
   .search {
-    background: var(--glass); border: 1px solid var(--glass-edge); border-radius: 999px; padding: 11px 16px;
-    box-shadow: inset 0 1px 0 var(--glass-edge);
+    flex: 1; min-width: 0; min-height: var(--h-regular); padding: 0 16px; border-radius: calc(var(--h-regular) / 2);
+    border: 1px solid var(--content-edge); background: var(--content); color: var(--text); font-family: inherit; font-weight: 400; font-size: var(--fs-bd); line-height: var(--lh-bd);
   }
+  .searchrow .iconbtn { background: var(--content); border: 1px solid var(--content-edge); box-shadow: var(--shadow); font-size: 19px; }
+  .day { margin: 20px 4px 8px; display: flex; justify-content: space-between; gap: var(--sp-2); color: var(--muted); font-weight: 600; font-size: var(--fs-sh); line-height: var(--lh-sh); }
+  .item { position: relative; display: flex; align-items: center; gap: var(--sp-3); min-height: 60px; padding: 12px 16px; cursor: pointer; }
+  .item:not(:last-child)::after { content: ""; position: absolute; left: 68px; right: 0; bottom: 0; height: 1px; background: var(--sep); }
+  .item:active { background: var(--fill-2); }
+  .emoji { width: 40px; height: 40px; border-radius: 12px; background: var(--tile); display: grid; place-items: center; font-size: 20px; line-height: 1; flex: none; }
+  .item .info { flex: 1; min-width: 0; }
+  .item .cat { font-weight: 600; font-size: var(--fs-hl); line-height: var(--lh-hl); }
+  .item.unread { box-shadow: inset 4px 0 0 var(--warn); background: var(--warn-soft); }
+  .item.unread .cat, .item.unread .amt { font-weight: 700; }
+  .item.unread .note { color: var(--text); opacity: .85; }
+  .item.unread .cat::after { content: ""; display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--warn); margin-left: 8px; vertical-align: middle; box-shadow: 0 0 0 3px var(--warn-ring); }
+  .item .amtwrap { display: flex; flex-direction: column; align-items: flex-end; gap: 4px; flex: none; }
+  .item .rv { font-weight: 700; font-size: var(--fs-c2); line-height: var(--lh-c2); height: 18px; display: inline-flex; align-items: center; padding: 0 7px; border-radius: 9px; background: var(--warn); color: #1f1300; }
+  .item .comment { font-weight: 400; font-size: var(--fs-fn); line-height: var(--lh-fn); color: var(--text); opacity: .8; margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .item .note { color: var(--muted); font-weight: 400; font-size: var(--fs-sh); line-height: var(--lh-sh); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .amt { font-weight: 600; font-size: var(--fs-hl); line-height: var(--lh-hl); font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .amt.credit { color: var(--income); }
+  .amt.debit { color: var(--danger); }
+  .amt.excluded { opacity: .6; font-weight: 500; }
+  .review-banner { margin: 10px 0 0; padding: 10px 12px; border-radius: var(--r-field); font-weight: 400; font-size: var(--fs-fn); line-height: var(--lh-fn); background: var(--warn-soft); color: var(--text); }
+  #needsBanner { display: block; width: 100%; min-height: var(--h-regular); text-align: left; padding: 12px 16px; font-weight: 400; font-size: var(--fs-sh); line-height: var(--lh-sh); cursor: pointer; color: var(--text); }
+  .empty { text-align: center; color: var(--muted); padding: 48px 16px; }
+  .empty div { font-size: 44px; line-height: 1.1; margin-bottom: 8px; }
+  .bar-row { margin: 12px 0; }
+  .bar-row[role=button] { margin: 4px 0; padding: 8px 0; min-height: var(--h-regular); }
+  .bar-row .top { display: flex; justify-content: space-between; font-weight: 400; font-size: var(--fs-sh); line-height: var(--lh-sh); margin-bottom: 6px; gap: var(--sp-2); }
+  .bar-row .top b { font-weight: 600; font-variant-numeric: tabular-nums; }
+  .stats { display: grid; grid-template-columns: 1fr 1fr; gap: var(--sp-3); }
+  .stats .card { margin-bottom: 0; padding: 14px 16px; }
+  .stats + .card, .stats + .sub + .card { margin-top: var(--sp-3); }
+  #view-list .card > [data-showkind] .total-label::after { content: " ›"; color: var(--muted-2); }
+  .stat[role=button] { cursor: pointer; transition: transform .3s var(--spring); }
+  .stat[role=button]:active { transform: scale(.98); }
+  .stat .v { font-weight: 600; font-size: var(--fs-t3); line-height: var(--lh-t3); margin-top: 4px; font-variant-numeric: tabular-nums; }
+  .chart { display: flex; align-items: flex-end; gap: var(--sp-2); height: 140px; margin-top: var(--sp-3); }
+  .chart .col { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: flex-end; height: 100%; gap: 6px; }
+  .chart .track { flex: 1; width: 100%; display: flex; align-items: flex-end; justify-content: center; }
+  .chart .b { width: 100%; max-width: 36px; background: var(--accent-soft); border-radius: 8px 8px 4px 4px; min-height: 2px; }
+  .chart .col.cur .b { background: var(--accent); }
+  .chart .lbl { font-weight: 400; font-size: var(--fs-c2); line-height: var(--lh-c2); color: var(--muted); }
+  label { display: block; font-weight: 400; font-size: var(--fs-sh); line-height: var(--lh-sh); color: var(--muted); margin: 14px 0 6px; }
+  input, select, textarea {
+    width: 100%; min-height: var(--h-regular); padding: 10px 12px; border-radius: var(--r-field); border: 1px solid var(--field-edge);
+    background: var(--field); color: var(--text); font-family: inherit; font-weight: 400; font-size: var(--fs-bd); line-height: var(--lh-bd);
+  }
+  select { padding-top: 0; padding-bottom: 0; }
+  textarea { min-height: 0; }
 
-  /* floating glass tab bar */
+  /* buttons: full width, stacked = rounded rectangles concentric with the card (r 26 − 16 padding = 10) */
+  .btn {
+    display: block; width: 100%; min-height: var(--h-regular); padding: 11px 16px; border-radius: var(--r-in-card); border: 0;
+    font-weight: 600; font-size: var(--fs-hl); line-height: var(--lh-hl); cursor: pointer; margin-top: var(--sp-3);
+    transition: transform .35s var(--spring), opacity .2s;
+  }
+  .btn:active { transform: scale(.98); }
+  .btn.primary { background: var(--accent); color: var(--on-accent); box-shadow: 0 4px 14px var(--accent-glow); }
+  .btn.primary:disabled { opacity: .5; box-shadow: none; }
+  .btn.ghost { background: var(--fill); color: var(--text); }
+  /* one filled button per screen (Settings: Import); the other main actions in its cards are tinted */
+  .btn.tinted { background: var(--accent-tint); color: var(--accent); }
+  .btn.tinted:disabled { opacity: .5; }
+  .btn.danger { background: transparent; color: var(--danger); border: 1px solid var(--danger); }
+
+  /* chips: drawn 36 tall (taps reach 44), capsules in a row, 8 apart */
+  .chips { display: flex; flex-wrap: wrap; gap: var(--sp-2); }
+  .chip {
+    position: relative; display: inline-flex; align-items: center; gap: 4px; min-height: var(--h-chip); padding: 7px 14px; border-radius: calc(var(--h-chip) / 2);
+    border: 1px solid transparent; background: var(--fill); color: var(--text); font-weight: 400; font-size: var(--fs-sh); line-height: var(--lh-sh); cursor: pointer;
+    text-align: left; transition: transform .35s var(--spring), background-color .2s, box-shadow .25s;
+  }
+  .chip:active { transform: scale(1.04); background: var(--glass-strong); box-shadow: inset 0 1px 0 var(--glass-rim), 0 4px 14px rgba(15,23,42,.12); }
+  .chip.sel { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
+  .chip.sel:active { background: var(--accent); }
+  .chip.add { border: 1px dashed var(--accent); background: transparent; color: var(--accent); }
+  .chip small { font-weight: 400; font-size: var(--fs-c1); line-height: var(--lh-c1); color: var(--muted); }
+  .chip.sel small { color: var(--on-accent); opacity: .85; }
+  /* ✕ inside a chip: its own 44×44 target at the chip's end */
+  .chip .x { position: relative; display: inline-flex; align-items: center; align-self: stretch; margin: -7px -14px -7px 2px; padding: 0 14px 0 8px; color: var(--muted); cursor: pointer; }
+  #fCats.editing .chip[data-cat] { outline: 2px dashed var(--accent); outline-offset: -2px; }
+  .filters { display: flex; gap: var(--sp-2); overflow-x: auto; padding: 4px 0 8px; scrollbar-width: none; }
+  .filters::-webkit-scrollbar { display: none; }
+  .filters .chip { white-space: nowrap; flex: none; }
+  main .filters .chip:not(.sel) { background: var(--content); border-color: var(--content-edge); }
+  main .filters .chip:not(.sel):active { background: var(--glass-strong); }
+  .chip-sm { min-height: var(--h-small); padding: 6px 12px; font-weight: 600; font-size: var(--fs-fn); line-height: var(--lh-fn); }
+
+  /* segmented control: a 44 pt capsule, a 36 pt thumb that slides (r 22 − 4 = 18) */
+  .seg {
+    position: relative; display: grid; grid-auto-flow: column; grid-auto-columns: 1fr; height: var(--h-regular); padding: var(--pad-seg);
+    border-radius: var(--r-seg); background: var(--fill); margin-top: var(--sp-2); --seg-i: 0; --seg-n: 2; --seg-s: 1;
+  }
+  .seg::before {
+    content: ""; position: absolute; top: var(--pad-seg); bottom: var(--pad-seg); left: var(--pad-seg); z-index: 0;
+    width: calc((100% - 2 * var(--pad-seg)) / var(--seg-n)); border-radius: var(--r-seg-thumb);
+    background: var(--thumb); box-shadow: var(--thumb-shadow);
+    -webkit-transform: translateX(calc(var(--seg-i) * 100%)) scale(var(--seg-s)); transform: translateX(calc(var(--seg-i) * 100%)) scale(var(--seg-s));
+    transition: transform .42s var(--spring), background-color .25s, box-shadow .25s, opacity .2s;
+  }
+  .seg.none::before { opacity: 0; }
+  /* while a finger is on it the thumb lifts and turns to glass (Liquid Glass on a transient control) */
+  .seg.pressing { --seg-s: 1.05; }
+  .seg.pressing::before { background: var(--glass-strong); box-shadow: inset 0 1px 0 var(--glass-rim), 0 6px 16px rgba(15,23,42,.16); }
+  .seg button {
+    position: relative; z-index: 1; min-width: 0; height: 100%; border: 0; background: transparent; color: var(--muted);
+    padding: 0 8px; border-radius: var(--r-seg-thumb); font-weight: 600; font-size: var(--fs-sh); line-height: var(--lh-sh); cursor: pointer; white-space: nowrap;
+    transition: color .2s;
+  }
+  /* each segment takes taps over the control's full 44 pt height, padding included */
+  .seg button::before { content: ""; position: absolute; left: 0; right: 0; top: calc(-1px - var(--pad-seg)); bottom: calc(-1px - var(--pad-seg)); }
+  .seg button.sel { color: var(--text); }
+  .seg button.sel[data-type=credit] { color: var(--income); }
+  .seg-help { text-align: center; margin-top: 6px; font-weight: 400; font-size: var(--fs-c1); line-height: var(--lh-c1); }
+
+  /* ticks: a round check in a 44×44 target; the check draws in from left to right */
+  input[type=checkbox] {
+    -webkit-appearance: none; appearance: none; position: relative; flex: none; width: var(--hit); height: var(--hit); min-height: 0;
+    margin: 0; padding: 0; border: 0; border-radius: 50%; background: none; cursor: pointer; vertical-align: middle;
+  }
+  input[type=checkbox]::before, input[type=checkbox]::after {
+    content: ""; position: absolute; left: 10px; top: 10px; width: 24px; height: 24px; border-radius: 50%; box-sizing: border-box;
+  }
+  input[type=checkbox]::before {
+    border: 2px solid var(--tick-off); background: transparent;
+    transition: background-color .2s, border-color .2s, box-shadow .3s, -webkit-transform .35s var(--spring); transition: background-color .2s, border-color .2s, box-shadow .3s, transform .35s var(--spring);
+  }
+  input[type=checkbox]::after {
+    background: var(--on-accent);
+    -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M6.8 12.6l3.4 3.4 7-7.6' fill='none' stroke='black' stroke-width='2.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") center / 24px 24px no-repeat;
+    mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M6.8 12.6l3.4 3.4 7-7.6' fill='none' stroke='black' stroke-width='2.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") center / 24px 24px no-repeat;
+    -webkit-clip-path: inset(0 100% 0 0); clip-path: inset(0 100% 0 0);
+    transition: -webkit-clip-path .1s; transition: clip-path .1s, -webkit-clip-path .1s;
+  }
+  input[type=checkbox]:checked::before { background: var(--accent); border-color: var(--accent); }
+  input[type=checkbox]:checked::after {
+    -webkit-clip-path: inset(0 0 0 0); clip-path: inset(0 0 0 0);
+    transition: -webkit-clip-path .3s cubic-bezier(.65, 0, .35, 1) .05s; transition: clip-path .3s cubic-bezier(.65, 0, .35, 1) .05s, -webkit-clip-path .3s cubic-bezier(.65, 0, .35, 1) .05s;
+  }
+  input[type=checkbox]:active::before { -webkit-transform: scale(1.12); transform: scale(1.12); box-shadow: 0 0 0 7px var(--accent-halo); }
+  input[type=checkbox]:focus-visible { outline: none; }
+  input[type=checkbox]:focus-visible::before { box-shadow: 0 0 0 3px var(--accent-halo), 0 0 0 1px var(--accent); }
+  input[type=checkbox]:disabled { opacity: .4; cursor: default; }
+  /* a tick with its title and a line on what it does */
+  .mchk { display: grid; grid-template-columns: 34px minmax(0, 1fr); column-gap: 8px; align-items: start; margin: 6px 0 0; color: var(--text); font-weight: 400; font-size: var(--fs-bd); line-height: var(--lh-bd); cursor: pointer; }
+  .mchk input[type=checkbox] { margin-left: -10px; }
+  .mchk > span { padding: 11px 0 8px; min-width: 0; overflow-wrap: break-word; word-wrap: break-word; }
+  .mchk .help, .tick-help { display: block; color: var(--muted); font-weight: 400; font-size: var(--fs-fn); line-height: var(--lh-fn); margin-top: 2px; }
+
+  /* ================= Functional layer: Liquid Glass ================= */
+  .glass {
+    background: var(--glass); border: 1px solid var(--glass-edge);
+    -webkit-backdrop-filter: var(--glass-blur); backdrop-filter: var(--glass-blur);
+    box-shadow: var(--glass-shadow), inset 0 1px 0 var(--glass-rim);
+  }
+  /* a specular highlight that follows the finger on a glass control while it is touched */
+  .glassfx { --gx: 50%; --gy: 50%; }
+  .glassfx::after {
+    content: ""; position: absolute; inset: 0; border-radius: inherit; pointer-events: none; z-index: 2;
+    background: radial-gradient(circle at var(--gx) var(--gy), var(--spec) 0, rgba(255,255,255,0) 64px);
+    opacity: 0; transition: opacity .45s var(--ease-out);
+  }
+  .glassfx.touching::after { opacity: 1; transition-duration: .12s; }
+
+  /* tab bar: a floating 64 pt capsule; the selection is a lens (r 32 − 4 = 28) that slides between tabs */
   nav {
-    left: 16px; right: 16px; bottom: calc(10px + env(safe-area-inset-bottom)); padding: 6px;
-    max-width: 480px; margin: 0 auto; border-radius: 30px; gap: 4px;
-    background: var(--glass-shine), var(--glass-heavy); border: 1px solid var(--glass-edge);
-    -webkit-backdrop-filter: var(--glass-blur-strong); backdrop-filter: var(--glass-blur-strong);
-    box-shadow: 0 12px 40px rgba(15,23,42,.18), inset 0 1px 0 var(--glass-edge);
+    position: fixed; left: var(--margin); right: var(--margin); bottom: var(--nav-bottom); z-index: 6; display: flex;
+    height: var(--h-tabbar); padding: var(--pad-tabbar); max-width: 480px; margin: 0 auto; border-radius: var(--r-tabbar);
   }
-  nav button { position: relative; border-radius: 24px; padding: 8px 0 9px; transition: color .25s, transform .2s; }
-  nav button span { font-size: 21px; }
-  nav button::before {
-    content: ""; position: absolute; inset: 0; border-radius: inherit; z-index: -1;
-    background: rgba(255,255,255,.0); transition: background .3s, box-shadow .3s, transform .35s cubic-bezier(.3,1.6,.5,1);
-    transform: scale(.7);
+  nav.glass { background: var(--glass-strong); }
+  nav .lens {
+    position: absolute; top: var(--pad-tabbar); left: 0; z-index: 0; height: calc(var(--h-tabbar) - 2 * var(--pad-tabbar)); width: 25%;
+    border-radius: var(--r-tab); background: var(--lens); box-shadow: var(--lens-shadow), inset 0 1px 0 var(--glass-rim); pointer-events: none;
+    -webkit-transform: translateX(var(--pad-tabbar)); transform: translateX(var(--pad-tabbar)); will-change: transform;
   }
-  nav button.active::before {
-    background: rgba(255,255,255,.7); transform: scale(1);
-    box-shadow: 0 2px 10px rgba(15,23,42,.10), inset 0 1px 0 #fff;
+  nav button {
+    position: relative; z-index: 1; flex: 1; min-width: 0; height: 100%; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px;
+    background: none; border: 0; border-radius: var(--r-tab); padding: 0 2px; color: var(--muted); cursor: pointer;
+    font: 600 11px/13px var(--font-sys); white-space: nowrap; transition: color .25s, transform .3s var(--spring);
   }
-  @media (prefers-color-scheme: dark) {
-    nav button.active::before { background: rgba(255,255,255,.14); box-shadow: inset 0 1px 0 rgba(255,255,255,.2); }
+  nav button span { display: block; width: 24px; height: 24px; font-size: 21px; line-height: 24px; text-align: center; }
+  nav button.active { color: var(--accent); }
+  nav button:active { transform: scale(.94); }
+  nav button .badge {
+    position: absolute; top: 3px; left: calc(50% + 4px); min-width: 18px; height: 18px; padding: 0 5px; border-radius: 9px;
+    background: var(--danger); color: #fff; font: 700 11px/18px var(--font-sys); display: inline-block; text-align: center;
   }
-  nav button:active { transform: scale(.92); }
 
-  /* glass + button with accent tint */
+  /* + button: the one tinted glass control (Large, 52 pt circle) */
   .fab {
-    bottom: calc(92px + env(safe-area-inset-bottom)); border-radius: 50%; width: 62px; height: 62px;
-    background: linear-gradient(180deg, rgba(255,255,255,.35), rgba(255,255,255,0) 55%), color-mix(in srgb, var(--accent) 78%, transparent);
-    border: 1px solid rgba(255,255,255,.55);
-    box-shadow: 0 10px 30px color-mix(in srgb, var(--accent) 45%, transparent), inset 0 1px 0 rgba(255,255,255,.6), inset 0 -6px 14px rgba(0,0,0,.12);
-    transition: transform .25s cubic-bezier(.3,1.6,.5,1);
+    position: fixed; right: max(var(--margin), calc(50vw - 240px + var(--margin))); bottom: calc(var(--nav-bottom) + var(--h-tabbar) + 12px); z-index: 6;
+    width: var(--fab); height: var(--fab); border-radius: 50%; padding: 0; display: grid; place-items: center; cursor: pointer;
+    color: var(--on-accent); border: 1px solid rgba(255,255,255,.45);
+    background: linear-gradient(180deg, rgba(255,255,255,.3), rgba(255,255,255,0) 55%), var(--glass-accent);
+    -webkit-backdrop-filter: var(--glass-blur); backdrop-filter: var(--glass-blur);
+    box-shadow: 0 8px 24px var(--accent-glow), inset 0 1px 0 rgba(255,255,255,.55);
+    transition: transform .4s var(--spring), box-shadow .3s;
   }
-  .fab:active { transform: scale(.88); }
+  .fab svg { width: 24px; height: 24px; display: block; }
+  .fab:active { transform: scale(1.08); box-shadow: 0 12px 30px var(--accent-glow), inset 0 1px 0 rgba(255,255,255,.7); }
 
-  /* sheets, toasts and controls */
-  .sheet-bg { background: rgba(10, 15, 30, .22); -webkit-backdrop-filter: blur(3px); backdrop-filter: blur(3px); }
+  /* sheets: inset from the screen edge on phones with rounded corners, corners concentric with the display (47 − 8 = 39) */
+  .sheet-bg { position: fixed; inset: 0; z-index: 10; display: none; background: transparent; }
+  .sheet-bg.over { z-index: 12; }
+  .sheet-dim { position: fixed; inset: 0; z-index: 10; background: var(--dim); opacity: 0; pointer-events: none; transition: opacity .35s var(--ease-out); }
+  .sheet-dim.on { opacity: 1; }
+  .sheet-dim.over { z-index: 12; }
   .sheet {
-    background: var(--glass-shine), var(--glass-strong); border: 1px solid var(--glass-edge); border-bottom: 0;
-    -webkit-backdrop-filter: var(--glass-blur-strong); backdrop-filter: var(--glass-blur-strong);
-    box-shadow: 0 -10px 40px rgba(15,23,42,.18), inset 0 1px 0 var(--glass-edge);
-    border-radius: 30px 30px 0 0; transition: transform .38s cubic-bezier(.2,1.15,.4,1);
+    position: fixed; left: var(--inset-sheet); right: var(--inset-sheet); bottom: var(--inset-sheet); z-index: 11;
+    max-width: 640px; margin: 0 auto; max-height: 92vh; overflow-y: auto; overscroll-behavior: contain; -webkit-overflow-scrolling: touch;
+    padding: 8px var(--pad-sheet) calc(var(--pad-sheet) + max(0px, env(safe-area-inset-bottom) - var(--inset-sheet)));
+    border-radius: var(--r-sheet) var(--r-sheet) var(--r-sheet-b) var(--r-sheet-b);
+    background: var(--glass-heavy); border: 1px solid var(--glass-edge);
+    -webkit-backdrop-filter: var(--glass-blur); backdrop-filter: var(--glass-blur);
+    box-shadow: 0 -8px 40px rgba(15,23,42,.16), inset 0 1px 0 var(--glass-rim);
+    -webkit-transform: translateY(calc(100% + 24px)); transform: translateY(calc(100% + 24px)); visibility: hidden;
+    transition: -webkit-transform .32s var(--ease-in), visibility 0s linear .32s; transition: transform .32s var(--ease-in), visibility 0s linear .32s;
   }
-  .sheet.tall .imp-foot { background: transparent; border-top-color: var(--glass-line); }
+  .sheet.open { -webkit-transform: none; transform: none; visibility: visible; transition: -webkit-transform .5s var(--spring-soft); transition: transform .5s var(--spring-soft); }
+  #catSheet { z-index: 13; }   /* opens on top of a transaction being edited */
+  /* a full-height sheet is more opaque (HIG): the whole sheet scrolls, its buttons stay at the bottom */
+  .sheet.tall { height: 92vh; display: flex; flex-direction: column; padding-bottom: 0; background: var(--sheet-solid); }
+  .sheet.tall > * { flex: none; }
+  .sheet .grab { width: 36px; height: 5px; border-radius: 3px; background: var(--tick-off); margin: 0 auto 10px; flex: none; }
+  .sheet h2 { margin-bottom: 8px; }
+  .sheet .btn { min-height: var(--h-large); padding: 15px 16px; border-radius: var(--r-in-sheet); }
+  .amount-input { font-weight: 700; font-size: var(--fs-lt); line-height: var(--lh-lt); text-align: center; padding: 8px 12px; min-height: 60px; }
+  .row2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
   .toast {
-    background: var(--glass-heavy); color: var(--text); border: 1px solid var(--glass-edge);
-    -webkit-backdrop-filter: var(--glass-blur-strong); backdrop-filter: var(--glass-blur-strong);
-    box-shadow: var(--glass-shadow), inset 0 1px 0 var(--glass-edge); border-radius: 999px; padding: 11px 18px;
+    position: fixed; left: var(--margin); right: var(--margin); bottom: calc(var(--nav-bottom) + var(--h-tabbar) + var(--fab) + 24px); z-index: 30;
+    width: -webkit-fit-content; width: fit-content; max-width: 560px; margin: 0 auto; padding: 12px 18px; border-radius: 22px; text-align: center; pointer-events: none;
+    font-weight: 500; font-size: var(--fs-sh); line-height: var(--lh-sh); color: var(--text); background: var(--glass-heavy); border: 1px solid var(--glass-edge);
+    -webkit-backdrop-filter: var(--glass-blur); backdrop-filter: var(--glass-blur); box-shadow: var(--glass-shadow), inset 0 1px 0 var(--glass-rim);
+    opacity: 0; -webkit-transform: translateY(10px) scale(.96); transform: translateY(10px) scale(.96);
+    transition: opacity .25s var(--ease-out), -webkit-transform .45s var(--spring); transition: opacity .25s var(--ease-out), transform .45s var(--spring);
   }
-  .chip { background: var(--glass); border-color: var(--glass-edge); box-shadow: inset 0 1px 0 var(--glass-edge); }
-  .chip.sel { background: color-mix(in srgb, var(--accent) 82%, transparent); border-color: rgba(255,255,255,.5); }
-  .seg { background: var(--glass); border: 1px solid var(--glass-edge); border-radius: 14px; }
-  .seg button.sel { background: var(--glass-strong); box-shadow: 0 2px 8px rgba(15,23,42,.10), inset 0 1px 0 var(--glass-edge); }
-  .btn { border-radius: 999px; transition: transform .2s cubic-bezier(.3,1.6,.5,1); }
-  .btn:active, .chip:active, .iconbtn:active { transform: scale(.95); }
-  .btn.primary { box-shadow: 0 6px 18px color-mix(in srgb, var(--accent) 35%, transparent), inset 0 1px 0 rgba(255,255,255,.45); }
-  .btn.ghost { background: var(--glass); border: 1px solid var(--glass-edge); box-shadow: inset 0 1px 0 var(--glass-edge); }
-  input, select, textarea { background: rgba(255,255,255,.45); border-color: var(--glass-edge); }
-  @media (prefers-color-scheme: dark) { input, select, textarea { background: rgba(255,255,255,.06); } }
-  details.map { background: var(--glass); border: 1px solid var(--glass-edge); }
-  .progress { background: rgba(127,127,127,.18); }
-  .stats .card { padding: 14px 16px; }
+  .toast.show { opacity: 1; -webkit-transform: none; transform: none; }
 
-  /* no blur support, or Reduce Transparency: solid surfaces */
-  @supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
-    :root { --glass: var(--surface); --glass-strong: var(--surface); --glass-heavy: var(--surface); }
+  /* ================= Lists inside cards and sheets ================= */
+  .mrow { display: grid; grid-template-columns: 1fr auto; gap: 4px 10px; align-items: center; padding: 12px 0; border-bottom: 1px solid var(--sep); }
+  .mrow .subj { font-weight: 600; font-size: var(--fs-sh); line-height: var(--lh-sh); display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; word-break: break-word; }
+  .mrow .meta { color: var(--muted); font-weight: 400; font-size: var(--fs-c1); line-height: var(--lh-c1); margin-top: 2px; }
+  .mrow .snip { color: var(--muted); font-weight: 400; font-size: var(--fs-fn); line-height: var(--lh-fn); margin-top: 4px; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; word-break: break-word; }
+  .mrow .parsed { font-weight: 400; font-size: var(--fs-fn); line-height: var(--lh-fn); margin-top: 6px; font-variant-numeric: tabular-nums; }
+  .mrow .parsed.credit b { color: var(--income); }
+  .mrow .parsed.debit b { color: var(--danger); }
+  .mrow.done { opacity: .55; }
+  .balrow { display: grid; grid-template-columns: 1fr auto; gap: 2px 10px; align-items: center; padding: 10px 0; border-bottom: 1px solid var(--sep); }
+  .balrow:last-child { border-bottom: 0; }
+  .balrow .nm { font-weight: 600; }
+  .balrow .when { color: var(--muted); font-weight: 400; font-size: var(--fs-c1); line-height: var(--lh-c1); }
+  .balrow .v { font-weight: 700; font-variant-numeric: tabular-nums; text-align: right; }
+  .balrow .est { color: var(--muted); font-weight: 400; font-size: var(--fs-c1); line-height: var(--lh-c1); text-align: right; }
+  .balrow .actions { grid-column: 1 / 3; display: flex; flex-wrap: wrap; gap: var(--sp-3) var(--sp-2); margin-top: 8px; }
+  .balrow .actions .chip { text-decoration: none; min-height: var(--h-small); padding: 6px 12px; font-weight: 600; font-size: var(--fs-fn); line-height: var(--lh-fn); }
+
+  /* import sheet */
+  .imp-body { flex: 1 0 auto; }
+  .imp-foot {
+    position: -webkit-sticky; position: sticky; bottom: 0; z-index: 3; margin: auto calc(-1 * var(--pad-sheet)) 0;
+    padding: 4px var(--pad-sheet) calc(12px + max(0px, env(safe-area-inset-bottom) - var(--inset-sheet)));
+    border-top: 1px solid var(--sep); background: var(--sheet-solid);
   }
-  @media (prefers-reduced-transparency: reduce) {
-    :root { --glass: var(--surface); --glass-strong: var(--surface); --glass-heavy: var(--surface); --glass-shine: none; }
-    body::before { display: none; }
+  .imp-foot .btn { margin-top: 8px; }
+  details.map { background: var(--fill-2); border-radius: var(--r-field); padding: 0 12px; margin: 8px 0; }
+  details.map summary { cursor: pointer; padding: 12px 0; font-weight: 600; font-size: var(--fs-sh); line-height: var(--lh-sh); }
+  details.map[open] { padding-bottom: 12px; }
+  details.map label { margin: 10px 0 4px; }
+  .map-wide { grid-column: 1 / -1; }
+  .irow { display: grid; grid-template-columns: 34px minmax(0, 1fr) auto; column-gap: 6px; row-gap: 4px; align-items: center; padding: 10px 0; border-bottom: 1px solid var(--sep); }
+  /* a statement can have hundreds of rows: the ones off screen aren't drawn (newer iOS; iOS 15 draws them all) */
+  .irow { content-visibility: auto; contain-intrinsic-size: auto 110px; }
+  .irow input[type=checkbox] { margin-left: -10px; }
+  .irow .d { font-weight: 400; font-size: var(--fs-sh); line-height: var(--lh-sh); min-width: 0; }
+  .irow .d .desc { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; word-break: break-word; }
+  .irow .d .meta { color: var(--muted); font-weight: 400; font-size: var(--fs-c1); line-height: var(--lh-c1); margin-top: 2px; }
+  .irow select { grid-column: 2 / 4; margin-top: 4px; }
+  .irow.off { opacity: .45; }
+  .imp-help { margin: 4px 0 6px; padding: 10px 12px; border-radius: var(--r-field); background: var(--fill-2); }
+  .imp-help p { margin: 0; }
+  .imp-help p + p { margin-top: 6px; }
+  .tag { display: inline-block; font-weight: 500; font-size: var(--fs-c2); line-height: var(--lh-c2); padding: 2px 6px; border-radius: 6px; background: var(--fill); color: var(--muted); margin-left: 4px; }
+  .tag.warn { color: var(--warn); }
+  .tag.sug {
+    position: relative; grid-column: 2 / 4; justify-self: start; display: inline-flex; align-items: center; min-height: var(--h-chip); margin: 4px 0 4px;
+    padding: 7px 14px; border-radius: calc(var(--h-chip) / 2); border: 0; font-weight: 500; font-size: var(--fs-sh); line-height: var(--lh-sh); text-align: left;
+    color: var(--accent); background: var(--accent-tint); cursor: pointer; transition: transform .35s var(--spring), background-color .2s;
   }
+  .tag.sug:active { transform: scale(1.04); }
+  .tag.sug.on { color: var(--on-accent); background: var(--accent); }
+  .appb { display: inline-flex; align-items: center; height: 18px; padding: 0 5px; border-radius: 5px; font: 700 var(--fs-c2)/1 var(--font-sys); vertical-align: 2px; margin-left: 6px; }
+  .appb.phonepe { background: #5f259f; color: #fff; }
+  .appb.gpay { background: #fff; color: #5f6368; border: 1px solid #dadce0; }
+  .appb.gpay b { color: #4285f4; margin-right: 1px; }
+  .appb.paytm { background: #002e6e; color: #fff; }
+  .appb.paytm b { color: #00baf2; font-weight: 700; }
+  .sugs { display: flex; flex-wrap: wrap; gap: var(--sp-2); margin-top: 8px; }
+  .sugs .chip { display: block; font-weight: 600; font-size: var(--fs-fn); line-height: var(--lh-fn); padding: 7px 14px; border-radius: 18px; }
+  .sugs .chip small { display: block; color: var(--muted); font-weight: 400; font-size: var(--fs-c1); line-height: var(--lh-c1); }
+  .sug-hint { font-weight: 400; font-size: var(--fs-c1); line-height: var(--lh-c1); color: var(--accent); margin-top: 2px; }
+  .rec { display: flex; justify-content: space-between; gap: 10px; padding: 11px 0; border-top: 1px solid var(--sep); font-weight: 400; font-size: var(--fs-sh); line-height: var(--lh-sh); }
+  .rec:first-child { border-top: 0; }
+  .rec[role=button] { cursor: pointer; }
+  .rec small { color: var(--muted); display: block; font-weight: 400; font-size: var(--fs-c1); line-height: var(--lh-c1); }
+
   @media (prefers-reduced-motion: reduce) {
-    body::before { animation: none; }
-    .sheet, .fab, nav button::before, .btn { transition: none; }
+    /* no movement: only quick fades */
+    .sheet { -webkit-transform: none; transform: none; opacity: 0; transition: opacity .2s, visibility 0s linear .2s; }
+    .sheet.open { opacity: 1; transition: opacity .2s, visibility 0s; }
+    .sheet-dim { transition: opacity .2s; }
+    .toast, .toast.show { -webkit-transform: none; transform: none; transition: opacity .2s; }
+    .seg::before, .btn, .chip, .fab, .iconbtn, nav button, .stat[role=button], .tag.sug, .progress > div { transition: opacity .2s, background-color .2s; }
+    .btn:active, .chip:active, .fab:active, .iconbtn:active, nav button:active, .stat[role=button]:active, .tag.sug:active, .seg.pressing { -webkit-transform: none; transform: none; --seg-s: 1; }
+    input[type=checkbox]::before, input[type=checkbox]::after, input[type=checkbox]:checked::after { transition: background-color .15s, border-color .15s, opacity .15s; }
+    input[type=checkbox]:active::before { -webkit-transform: none; transform: none; }
+    input[type=checkbox]:not(:checked)::after { opacity: 0; }
   }
 
   /* ================= Analysis charts ================= */
@@ -371,7 +558,7 @@
     }
   }
   .vz { display: block; overflow: visible; font-family: inherit; -webkit-user-select: none; user-select: none; max-width: 100%; }
-  .vz text { fill: var(--muted); font-size: 10px; }
+  .vz text { fill: var(--muted); font-size: 11px; }
   .vz .tk { font-variant-numeric: tabular-nums; }
   .vz .t1 { fill: var(--text); font-weight: 600; }
   .vz .grid { stroke: var(--vz-grid); stroke-width: 1; }
@@ -392,52 +579,52 @@
   .vz[data-heat] { cursor: pointer; }
   .vz [data-go]:focus-visible { stroke: var(--accent); stroke-width: 2; }
   .an-chart { margin-top: 4px; touch-action: pan-y; }
-  .an-legend { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; font-size: 12px; color: var(--muted); margin: 10px 0 2px; }
+  .an-legend { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; font-weight: 400; font-size: var(--fs-c1); line-height: var(--lh-c1); color: var(--muted); margin: 10px 0 2px; }
   .an-legend i { display: inline-block; width: 10px; height: 10px; border-radius: 3px; margin-right: 5px; vertical-align: -1px; }
   .an-legend i.ln { width: 14px; height: 2px; border-radius: 1px; vertical-align: 3px; }
   .an-legend i.dash { width: 14px; height: 0; border-radius: 0; border-top: 2px dashed; vertical-align: 3px; }
   .an-scale { gap: 4px; }
   .an-scale i { margin: 0; width: 14px; height: 14px; }
   .an-scale .an-bands { margin-left: 8px; font-variant-numeric: tabular-nums; }
-  .an-tip { font-size: 12px; color: var(--text); min-height: 32px; margin: 4px 0 2px; line-height: 16px; font-variant-numeric: tabular-nums; }
-  .an-tip .chip { padding: 4px 12px; font-size: 13px; margin-left: 6px; vertical-align: middle; }
+  /* the readout under a chart: two lines tall, so a longer reading (or its Open button, on the right) never moves the chart */
+  .an-tip { display: flex; align-items: center; justify-content: space-between; gap: var(--sp-2); font-weight: 400; font-size: var(--fs-fn); line-height: var(--lh-fn); color: var(--text); min-height: 36px; margin: 4px 0 2px; font-variant-numeric: tabular-nums; }
+  .an-tip .chip { flex: none; min-height: var(--h-small); padding: 6px 12px; font-weight: 600; font-size: var(--fs-fn); line-height: var(--lh-fn); }
   .an-head { display: grid; grid-template-columns: 132px minmax(0, 1fr); gap: 14px; align-items: center; margin-top: 8px; }
   /* a headline amount stays on one line: when it is wider than its column it is drawn smaller (anFit) */
-  .an-big { font-size: 26px; font-weight: 700; line-height: 1.15; margin: 2px 0 4px; white-space: nowrap; overflow: hidden; }
-  .an-status { font-size: 12px; font-weight: 600; margin-bottom: 4px; }
-  .an-d { display: block; font-size: 12px; color: var(--muted); margin-top: 3px; }
-  .an-d b { font-weight: 650; }
+  .an-big { font-weight: 700; font-size: var(--fs-t1); line-height: var(--lh-t1); margin: 2px 0 4px; white-space: nowrap; overflow: hidden; }
+  .an-status { font-weight: 600; font-size: var(--fs-c1); line-height: var(--lh-c1); margin-bottom: 4px; }
+  .an-d { display: block; font-weight: 400; font-size: var(--fs-fn); line-height: var(--lh-fn); color: var(--muted); margin-top: 3px; }
+  .an-d b { font-weight: 600; }
   .an-good { color: var(--income); } .an-bad { color: var(--danger); } .an-warn { color: var(--an-warn); }
   .an-kpis { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 14px; }
-  .an-kpi { padding: 10px 12px; border-radius: 16px; background: var(--vz-hover); cursor: pointer; min-width: 0; }
+  .an-kpi { padding: 10px 12px; border-radius: var(--r-in-card); background: var(--vz-hover); cursor: pointer; min-width: 0; transition: transform .3s var(--spring); }
   .an-kpi:active { transform: scale(.98); }
-  .an-kpi .v { font-size: 17px; font-weight: 700; margin: 2px 0 2px; white-space: nowrap; overflow: hidden; }
-  .an-ins { display: grid; grid-template-columns: 24px minmax(0, 1fr) 12px; gap: 8px; align-items: start; padding: 10px 0; border-top: 1px solid var(--glass-line); font-size: 14px; line-height: 1.4; }
+  .an-kpi .v { font-weight: 600; font-size: var(--fs-t3); line-height: var(--lh-t3); margin: 2px 0 2px; white-space: nowrap; overflow: hidden; font-variant-numeric: tabular-nums; }
+  .an-ins { display: grid; grid-template-columns: 24px minmax(0, 1fr) 12px; gap: 8px; align-items: start; padding: 12px 0; min-height: var(--h-regular); border-top: 1px solid var(--sep); font-weight: 400; font-size: var(--fs-sh); line-height: var(--lh-sh); }
   .an-ins:first-of-type { border-top: 0; }
-  .an-ins .ic { font-size: 16px; line-height: 1.25; text-align: center; }
-  .an-ins .chev { color: var(--muted); font-size: 18px; line-height: 1; }
+  .an-ins .ic { font-size: 17px; line-height: 20px; text-align: center; }
+  .an-ins .chev { color: var(--muted-2); font-weight: 600; font-size: var(--fs-fn); line-height: var(--lh-sh); }
   .an-ins[data-go], .an-row[data-go], .an-tbl tr[data-go] { cursor: pointer; }
   .an-ins[data-go]:active, .an-row[data-go]:active, .an-tbl tr[data-go]:active { background: var(--vz-hover); }
   .an-donut { display: grid; grid-template-columns: 150px minmax(0, 1fr); gap: 14px; align-items: center; margin-top: 10px; }
-  .an-dleg { font-size: 12px; min-width: 0; }
+  .an-dleg { font-weight: 400; font-size: var(--fs-c1); line-height: var(--lh-c1); min-width: 0; }
   .an-dleg div { display: grid; grid-template-columns: 10px minmax(0, 1fr) auto; gap: 6px; align-items: center; padding: 2px 0; }
   .an-dleg i { width: 10px; height: 10px; border-radius: 3px; }
   .an-dleg span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .an-dleg b { font-variant-numeric: tabular-nums; font-weight: 600; }
   .an-rows { margin-top: 2px; }
-  .an-row { display: grid; grid-template-columns: 10px minmax(0, 1fr) 56px auto; gap: 10px; align-items: center; padding: 9px 0; border-top: 1px solid var(--glass-line); }
-  .an-row .nm { min-width: 0; font-size: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .an-row small { display: block; font-size: 12px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .an-row .v { text-align: right; font-weight: 650; font-size: 14px; white-space: nowrap; font-variant-numeric: tabular-nums; }
+  .an-row { display: grid; grid-template-columns: 10px minmax(0, 1fr) 56px auto; gap: 10px; align-items: center; padding: 12px 0; min-height: var(--h-regular); border-top: 1px solid var(--sep); }
+  .an-row .nm { min-width: 0; font-weight: 400; font-size: var(--fs-sh); line-height: var(--lh-sh); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .an-row small { display: block; font-weight: 400; font-size: var(--fs-c1); line-height: var(--lh-c1); color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .an-row .v { text-align: right; font-weight: 600; font-size: var(--fs-sh); line-height: var(--lh-sh); white-space: nowrap; font-variant-numeric: tabular-nums; }
   .an-row .v small { text-align: right; font-weight: 600; }
   .an-row .v small.an-good { color: var(--income); } .an-row .v small.an-bad { color: var(--danger); }
   .an-sw { width: 10px; height: 10px; border-radius: 3px; }
-  .an-em { font-size: 18px; text-align: center; }
-  .an-toggle { margin-top: 8px; gap: 6px; }
-  .an-toggle .chip { padding: 5px 11px; font-size: 13px; }
-  .an-tbl { width: 100%; border-collapse: collapse; font-size: 13px; font-variant-numeric: tabular-nums; margin-top: 10px; }
-  .an-tbl th { color: var(--muted); font-weight: 600; text-align: right; font-size: 11px; text-transform: uppercase; letter-spacing: .04em; padding: 4px 0; }
-  .an-tbl td { text-align: right; padding: 9px 0 9px 6px; border-top: 1px solid var(--glass-line); white-space: nowrap; }
+  .an-em { font-size: 17px; text-align: center; }
+  .seg.an-toggle { margin-top: 10px; max-width: 300px; }
+  .an-tbl { width: 100%; border-collapse: collapse; font-weight: 400; font-size: var(--fs-fn); line-height: var(--lh-fn); font-variant-numeric: tabular-nums; margin-top: 10px; }
+  .an-tbl th { color: var(--muted); text-align: right; font-weight: 600; font-size: var(--fs-c1); line-height: var(--lh-c1); padding: 4px 0; }
+  .an-tbl td { text-align: right; padding: 13px 0 13px 6px; border-top: 1px solid var(--sep); white-space: nowrap; }
   .an-tbl th:first-child, .an-tbl td:first-child { text-align: left; padding-left: 0; white-space: normal; }
   .an-tbl .c { display: none; }
   .an-tbl.short .f { display: none; } .an-tbl.short .c { display: inline; }   /* too wide for the card: ₹36L instead of ₹35,98,056 */
@@ -454,21 +641,23 @@
   }
   @keyframes anIn { from { opacity: 0; } }
 </style>
+<style id="preloadCss">*, *::before, *::after { -webkit-transition: none !important; transition: none !important; }</style>
 </head>
 <body>
 <header>
-  <div class="monthbar">
-    <button class="iconbtn" id="prevM" aria-label="Previous month">‹</button>
-    <h1 id="monthTitle" role="button" title="Switch between month and financial year" style="cursor:pointer"></h1>
-    <button class="iconbtn" id="nextM" aria-label="Next month">›</button>
+  <div class="monthbar glass glassfx">
+    <button class="iconbtn" id="prevM" aria-label="Previous month"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14.5 5.5 8 12l6.5 6.5" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+    <h1 id="monthTitle" role="button" tabindex="0" title="Switch between month and financial year"></h1>
+    <button class="iconbtn" id="nextM" aria-label="Next month"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9.5 5.5 16 12l-6.5 6.5" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
   </div>
-  <div class="seg" id="periodSeg" style="max-width:230px;margin:8px auto 0;padding:3px">
-    <button type="button" data-period="month" style="padding:5px 8px;font-size:13px;white-space:nowrap">Month</button>
-    <button type="button" data-period="fy" style="padding:5px 8px;font-size:13px;white-space:nowrap">Financial year</button>
+  <div class="seg glass glassfx" id="periodSeg" role="group" aria-label="Period">
+    <button type="button" data-period="month">Month</button>
+    <button type="button" data-period="fy">Financial year</button>
   </div>
 </header>
 
 <main>
+  <div class="tip hidden" id="periodTip" role="note"><span>See one month or a whole financial year (1 Apr–31 Mar) on Expenses, Summary and Analysis. The arrows move by a month or a year.</span><button type="button" class="iconbtn hit44" id="periodTipX" aria-label="Got it">✕</button></div>
   <!-- Expenses view -->
   <section id="view-list">
     <div class="card">
@@ -483,13 +672,14 @@
     <div class="filters hidden" id="acctBar" style="margin:-2px 0 8px"></div>
     <div class="searchrow">
       <input class="search" id="search" type="search" placeholder="Search, or >1000 / <500">
-      <button class="iconbtn" id="smsTop" aria-label="Add from bank SMS" title="Add from bank SMS" style="height:auto">💬</button>
-      <button class="iconbtn" id="importTop" aria-label="Import bank statement" title="Import bank statement" style="height:auto">📥</button>
+      <button class="iconbtn" id="smsTop" aria-label="Add from bank SMS" title="Add from bank SMS">💬</button>
+      <button class="iconbtn" id="importTop" aria-label="Import bank statement" title="Import bank statement">📥</button>
     </div>
     <div class="filters" id="amtBar" style="margin:-4px 0 4px"></div>
+    <div class="sub hidden" id="reviewHelp" style="margin:0 4px 6px">● To review shows only entries waiting for your comment. Tap it again to see everything.</div>
     <div class="sub" id="filterSummary" style="margin:0 4px 6px"></div>
     <div class="card hidden" id="payerBanner" style="padding:12px 14px"></div>
-    <button type="button" class="card hidden" id="needsBanner" style="width:100%;text-align:left;padding:10px 14px;font-size:14px;cursor:pointer;border:none;color:var(--text)"></button>
+    <button type="button" class="card hidden" id="needsBanner"></button>
     <div id="list"></div>
   </section>
 
@@ -517,11 +707,12 @@
       <div class="card stat" data-showkind="spent" role="button"><div class="total-label">Spent ›</div><div class="v" id="sTotal"></div></div>
       <div class="card stat" data-showkind="income" role="button"><div class="total-label">Income ›</div><div class="v" id="sIncome" style="color:var(--income)"></div></div>
       <div class="card stat"><div class="total-label">Net saved</div><div class="v" id="sNet"></div></div>
-      <div class="card stat" data-showinvest="1" role="button"><div class="total-label">📈 Invested</div><div class="v" id="sInvest"></div><div class="sub" id="sInvestSub" style="margin:2px 0 0;font-size:11px"></div></div>
+      <div class="card stat" data-showinvest="1" role="button"><div class="total-label">📈 Invested</div><div class="v" id="sInvest"></div><div class="sub" id="sInvestSub" style="margin:2px 0 0;font-size:12px;line-height:16px"></div></div>
       <div class="card stat"><div class="total-label">Daily spend</div><div class="v" id="sAvg"></div></div>
       <div class="card stat"><div class="total-label">Transactions</div><div class="v" id="sCount"></div></div>
       <div class="card stat"><div class="total-label" id="sDiffLabel">Spend vs last mo.</div><div class="v" id="sDiff"></div></div>
     </div>
+    <div class="sub" style="margin:8px 4px 0">Tap Spent, Income or Invested to list only what you spent, earned or invested. Tap again to see everything.</div>
     <div class="card">
       <h2>Spending by category</h2>
       <div id="catBars"></div>
@@ -562,6 +753,7 @@
 
   <!-- Settings view -->
   <section id="view-settings" class="hidden">
+    <h1 class="page-title">Settings</h1>
     <div class="card">
       <h2>Preferences</h2>
       <label for="currency">Currency</label>
@@ -581,11 +773,7 @@
       <div class="sub">Download your statement from net banking as <b>CSV</b> or <b>Excel (XLS/XLSX)</b> and import it here. Debits become expenses, credits become income, and each one is auto-categorised.</div>
       <button class="btn primary" id="importBtn">📥 Import bank statement</button>
       <button class="btn ghost" id="smsBtn">💬 Add from bank SMS</button>
-      <label class="native-only" style="display:flex;gap:10px;align-items:center;margin-top:14px;color:var(--text)">
-        <input type="checkbox" id="autoAdd" style="width:22px;height:22px;flex:none;accent-color:var(--accent)">
-        Add shared &amp; Siri messages automatically (skip review)
-      </label>
-      <div class="sub native-only">Duplicates are still skipped.</div>
+      <label class="mchk native-only" style="margin-top:12px"><input type="checkbox" id="autoAdd"><span>Add shared bank messages without asking<span class="help">Bank messages you share to Kharcha or send with Siri go straight in. Repeats are skipped; possible duplicates still ask you first.</span></span></label>
       <div class="sub native-only" style="margin-top:8px">🎙️ <b>Siri:</b> copy a bank message and say <i>“Hey Siri, send copied message to Kharcha”</i>. Want a comment too? Copy it and say <i>“Add this transaction to Kharcha”</i>. Siri asks for the comment; if the entry is already here (from a statement), the comment goes on it. Also: <i>“Add expense in Kharcha”</i> (Siri asks how much and what for) and <i>“How much have I spent in Kharcha”</i>.</div>
       <div class="sub">Copy one or more bank SMS (long-press → Copy), then tap 💬 and paste.</div>
       <input type="file" id="importFile" accept=".csv,.txt,.tsv,.xls,.xlsx,.ods,.pdf,application/pdf,text/csv,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" class="hidden">
@@ -622,7 +810,7 @@
       <input id="aiKey" type="password" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="sk-…">
       <label for="aiModel">Model for questions</label>
       <select id="aiModel"><option value="deepseek-chat">deepseek-chat (fast, cheapest)</option><option value="deepseek-reasoner">deepseek-reasoner (thinks longer)</option></select>
-      <button class="btn primary" id="aiSave">Save &amp; test</button>
+      <button class="btn tinted" id="aiSave">Save &amp; test</button>
       <button class="btn ghost" id="aiCat">🏷️ Categorise “Other” entries with DeepSeek</button>
       <button class="btn ghost" id="aiRemove">Remove key</button>
       <div class="sub">Kharcha uses DeepSeek only when its own rules can't: messages it doesn't recognise, statements in unknown formats (any bank's CSV, Excel or PDF), uncategorised entries, and questions in <b>Summary → Ask</b>. Get a key at <b>platform.deepseek.com → API keys</b> (pay-as-you-go; a request costs well under ₹1). The text being read is sent to DeepSeek (servers in China); your key stays on your devices.</div>
@@ -632,7 +820,7 @@
       <div class="sub" id="mailStatus">Not connected.</div>
       <label for="mailUrl">Gmail bridge address</label>
       <input id="mailUrl" type="url" inputmode="url" autocomplete="off" placeholder="https://script.google.com/macros/s/…/exec">
-      <button class="btn primary" id="mailCheck">✉️ Check email now</button>
+      <button class="btn tinted" id="mailCheck">✉️ Check email now</button>
       <button class="btn ghost" id="mailBrowse">📧 Browse emails &amp; add one by one</button>
       <button class="btn ghost" id="mailResync">↻ Re-sync email (reads the last 45 days again)</button>
       <details class="map" id="mailHelp">
@@ -657,13 +845,13 @@
     </div>
     <div class="card" id="exclCard">
       <h2>🚫 Not counted in spending or income</h2>
-      <div class="sub" style="margin-top:4px">Tap a category to leave it out of your totals, or tap again to count it again (e.g. Income Tax, Transfer, Investment, Loan). Its entries stay in the list, faded, and are never marked to review.</div>
+      <div class="sub" style="margin-top:4px">Tap to leave a category out of your totals, tap again to count it. Its entries stay in the list, faded, and are never marked to review.</div>
       <div class="chips" id="exclChips" style="margin-top:10px"></div>
     </div>
     <div class="card native-only">
       <h2>📂 Statement folder</h2>
       <div class="sub" id="folderStatus">No folder chosen.</div>
-      <button class="btn primary" id="folderPick">Choose a folder (e.g. in iCloud Drive)</button>
+      <button class="btn tinted" id="folderPick">Choose a folder (e.g. in iCloud Drive)</button>
       <button class="btn ghost hidden" id="folderCheck">↻ Check the folder now</button>
       <button class="btn ghost hidden" id="folderRescan">↺ Import everything in the folder again</button>
       <button class="btn ghost hidden" id="folderClear">Stop watching this folder</button>
@@ -673,7 +861,7 @@
     <div class="card native-only">
       <h2>☁️ iCloud sync</h2>
       <div class="sub" id="cloudStatus">Checking iCloud…</div>
-      <label class="mchk" style="margin-top:12px"><input type="checkbox" id="cloudOn"><span>Sync with iCloud (private to your Apple ID)</span></label>
+      <label class="mchk" style="margin-top:8px"><input type="checkbox" id="cloudOn"><span>Sync with iCloud<span class="help">Keeps the same data on your iPhone and iPad, in your private iCloud. Off: data stays on this iPhone. Turning it back on combines both.</span></span></label>
       <button class="btn ghost" id="cloudNow">↻ Sync now</button>
       <div class="sub">Uses the Apple ID this iPhone is signed in to — no extra sign-in. Your data is kept in your private iCloud and appears on your other iPhone/iPad with Kharcha. Changes made on different devices are merged.</div>
     </div>
@@ -693,30 +881,33 @@
   </section>
 </main>
 
-<button class="fab" id="fab" aria-label="Add transaction">+</button>
+<button class="fab glassfx" id="fab" aria-label="Add transaction"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4.5v15M4.5 12h15" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"/></svg></button>
 
-<nav>
-  <button data-view="list" class="active" style="position:relative"><span>🧾</span>Expenses<b class="badge hidden" id="navBadge"></b></button>
+<nav class="glass glassfx">
+  <span class="lens" aria-hidden="true"></span>
+  <button data-view="list" class="active"><span>🧾</span>Expenses<b class="badge hidden" id="navBadge"></b></button>
   <button data-view="summary"><span>📊</span>Summary</button>
   <button data-view="analysis"><span>📈</span>Analysis</button>
   <button data-view="settings"><span>⚙️</span>Settings</button>
 </nav>
 
+<div class="sheet-dim" id="sheetDim" aria-hidden="true"></div>
 <div class="sheet-bg" id="sheetBg"></div>
 
 <!-- Add / edit sheet -->
 <form class="sheet" id="sheet" autocomplete="off">
-  <div class="grab"></div>
+  <div class="grab" aria-hidden="true"></div>
   <h2 id="sheetTitle" style="text-align:center">Add transaction</h2>
-  <div class="seg" id="fType">
+  <div class="seg" id="fType" role="group" aria-label="Type">
     <button type="button" data-type="debit">Expense</button>
     <button type="button" data-type="credit">Income</button>
   </div>
+  <div class="sub seg-help">Money out or money in. The categories below change to match.</div>
   <input class="amount-input" id="fAmount" type="number" inputmode="decimal" step="any" min="0" placeholder="0.00" required style="margin-top:10px">
   <div class="sub hidden" id="fAppAmt" style="margin:4px 0 0"></div>
   <label>Category</label>
   <div class="chips" id="fCats"></div>
-  <label class="mchk hidden" id="fCatAllRow" style="font-size:14px;line-height:1.35"><input type="checkbox" id="fCatAll"><span>Also move <b id="fCatAllN">0</b> other <span id="fCatAllWord">entries</span> from <b id="fCatAllWho"></b> to <b id="fCatAllCat"></b></span></label>
+  <label class="mchk hidden" id="fCatAllRow"><input type="checkbox" id="fCatAll"><span>Also move <b id="fCatAllN">0</b> other <b id="fCatAllWho"></b> <span id="fCatAllWord">entries</span> to <b id="fCatAllCat"></b><span class="help">Moves the other entries Kharcha filed automatically; ones you picked yourself stay put. Untick to change only this one.</span></span></label>
   <div id="fGroupWrap" class="hidden"><label>Group</label><div class="chips" id="fGroup"></div></div>
   <div class="row2">
     <div><label for="fDate">Date</label><input id="fDate" type="date" required></div>
@@ -728,12 +919,12 @@
   <label for="fComment">Comment</label>
   <input id="fComment" type="text" placeholder="What was this for?" maxlength="300">
   <div class="sugs hidden" id="fSuggest"></div>
-  <div id="fMatch" class="hidden" style="margin-top:8px;font-size:14px;line-height:1.35">
-    <label class="mchk" id="fMatchAmtRow"><input type="checkbox" id="fMatchAmt"><span>Also apply to <b id="fMatchAmtN">0</b> with the same payer &amp; amount</span></label>
-    <label class="mchk" id="fMatchAnyRow"><input type="checkbox" id="fMatchAny"><span>Also apply to <b id="fMatchAnyN">0</b> from the same payer, any amount</span></label>
-    <label class="mchk"><input type="checkbox" id="fMatchFuture"><span>Use for future imports from <b id="fMatchWho"></b></span></label>
+  <div id="fMatch" class="hidden" style="margin-top:4px">
+    <label class="mchk" id="fMatchAmtRow"><input type="checkbox" id="fMatchAmt"><span>Add this comment to <b id="fMatchAmtN">0</b> <span id="fMatchAmtW">others</span> from <b class="fMatchWho"></b> of the same amount<span class="help">Puts this comment on the others that have none yet and clears their “to review” mark. Off by default for round sums like ₹500.</span></span></label>
+    <label class="mchk" id="fMatchAnyRow"><input type="checkbox" id="fMatchAny"><span>Add this comment to all <b id="fMatchAnyN">0</b> from <b class="fMatchWho"></b> without one, any amount<span class="help">Same, for every amount from this payer. It also makes the future-imports tick below cover any amount.</span></span></label>
+    <label class="mchk"><input type="checkbox" id="fMatchFuture"><span>Comment future <b id="fMatchWho"></b> entries <span id="fMatchFutAmt">of this amount</span> automatically<span class="help">New statement, SMS and email entries from this payer of this amount (any amount, if ticked above) get this comment and skip review.</span></span></label>
   </div>
-  <div id="fRefund" class="hidden" style="margin-top:10px;font-size:14px;line-height:1.35"></div>
+  <div id="fRefund" class="hidden" style="margin-top:10px;font-size:15px;line-height:20px"></div>
   <div id="fAcctWrap"><label for="fAcct">Account</label><select id="fAcct"></select></div>
   <label for="fNote">Note</label>
   <input id="fNote" type="text" placeholder="e.g. Lunch with team" maxlength="200">
@@ -794,7 +985,7 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
 
 <!-- Paste SMS sheet -->
 <div class="sheet" id="catSheet">
-  <div class="grab"></div>
+  <div class="grab" aria-hidden="true"></div>
   <h2 style="text-align:center" id="catTitle">Edit category</h2>
   <div class="row2" style="grid-template-columns: 64px 1fr; margin-top:6px">
     <input id="catEmoji" maxlength="8" aria-label="Emoji" style="text-align:center;font-size:22px">
@@ -807,7 +998,7 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
   <div class="chips" id="catGroupPick" style="margin-top:6px"></div>
   <label for="catKind">Used for</label>
   <select id="catKind"><option value="debit">Expenses</option><option value="credit">Income</option><option value="both">Both</option></select>
-  <label class="mchk"><input type="checkbox" id="catExclude"><span>Not real spending or income (like Transfer, Investment): faded, left out of totals and never marked to review</span></label>
+  <label class="mchk"><input type="checkbox" id="catExclude"><span>Don't count in spending or income<span class="help">For money moving between your own accounts (Transfer, Investment, Loan). Entries stay listed, faded, left out of totals, never to review.</span></span></label>
   <div class="sub" id="catUse" style="margin-top:10px"></div>
   <button type="button" class="btn primary" id="catSave">Save</button>
   <div id="catDelWrap">
@@ -819,7 +1010,7 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
 </div>
 
 <div class="sheet" id="smsSheet">
-  <div class="grab"></div>
+  <div class="grab" aria-hidden="true"></div>
   <h2 style="text-align:center">Add from bank SMS</h2>
   <div class="sub" style="text-align:center;margin-bottom:10px">Paste one or more bank / UPI / card messages. Each becomes a transaction you can review.</div>
   <textarea id="smsText" rows="7" placeholder="Sent Rs.7500.00 from A/c *9226 on 03-11-26 to SHYAMKANT HARIBHAU MORE.RRN 752628445212…"></textarea>
@@ -831,7 +1022,7 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
 
 <!-- Gmail browser: pick emails one by one -->
 <div class="sheet tall" id="mailSheet">
-  <div class="grab"></div>
+  <div class="grab" aria-hidden="true"></div>
   <div class="imp-head">
     <h2 style="text-align:center">Emails</h2>
     <div class="sub" id="mailInfo" style="text-align:center;margin-top:2px"></div>
@@ -843,7 +1034,7 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
 
 <!-- Import preview sheet -->
 <div class="sheet tall" id="impSheet">
-  <div class="grab"></div>
+  <div class="grab" aria-hidden="true"></div>
   <div class="imp-head">
     <h2 style="text-align:center" id="impTitle">Import statement</h2>
     <div class="sub" id="impInfo" style="text-align:center;margin-top:2px"></div>
@@ -857,13 +1048,16 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
         <div><label>Single amount column</label><select data-map="amount"></select></div>
         <div><label>Dr/Cr type column</label><select data-map="type"></select></div>
         <div><label>Closing balance</label><select data-map="balance"></select></div>
-        <div><label>Date format</label>
-          <select id="impDateFmt"><option value="dmy">Day / Month / Year</option><option value="mdy">Month / Day / Year</option></select></div>
-        <div><label>Single amount: debits are</label>
-          <select id="impSign"><option value="neg-debit">Negative (bank)</option><option value="pos-debit">Positive (credit card)</option></select></div>
+        <div class="map-wide"><label for="impDateFmt">Date format</label>
+          <select id="impDateFmt"><option value="dmy">Day / Month / Year</option><option value="mdy">Month / Day / Year</option></select>
+          <div class="sub">How dates in this file are written. Kharcha guesses; change it if dates look wrong (3 April read as 4 March).</div></div>
+        <div class="map-wide"><label for="impSign">Money spent shows as</label>
+          <select id="impSign"><option value="neg-debit">Minus (bank)</option><option value="pos-debit">Plus (credit card)</option></select>
+          <div class="sub">Only for files with one amount column. Bank statements show spending as minus, card statements as plus. Flip it if they look swapped.</div></div>
       </div>
     </details>
-    <select id="impAcct" aria-label="Account for these transactions" style="margin:4px 0 8px;padding:9px 12px;font-size:14px"></select>
+    <select id="impAcct" aria-label="Account for these transactions" style="margin-top:4px"></select>
+    <div class="sub" id="impAcctHelp" style="margin:6px 4px 8px">Kharcha picks each row's account from the statement or message. Pick one to put every row in it, or none. Duplicates are checked again.</div>
     <div class="filters" id="impFilters"></div>
   </div>
   <div class="imp-body" id="impList"></div>
@@ -1548,15 +1742,19 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     matchShown = k ? { k, type: e.type, amt: amtKey(e) } : null;
     if (!k) { $('fMatchAmt').checked = $('fMatchAny').checked = $('fMatchFuture').checked = false; return; }
     const same = commentMatches(e, true).length, any = commentMatches(e, false).length;
-    $('fMatchAmtN').textContent = same; $('fMatchAnyN').textContent = any;
+    $('fMatchAmtN').textContent = same; $('fMatchAnyN').textContent = any; $('fMatchAmtW').textContent = same === 1 ? 'other' : 'others';
     $('fMatchAmtRow').classList.toggle('hidden', !same);
     $('fMatchAnyRow').classList.toggle('hidden', any <= same);
-    $('fMatchWho').textContent = payerName(k);
+    $('fMatch').querySelectorAll('#fMatchWho, .fMatchWho').forEach(b => { b.textContent = payerName(k); });
     const round = isRound(e.amount);
     $('fMatchAmt').checked = !!same && !round;
     $('fMatchAny').checked = false;
     $('fMatchFuture').checked = !round;
+    matchFutWord();
   }
+  // "Comment future X entries of this amount / of any amount automatically": follows the any-amount tick
+  const matchFutWord = () => { $('fMatchFutAmt').textContent = $('fMatchAny').checked && !$('fMatchAnyRow').classList.contains('hidden') ? 'of any amount' : 'of this amount'; };
+  $('fMatchAny').addEventListener('change', matchFutWord);
   // ---------- learning from past entries: suggestions and repeating payments ----------
   let payerIdx = { stamp: -1, n: -1, map: null, arr: null };
   function payerIndex() {
@@ -1841,7 +2039,7 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
   function renderAmtBar(base) {
     const custom = minAmt && !AMT_PRESETS.includes(minAmt);
     const toReview = base.filter(e => e.unread).length;
-    $('amtBar').innerHTML = (toReview || reviewOnly ? `<button class="chip ${reviewOnly ? 'sel' : ''}" data-review="1">● To review ${toReview}</button>` : '') + AMT_PRESETS.map(v =>
+    $('amtBar').innerHTML = (toReview || reviewOnly ? `<button class="chip ${reviewOnly ? 'sel' : ''}" data-review="1" aria-pressed="${reviewOnly}">● To review ${toReview}</button>` : '') + AMT_PRESETS.map(v =>
       `<button class="chip ${minAmt === v ? 'sel' : ''}" data-min="${v}">${v ? 'Over ' + fmt(v).replace(/\.00$/, '') : 'All amounts'}</button>`).join('') +
       `<button class="chip ${custom ? 'sel' : ''}" data-min="custom">${custom ? 'Over ' + fmt(minAmt).replace(/\.00$/, '') : 'Custom…'}</button>`;
     const groups = allGroups();
@@ -1852,6 +2050,7 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     if (catFilter) $('amtBar').innerHTML = `<button class="chip sel" data-catoff="1">${esc(catOf(catFilter).emoji || '')} ${esc(catFilter)} ✕</button>` + $('amtBar').innerHTML;
     if (idFilter) $('amtBar').innerHTML = `<button class="chip sel" data-idsoff="1">💥 ${idFilter.size === 1 ? 'The large payment' : `${idFilter.size} large payments`} ✕</button>` + $('amtBar').innerHTML;
     if (dayFilter) $('amtBar').innerHTML = `<button class="chip sel" data-dayoff="1">📅 ${esc(new Date(dayFilter + 'T00:00').toLocaleDateString(undefined, { weekday: 'short', day: 'numeric', month: 'short' }))} ✕</button>` + $('amtBar').innerHTML;
+    $('reviewHelp').classList.toggle('hidden', !reviewOnly);
   }
   function keepGroupFilter(g) {
     groupFilter = g;
@@ -2586,7 +2785,7 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     if (!b) { bar.classList.add('hidden'); $('budgetText').textContent = 'Set a monthly budget in Settings'; return; }
     bar.classList.remove('hidden');
     const pct = total / b * 100;
-    bar.firstElementChild.style.width = Math.min(100, pct) + '%';
+    bar.firstElementChild.style.transform = `scaleX(${Math.min(100, pct) / 100})`;
     bar.classList.toggle('over', pct > 100);
     bar.classList.toggle('near', pct >= 80 && pct <= 100);
     $('budgetText').textContent = (pct > 100
@@ -2597,7 +2796,7 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
   function amtHtml(e) {
     const cls = (e.type === 'credit' ? 'credit' : 'debit') + (counted(e) ? '' : ' excluded');
     const amt = `<div class="amt ${cls}">${e.type === 'credit' ? '+' : '−'}${fmt(e.amount)}</div>`;
-    return e.unread ? `<div class="amtwrap">${amt}<span class="rv">REVIEW</span></div>` : amt;
+    return e.unread ? `<div class="amtwrap">${amt}<span class="rv">Review</span></div>` : amt;
   }
 
   // "Spent" / "Income" tapped: the list shows only the entries that make up that total. "Invested"
@@ -2646,10 +2845,11 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     renderBudget(acctFilter ? spentOf(inRange(periodRange(), true)) : spent, !!acctFilter);
     const fa = acctById(acctFilter);
     const inv = investedOf(items);
-    $('incomeText').innerHTML = [income ? `<span data-showkind="income" role="button" style="cursor:pointer">Income <b style="color:var(--income)">${fmt(income)}</b> ›</span> · Net ${fmt(income - spent)}` : '',
-      inv.n ? `<span data-showinvest="1" role="button" style="cursor:pointer">📈 Invested <b>${fmt(inv.out)}</b>${inv.back ? ` · came back <b style="color:var(--income)">${fmt(inv.back)}</b>` : ''} ›</span>` : '',
-      fa && fa.bal ? `Balance <b>${fmt(fa.bal.amount)}</b> on ${new Date(fa.bal.date + 'T00:00').toLocaleDateString(undefined, { day: 'numeric', month: 'short' })}` : ''
-    ].filter(Boolean).join('<br>');
+    // Income and Invested are rows you can tap (44 pt tall), each opening the list with only those entries
+    $('incomeText').innerHTML = [income ? `<span class="linkrow" data-showkind="income" role="button"><span>Income <b style="color:var(--income)">${fmt(income)}</b> · Net ${fmt(income - spent)}</span><span class="chev" aria-hidden="true">›</span></span>` : '',
+      inv.n ? `<span class="linkrow" data-showinvest="1" role="button"><span>📈 Invested <b>${fmt(inv.out)}</b>${inv.back ? ` · came back <b style="color:var(--income)">${fmt(inv.back)}</b>` : ''}</span><span class="chev" aria-hidden="true">›</span></span>` : '',
+      fa && fa.bal ? `<div class="balline">Balance <b>${fmt(fa.bal.amount)}</b> on ${new Date(fa.bal.date + 'T00:00').toLocaleDateString(undefined, { day: 'numeric', month: 'short' })}</div>` : ''
+    ].filter(Boolean).join('');
 
     const q = $('search').value.trim().toLowerCase();
     const base = payerFilter ? state.expenses.filter(e => samePayer(payerKey(e), payerFilter)) : items;
@@ -2659,7 +2859,7 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
       const dates = base.map(e => e.date).sort();
       const span = dates.length ? `${new Date(dates[0] + 'T00:00').toLocaleDateString(undefined, { month: 'short', year: 'numeric' })} – ${new Date(dates[dates.length - 1] + 'T00:00').toLocaleDateString(undefined, { month: 'short', year: 'numeric' })}` : '';
       $('payerBanner').innerHTML = `<div style="display:flex;justify-content:space-between;align-items:center;gap:10px">
-          <div><div class="total-label">All transactions with</div><div style="font-weight:700;font-size:17px">${esc(payerName(payerFilter))}</div></div>
+          <div><div class="total-label">All transactions with</div><div style="font:600 17px/22px var(--font-sys)">${esc(payerName(payerFilter))}</div></div>
           <button class="iconbtn" id="payerClose" aria-label="Close history">✕</button></div>
         <div class="sub">${base.length} transaction${base.length === 1 ? '' : 's'} · ${esc(span)}${acctFilter ? ' · all accounts' : ''}<br>
           Paid <b style="color:var(--danger)">${fmt(paid)}</b> · Received <b style="color:var(--income)">${fmt(got)}</b> · Net <b>${fmt(got - paid)}</b></div>`;
@@ -2824,8 +3024,8 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
       ex[k][e.type === 'credit' ? 'in' : 'out'] += e.amount;
     });
     $('notCounted').innerHTML = (Object.keys(ex).length ? 'Not counted: ' + Object.entries(ex).map(([c, v]) =>
-      `${c === '\u0000refund' ? '↩️ Refunded' : `${esc(catOf(c).emoji)} ${esc(c)}`} ${v.out ? fmt(v.out) + ' out' : ''}${v.out && v.in ? ', ' : ''}${v.in ? fmt(v.in) + ' in' : ''}`).join(' · ') + ' · ' : '') +
-      `<span data-gotoexcl="1" role="button" style="cursor:pointer;color:var(--accent)">Choose what isn't counted ›</span>`;
+      `${c === '\u0000refund' ? '↩️ Refunded' : `${esc(catOf(c).emoji)} ${esc(c)}`} ${v.out ? fmt(v.out) + ' out' : ''}${v.out && v.in ? ', ' : ''}${v.in ? fmt(v.in) + ' in' : ''}`).join(' · ') + '<span hidden> · </span>' : '') +
+      `<span class="linkrow accent" data-gotoexcl="1" role="button"><span>Choose what isn't counted</span><span class="chev" aria-hidden="true"> ›</span></span>`;
     renderRecurring();
     renderGroups(items);
     $('catBars').innerHTML = debits.length ? barsHtml(debits, '') : `<div class="sub">Nothing spent ${periodWord()}.</div>`;
@@ -2935,7 +3135,7 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
       (f > 0.004 ? `<path class="an-grow" d="${arc(0, f)}" fill="none" stroke-width="${sw}" stroke-linecap="round" style="stroke:${col}"/>` : '') +
       `<line x1="${f1(t0[0])}" y1="${f1(t0[1])}" x2="${f1(t1[0])}" y2="${f1(t1[1])}" class="axis" style="stroke:var(--muted)"/>` +
       `<text x="${f1(t1[0] - 4)}" y="${f1(t1[1] - 2)}" text-anchor="end">20%</text>` +
-      `<text x="${cx}" y="${cy - 8}" text-anchor="middle" class="t1" style="font-size:24px;font-weight:700">${rate == null ? '—' : esc((Math.round(rate * 100) < 0 ? '−' : '') + Math.abs(Math.round(rate * 100)) + '%')}</text>` +
+      `<text x="${cx}" y="${cy - 8}" text-anchor="middle" class="t1" style="font-size:22px;font-weight:700">${rate == null ? '—' : esc((Math.round(rate * 100) < 0 ? '−' : '') + Math.abs(Math.round(rate * 100)) + '%')}</text>` +
       `<text x="${cx}" y="${cy + 8}" text-anchor="middle">${rate == null ? 'no income' : rate < 0 ? 'overspent' : 'saved'}</text>` +
       `<text x="${cx - R}" y="${h - 1}" text-anchor="middle">0</text><text x="${cx + R}" y="${h - 1}" text-anchor="middle">100%</text>`;
     return vzSvg(w, h, body, rate == null ? 'Savings rate: no income' : `Savings rate ${Math.round(rate * 100)}% of income`);
@@ -3078,7 +3278,7 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
       (op ? ` style="fill:var(--vz-spend);fill-opacity:${op}"` : '') +
       ` data-tip="${esc(tip)}"${future ? '' : ` ${pick ? 'data-pick' : 'data-go'}="day:${iso}" tabindex="0" role="button"`} aria-label="${esc(tip)}"/>`;
     // day numbers in text ink (dark on the pale light-mode coral, light on the dim dark-mode one); the strongest band takes --vz-heat-hi
-    if (numbered) s += `<text x="${f1(x + 5)}" y="${f1(y + 13)}" style="pointer-events:none;font-size:10px;${op === 1 ? 'fill:var(--vz-heat-hi);font-weight:600' : future ? '' : 'fill:var(--text)'}">${+iso.slice(8)}</text>`;
+    if (numbered) s += `<text x="${f1(x + 5)}" y="${f1(y + 13)}" style="pointer-events:none;font-size:11px;${op === 1 ? 'fill:var(--vz-heat-hi);font-weight:600' : future ? '' : 'fill:var(--text)'}">${+iso.slice(8)}</text>`;
     return s;
   }
   // a month as a calendar (Mon … Sun)
@@ -3429,7 +3629,7 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     return `<div class="card an-head-card">
       <div class="total-label">${m.isCur ? `${esc(m.r.label)} so far` : esc(m.r.label)}</div>
       <div class="an-head">${vzGauge(rate)}
-        <div><div class="total-label" style="font-size:11px">${saved < 0 ? 'Overspent' : 'Saved'}</div>
+        <div><div class="total-label">${saved < 0 ? 'Overspent' : 'Saved'}</div>
           <div class="an-big" id="anSaved" style="${saved < 0 ? 'color:var(--danger)' : ''}">${esc(fmt(saved))}</div>
           <div class="an-status ${stCls}">${esc(status)}</div>
           ${anDelta(saved, prev ? prev.i - prev.s : null, true, prev ? prev.label : '', true)}${anDelta(saved, avg ? avg.i - avg.s : null, true, avg ? avg.label : '', true)}</div></div>
@@ -3527,7 +3727,8 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
         <div class="nm">${esc(x.name)}<small>${pct(x.amt / total)} · ${plural(x.n, 'payment')}</small></div><span></span>
         <div class="v" style="color:var(--income)">${esc(fmt0(x.amt))}${anChange(x.amt, x.prev, true)}</div></div>`).join('') +
       (list.length > 12 ? `<div class="sub">…and ${list.length - 12} more</div>` : '');
-    const tg = !m.ipay.length ? '' : `<div class="chips an-toggle"><button class="chip ${by === 'payer' ? 'sel' : ''}" data-incby="payer">By payer</button><button class="chip ${by === 'cat' ? 'sel' : ''}" data-incby="cat">By category</button></div>`;
+    const tg = !m.ipay.length ? '' : `<div class="seg an-toggle" role="group" aria-label="Group income" style="--seg-i:${by === 'payer' ? 0 : 1}"><button type="button" class="${by === 'payer' ? 'sel' : ''}" data-incby="payer">By payer</button><button type="button" class="${by === 'cat' ? 'sel' : ''}" data-incby="cat">By category</button></div>` +
+      `<div class="sub" style="margin-top:6px">Group your income by who paid you or by category.</div>`;
     return anDonutCard('Where the income came from', m.prev ? `Change against ${esc(m.prev.word)}` : 'Income by source', total, parts, rows, tg);
   }
   function anCardWaterfall(m, W) {
@@ -3617,7 +3818,7 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
       el.style.fontSize = '';
       const w = el.clientWidth, sw = el.scrollWidth; if (!w || sw <= w) return;
       const fs = parseFloat(getComputedStyle(el).fontSize);
-      el.style.fontSize = Math.max(10, Math.floor(fs * w / sw * 10) / 10) + 'px';
+      el.style.fontSize = Math.max(11, Math.floor(fs * w / sw * 10) / 10) + 'px';
     });
     root.querySelectorAll('.an-tbl').forEach(t => {
       t.classList.remove('short');
@@ -3683,7 +3884,14 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     sec.addEventListener('pointerleave', e => { if (e.pointerType !== 'touch') xh(e, true); }, true);   // a finger lifted: its reading stays
     sec.addEventListener('click', e => {
       if (e.target.closest('[data-anacct]')) { acctFilter = ''; render(); return; }
-      const t = e.target.closest('[data-incby]'); if (t) { anIncBy = t.dataset.incby; renderAnalysis(); return; }
+      const t = e.target.closest('[data-incby]');
+      if (t) {
+        const was = t.parentElement.style.getPropertyValue('--seg-i');
+        anIncBy = t.dataset.incby; renderAnalysis();
+        const ns = $('anRoot').querySelector('.an-toggle'), now = ns && ns.style.getPropertyValue('--seg-i');
+        if (ns && was !== '' && was !== now) { ns.style.setProperty('--seg-i', was); void ns.offsetWidth; ns.style.setProperty('--seg-i', now); }
+        return;
+      }
       const pk = pickAt(e);
       if (pk) {
         if (lastPtr === 'mouse') { anGo(pk.getAttribute('data-pick')); return; }
@@ -3769,9 +3977,9 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     $('fCats').classList.toggle('editing', catEditMode);
     $('fCats').innerHTML = catsFor(formType).map(c =>
       `<button type="button" class="chip ${c.name === selectedCat ? 'sel' : ''}" data-cat="${esc(c.name)}">${catEditMode ? '✏️ ' : ''}${esc(c.emoji)} ${esc(c.name)}</button>`).join('') +
-      (catEditMode ? `<button type="button" class="chip sel" data-catedit="done">✓ Done</button>`
-        : `<button type="button" class="chip add" data-catnew="1">＋ New</button><button type="button" class="chip add" data-catedit="1">✏️ Edit</button>`) +
-      (catEditMode ? `<span class="sub" style="margin:0;align-self:center">Tap a category to rename, change or delete it</span>` : '');
+      (catEditMode ? `<button type="button" class="chip sel" data-catedit="done" aria-pressed="true">✓ Done</button>`
+        : `<button type="button" class="chip add" data-catnew="1">＋ New</button><button type="button" class="chip add" data-catedit="1" aria-pressed="false">✏️ Edit categories</button>`) +
+      (catEditMode ? `<span class="sub" style="margin:0;align-self:center;flex-basis:100%">Tap a category to rename it, change its emoji or delete it. Tap ✓ Done to go back to picking one.</span>` : '');
     renderCatAll();
     const groups = allGroups();
     $('fGroupWrap').classList.toggle('hidden', !groups.length);
@@ -4862,7 +5070,7 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     const it = imp.items;
     $('impTitle').textContent = imp.mode === 'file' ? 'Import statement' : 'Review transactions';
     const accts = state.accounts || [];
-    $('impAcct').classList.toggle('hidden', !accts.length);
+    $('impAcct').classList.toggle('hidden', !accts.length); $('impAcctHelp').classList.toggle('hidden', !accts.length);
     if (accts.length) {
       const detected = imp.mode === 'file' && imp.stmtAcct.id ? ` (${acctById(imp.stmtAcct.id).name})` : '';
       $('impAcct').innerHTML = `<option value="">Account: matched automatically${esc(detected)}</option>` +
@@ -4896,7 +5104,7 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
       filters.push([k, `${label} ${it.filter(x => acctKeyOf(x) === k).length}`]);
     });
     $('impFilters').innerHTML = filters.map(([k, l]) => `<button class="chip ${imp.filter === k ? 'sel' : ''}" data-f="${esc(k)}">${esc(l)}</button>`).join('') +
-      `<button class="chip" data-tick="1">✓ Tick shown</button><button class="chip" data-tick="0">✕ Untick shown</button>` +
+      `<button class="chip" data-tick="1">✓ Tick all shown</button><button class="chip" data-tick="0">✕ Untick all shown</button>` +
       (aiOn() && other ? `<button class="chip" data-ai="cat">🤖 Categorise ${other}</button>` : '') +
       (aiOn() && imp.mode === 'file' && imp.rows.length ? `<button class="chip" data-ai="read">🤖 Read with DeepSeek</button>` : '');
 
@@ -4914,19 +5122,24 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     });
     const rows = it.map((x, i) => !pass(x) ? '' : `
       <div class="irow ${x.include ? '' : 'off'}" data-i="${i}">
-        <input type="checkbox" ${x.include ? 'checked' : ''} aria-label="Include">
+        <input type="checkbox" ${x.include ? 'checked' : ''} aria-label="Add this transaction">
         <div class="d"><div class="desc">${esc(noteText(x) || '(no description)')}${badgeFor(appOf(x, imp.acctOverride ? finalAcct(x) : x.account))}</div>
           <div class="meta">${new Date(x.date + 'T00:00').toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' })}${x.dup === 'exact' ? '<span class="tag warn">already imported</span>' : x.dup === 'deleted' ? '<span class="tag warn">you deleted this before · tick to add it again</span>' : x.dup === 'fixed' ? '<span class="tag warn">read wrongly before · that entry is corrected</span>' : x.dup === 'balance' ? '<span class="tag warn">same as existing entry · balance matches</span>' : x.dup === 'utr' ? `<span class="tag warn">same payment already in Kharcha · UTR matches${x.otherAmt ? ` · ${fmt(Math.min(x.amount, x.otherAmt))} of ${fmt(Math.max(x.amount, x.otherAmt))} paid from the bank, the rest from the wallet` : ''}</span>` : x.dup ? '<span class="tag warn">possible duplicate</span>' : ''}${
             x.balanceGap ? '<span class="tag warn">balance doesn’t add up here</span>' : ''}${
             acctById(finalAcct(x)) ? `<span class="tag">${esc(acctLabel(acctById(finalAcct(x))))}</span>`
             : x.acctDigits && !imp.acctOverride ? `<span class="tag">New account: ${esc(newAcctLabel(x))}</span>`
             : x.walletName && !imp.acctOverride ? `<span class="tag">New account: 👛 ${esc(x.walletName)}</span>` : ''}${
-            x._sug && x._sug.comment ? `<span class="tag sug ${x.comment === x._sug.comment ? 'on' : ''}" data-sug="${i}" role="button">💡 ${esc(x._sug.comment)}${x.comment === x._sug.comment ? ' ✓' : '?'}</span>`
+            x._sug && x._sug.comment ? ''
             : x.comment ? `<span class="tag">💬 ${esc(x.comment)}</span>` : x.sugCat ? `<span class="tag">💡 ${esc(x.sugCat)}</span>` : ''}</div></div>
         <div class="amt ${x.type === 'credit' ? 'credit' : 'debit'}">${x.type === 'credit' ? '+' : '−'}${fmt(x.amount)}</div>
+        ${x._sug && x._sug.comment ? `<button type="button" class="tag sug ${x.comment === x._sug.comment ? 'on' : ''}" data-sug="${i}" aria-pressed="${x.comment === x._sug.comment}">${x.comment === x._sug.comment ? `✓ “${esc(x._sug.comment)}” added` : `💡 Use “${esc(x._sug.comment)}”?`}</button>` : ''}
         <select aria-label="Category">${opts[x.type].map(c => `<option ${c.name === x.category ? 'selected' : ''} value="${esc(c.name)}">${esc(c.emoji)} ${esc(c.name)}</option>`).join('')}</select>
       </div>`).join('');
-    $('impList').innerHTML = rows || '<div class="empty">Nothing here.</div>';
+    // what the ticks do, once at the top of the list (not on every row)
+    const help = !it.length ? '' : `<div class="sub imp-help"><p>Ticked rows are added. An unticked row that matches an entry already in Kharcha is merged into it instead of added twice.</p>` +
+      `<p><b>✓ Tick all shown</b> / <b>✕ Untick all shown</b> tick or untick every row in the filter you're viewing. Rows already in Kharcha or deleted before are ticked one by one.</p>` +
+      (it.some(x => x._sug && x._sug.comment) ? `<p><b>💡 Use “…”?</b> puts in the comment and category you gave this payer before; same-amount rows here get it too. Tap again to drop the comment.</p>` : '') + `</div>`;
+    $('impList').innerHTML = rows ? help + rows : help + '<div class="empty">Nothing here.</div>';
     // nothing new but some rows match existing entries: Import still merges them (and records the period)
     const merges = it.filter(x => !x.include && x.match && x.dup !== 'exact').length;
     $('impGo').textContent = inc.length ? `Import ${inc.length} transaction${inc.length === 1 ? '' : 's'}` : merges ? `Merge ${merges} into existing entr${merges === 1 ? 'y' : 'ies'}` : 'Nothing new to import';
@@ -5086,7 +5299,7 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     }
     renderImport();
     showBg();
-    $('impList').scrollTop = 0;
+    $('impSheet').scrollTop = 0;
     requestAnimationFrame(() => $('impSheet').classList.add('open'));
   }
   // One Amount column for money in and out: negative is money out, unless it is a card's (Amex-style exports show
@@ -5372,7 +5585,7 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     closeAll();
     renderImport();
     showBg();
-    $('impList').scrollTop = 0;
+    $('impSheet').scrollTop = 0;
     requestAnimationFrame(() => $('impSheet').classList.add('open'));
     return true;
   }
@@ -5428,7 +5641,7 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     // (rows already in Kharcha, or deleted before, are ticked one by one only)
     if (t) { imp.items.forEach(x => { if (imp.pass && imp.pass(x) && !(t.dataset.tick === '1' && (x.dup === 'exact' || x.dup === 'deleted'))) x.include = t.dataset.tick === '1'; }); renderImport(); return; }
     const b = e.target.closest('[data-f]'); if (!b) return;
-    imp.filter = b.dataset.f; renderImport(); $('impList').scrollTop = 0;
+    imp.filter = b.dataset.f; renderImport();
   });
   $('impList').addEventListener('click', e => {
     const t = e.target.closest('[data-sug]'); if (!t) return;
@@ -5445,7 +5658,13 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
   $('impList').addEventListener('change', e => {
     const row = e.target.closest('.irow'); if (!row) return;
     const x = imp.items[+row.dataset.i];
-    if (e.target.type === 'checkbox') { x.include = e.target.checked; renderImport(); return; }
+    if (e.target.type === 'checkbox') {
+      x.include = e.target.checked; renderImport();
+      // the list is drawn again: let the new tick draw its check in, as if it were the same one
+      const c = $('impList').querySelector(`.irow[data-i="${row.dataset.i}"] input[type=checkbox]`);
+      if (c && c.checked && !reduceMotion()) { c.checked = false; void c.offsetWidth; c.checked = true; }
+      return;
+    }
     if (e.target.tagName === 'SELECT') {
       x.category = e.target.value; x.touched = true;
       const k = payeeless(x) ? '' : learn(x.desc, x.category, x.type);
@@ -5555,6 +5774,7 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     if (current > new Date()) { current = new Date(); current.setDate(1); render(); }   // never past today's month
   });
   $('monthTitle').addEventListener('click', () => setPeriod(period === 'fy' ? 'month' : 'fy'));
+  $('monthTitle').addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); $('monthTitle').click(); } });
   $('periodSeg').addEventListener('click', e => { const b = e.target.closest('[data-period]'); if (b) setPeriod(b.dataset.period); });
   $('search').addEventListener('input', renderList);
   $('amtBar').addEventListener('click', e => {
@@ -5660,10 +5880,82 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
     ['list', 'summary', 'analysis', 'settings'].forEach(v => $('view-' + v).classList.toggle('hidden', v !== view));
     $('fab').classList.toggle('hidden', view === 'settings');
     document.querySelector('header').classList.toggle('hidden', view === 'settings');
+    $('periodTip').classList.toggle('off', view === 'settings');
+    placeLens(true);
   }
   document.querySelectorAll('nav button').forEach(b => b.addEventListener('click', () => {
     view = b.dataset.view; syncNav(); window.scrollTo(0, 0); render();
   }));
+
+  // ---------- Liquid Glass motion: only the controls that float over content move ----------
+  const reduceMotion = () => !!(window.matchMedia && matchMedia('(prefers-reduced-motion: reduce)').matches);
+  // (nothing animates while the app first draws itself: #preloadCss goes once it has, after the first render below)
+  if (window.__EXPENSES_SOLID__) document.documentElement.classList.add('a11y-solid');   // Reduce Transparency is on (iPhone app)
+  // The tab bar's selection lens slides to the tab you pick and stretches a little on the way.
+  function placeLens(animate) {
+    const nav = document.querySelector('nav'), lens = nav && nav.querySelector('.lens'), b = nav && nav.querySelector('button.active');
+    if (!lens || !b) return;
+    const x = b.offsetLeft, from = lens._x;
+    lens.style.width = b.offsetWidth + 'px';
+    lens.style.transform = `translateX(${x}px)`;
+    if (animate && from != null && Math.abs(from - x) > 1 && !reduceMotion() && lens.animate) {
+      lens.animate([{ transform: `translateX(${from}px)` }, { transform: `translateX(${(from + x) / 2}px) scale(1.1, .9)`, offset: 0.45 }, { transform: `translateX(${x}px)` }],
+        { duration: 460, easing: 'cubic-bezier(.3, .8, .25, 1)' });
+    }
+    lens._x = x;
+  }
+  window.addEventListener('resize', () => placeLens(false));
+  placeLens(false);
+  // Segmented controls: the thumb slides under the chosen segment (its place is a CSS variable).
+  function segSync(seg) {
+    const bs = [].filter.call(seg.children, c => c.tagName === 'BUTTON'), i = bs.findIndex(b => b.classList.contains('sel'));
+    seg.style.setProperty('--seg-n', bs.length || 1);
+    if (i >= 0 && seg.style.getPropertyValue('--seg-i') !== String(i)) seg.style.setProperty('--seg-i', i);
+    seg.classList.toggle('none', i < 0);
+  }
+  ['periodSeg', 'fType'].forEach(id => {
+    const seg = $(id); segSync(seg);
+    new MutationObserver(() => segSync(seg)).observe(seg, { subtree: true, attributes: true, attributeFilter: ['class'] });
+  });
+  // While a finger is on a glass control a soft highlight follows it; a segmented control's thumb lifts.
+  let glassEl = null, glassPt = null, glassRaf = 0;
+  const glassMove = () => {
+    glassRaf = 0; if (!glassEl || !glassPt) return;
+    const r = glassEl.getBoundingClientRect();
+    glassEl.style.setProperty('--gx', Math.round(glassPt.x - r.left) + 'px'); glassEl.style.setProperty('--gy', Math.round(glassPt.y - r.top) + 'px');
+  };
+  document.addEventListener('pointerdown', e => {
+    const t = e.target.closest ? e.target : e.target.parentElement; if (!t) return;
+    const seg = t.closest('.seg'); if (seg && t.closest('button')) seg.classList.add('pressing');
+    const g = t.closest('.glassfx'); if (!g) return;
+    glassEl = g; glassPt = { x: e.clientX, y: e.clientY }; glassMove(); g.classList.add('touching');
+  }, { capture: true, passive: true });
+  document.addEventListener('pointermove', e => {
+    if (!glassEl) return;
+    glassPt = { x: e.clientX, y: e.clientY }; if (!glassRaf) glassRaf = requestAnimationFrame(glassMove);
+  }, { passive: true });
+  const glassEnd = () => {
+    if (glassEl) glassEl.classList.remove('touching'); glassEl = null;
+    document.querySelectorAll('.seg.pressing').forEach(x => x.classList.remove('pressing'));
+  };
+  ['pointerup', 'pointercancel'].forEach(t => document.addEventListener(t, glassEnd, { capture: true, passive: true }));
+  document.addEventListener('touchstart', () => {}, { passive: true });   // lets iOS show :active press states
+  // The dimmed backdrop fades in and out (#sheetBg itself only catches taps).
+  {
+    const bg = $('sheetBg'), dim = $('sheetDim');
+    const mirror = () => { dim.classList.toggle('on', bg.style.display === 'block'); dim.classList.toggle('over', bg.classList.contains('over')); };
+    new MutationObserver(mirror).observe(bg, { attributes: true, attributeFilter: ['style', 'class'] });
+  }
+  // A tip on Month / Financial year, until it is used once or closed
+  {
+    const KEY = 'expense-tracker-v1:tip-period';
+    let seen = false; try { seen = !!localStorage.getItem(KEY); } catch (e) {}
+    const done = () => { $('periodTip').classList.add('hidden'); try { localStorage.setItem(KEY, '1'); } catch (e) {} };
+    $('periodTip').classList.toggle('hidden', seen);
+    $('periodTipX').addEventListener('click', done);
+    $('periodSeg').addEventListener('click', e => { if (e.target.closest('[data-period]')) done(); });
+    $('monthTitle').addEventListener('click', done);
+  }
 
   // ---------- settings ----------
   $('currency').addEventListener('change', e => { state.settings.currency = e.target.value; save(); toast('Currency set to ' + e.target.value); });
@@ -6095,6 +6387,7 @@ function authorize() { GmailApp.search('in:inbox', 0, 1); }
   }
   if (tidyTransfers().total) save();
   render();
+  requestAnimationFrame(() => requestAnimationFrame(() => { const pc = $('preloadCss'); if (pc) pc.remove(); }));
   (() => {
     const q = new URLSearchParams(location.search);
     const shared = [q.get('sms'), q.get('text'), q.get('title')].filter(Boolean).join('\n');
@@ -6942,7 +7235,7 @@ Rules: include only completed transactions — skip OTPs, offers, ads, due/bill 
     if (!NATIVE) return;
     const n = folderInfo.name;
     $('folderPick').textContent = n ? 'Choose a different folder' : 'Choose a folder (e.g. in iCloud Drive)';
-    $('folderPick').classList.toggle('primary', !n); $('folderPick').classList.toggle('ghost', !!n);
+    $('folderPick').classList.toggle('tinted', !n); $('folderPick').classList.toggle('ghost', !!n);
     ['folderCheck', 'folderRescan', 'folderClear'].forEach(id => $(id).classList.toggle('hidden', !n));
     const when = folderInfo.checked ? new Date(folderInfo.checked).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' }) : '';
     $('folderStatus').innerHTML = !n ? 'No folder chosen.' : `Watching <b>📂 ${esc(n)}</b>${when ? ` · checked ${esc(when)}` : ''}` +

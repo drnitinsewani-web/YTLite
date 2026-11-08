@@ -37,6 +37,8 @@ final class WebViewController: UIViewController, WKScriptMessageHandler, WKUIDel
         load()
         NotificationCenter.default.addObserver(self, selector: #selector(appDidBecomeActive),
                                                name: UIApplication.didBecomeActiveNotification, object: nil)
+        NotificationCenter.default.addObserver(self, selector: #selector(reduceTransparencyChanged),
+                                               name: UIAccessibility.reduceTransparencyStatusDidChangeNotification, object: nil)
         CloudSync.shared.onRemoteChange = { [weak self] in self?.sendCloudData() }
         CloudSync.shared.start()
     }
@@ -59,8 +61,15 @@ final class WebViewController: UIViewController, WKScriptMessageHandler, WKUIDel
     private func installStateScript(on controller: WKUserContentController) {
         controller.removeAllUserScripts()
         let saved = StateStore.load().map { jsString($0) } ?? (StateStore.hasFile ? jsString("unreadable") : "null")
-        let source = "window.__EXPENSES_NATIVE__ = true; window.__EXPENSES_NATIVE_STATE__ = \(saved);"
+        // Reduce Transparency (Settings › Accessibility) isn't a CSS media feature in WKWebView: the page is told,
+        // and draws solid surfaces instead of glass (class a11y-solid)
+        let solid = UIAccessibility.isReduceTransparencyEnabled
+        let source = "window.__EXPENSES_NATIVE__ = true; window.__EXPENSES_NATIVE_STATE__ = \(saved); window.__EXPENSES_SOLID__ = \(solid);"
         controller.addUserScript(WKUserScript(source: source, injectionTime: .atDocumentStart, forMainFrameOnly: true))
+    }
+
+    @objc private func reduceTransparencyChanged() {
+        webView.evaluateJavaScript("document.documentElement.classList.toggle('a11y-solid', \(UIAccessibility.isReduceTransparencyEnabled))")
     }
 
     @objc private func appDidBecomeActive() {
