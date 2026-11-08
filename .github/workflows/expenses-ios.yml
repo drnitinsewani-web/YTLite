@@ -1,0 +1,145 @@
+name: Expenses iOS app (TestFlight)
+
+# Builds the native iOS wrapper in ExpenseTrackerApp/.
+# - Without App Store Connect secrets: compiles an unsigned build as a check.
+# - With the secrets (see ExpenseTrackerApp/README.md): archives, signs and uploads to TestFlight.
+
+on:
+  push:
+    branches: [main, master, 'claude/**']
+    paths:
+      - 'ExpenseTracker/**'
+      - 'ExpenseTrackerApp/**'
+      - '.github/workflows/expenses-ios.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: expenses-ios-${{ github.ref }}
+  cancel-in-progress: false   # a newer push replaces a waiting build, never a running one
+
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 45
+    defaults:
+      run:
+        working-directory: ExpenseTrackerApp
+    env:
+      BUNDLE_ID: ${{ vars.IOS_BUNDLE_ID || 'com.drnitinsewani.expenses' }}
+      TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+      HAS_ASC_KEY: ${{ secrets.APP_STORE_CONNECT_KEY != '' && secrets.APP_STORE_CONNECT_KEY_ID != '' && secrets.APP_STORE_CONNECT_ISSUER_ID != '' && secrets.APPLE_TEAM_ID != '' }}
+      BUILD_NUMBER: ${{ github.run_number }}.${{ github.run_attempt }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Select Xcode 26 (App Store Connect requires the iOS 26 SDK)
+        run: |
+          XCODE=$(ls -d /Applications/Xcode_26*.app 2>/dev/null | sort -V | tail -1)
+          if [ -z "$XCODE" ]; then
+            echo "::error::No Xcode 26 on this runner. Installed: $(ls -d /Applications/Xcode*.app | xargs -n1 basename | tr '\n' ' ')"
+            exit 1
+          fi
+          sudo xcode-select -s "$XCODE"
+          xcodebuild -version
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Generate Xcode project
+        run: |
+          ./scripts/sync-web.sh
+          xcodegen generate
+          xcodebuild -version
+          echo "Bundle ID: $BUNDLE_ID  |  build $BUILD_NUMBER  |  upload to TestFlight: $HAS_ASC_KEY"
+
+      - name: Compile check (unsigned, no secrets configured)
+        if: env.HAS_ASC_KEY != 'true'
+        run: |
+          xcodebuild -project Expenses.xcodeproj -scheme Expenses -configuration Release \
+            -destination 'generic/platform=iOS' \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO DEVELOPMENT_TEAM= \
+            -quiet build
+          echo "::notice::Compiled OK. Add the App Store Connect secrets to upload builds to TestFlight."
+
+      - name: Write App Store Connect API key
+        if: env.HAS_ASC_KEY == 'true'
+        env:
+          ASC_KEY: ${{ secrets.APP_STORE_CONNECT_KEY }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/keys"
+          printf '%s\n' "$ASC_KEY" > "$RUNNER_TEMP/keys/AuthKey.p8"
+
+      - name: Remove development certificates left by earlier CI builds
+        if: env.HAS_ASC_KEY == 'true'
+        continue-on-error: true
+        env:
+          ASC_KEY_ID: ${{ secrets.APP_STORE_CONNECT_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
+        run: |
+          python3 -m pip install --quiet --break-system-packages pyjwt cryptography 2>/dev/null || python3 -m pip install --quiet --user pyjwt cryptography
+          python3 scripts/cleanup_ci_certs.py "$RUNNER_TEMP/keys/AuthKey.p8" "$ASC_KEY_ID" "$ASC_ISSUER_ID"
+
+      - name: Archive (signed)
+        if: env.HAS_ASC_KEY == 'true'
+        env:
+          ASC_KEY_ID: ${{ secrets.APP_STORE_CONNECT_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
+        run: |
+          xcodebuild -project Expenses.xcodeproj -scheme Expenses -configuration Release \
+            -destination 'generic/platform=iOS' \
+            -archivePath "$RUNNER_TEMP/Expenses.xcarchive" \
+            CURRENT_PROJECT_VERSION="$BUILD_NUMBER" \
+            -allowProvisioningUpdates \
+            -authenticationKeyPath "$RUNNER_TEMP/keys/AuthKey.p8" \
+            -authenticationKeyID "$ASC_KEY_ID" \
+            -authenticationKeyIssuerID "$ASC_ISSUER_ID" \
+            -quiet archive
+
+      - name: Check Siri / Shortcuts actions are in the app
+        if: env.HAS_ASC_KEY == 'true'
+        continue-on-error: true
+        run: |
+          APP="$RUNNER_TEMP/Expenses.xcarchive/Products/Applications/Expenses.app"
+          ls -la "$APP/Metadata.appintents" || echo "::warning::No Metadata.appintents in the app - Siri phrases will not work"
+          python3 - "$APP/Metadata.appintents/extract.actionsdata" <<'PY' || true
+          import json, sys
+          d = json.load(open(sys.argv[1]))
+          print('actions:', list(d.get('actions', {}).keys()))
+          for s in d.get('autoShortcuts', []):
+              print('shortcut:', s.get('actionIdentifier'), [p.get('key') for p in s.get('phraseTemplates', [])])
+          print('provider:', d.get('autoShortcutProviderMangledName'))
+          PY
+
+      - name: Upload to TestFlight
+        if: env.HAS_ASC_KEY == 'true'
+        env:
+          ASC_KEY_ID: ${{ secrets.APP_STORE_CONNECT_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
+        run: |
+          cat > "$RUNNER_TEMP/ExportOptions.plist" <<EOF
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+            <key>method</key><string>app-store-connect</string>
+            <key>destination</key><string>upload</string>
+            <key>teamID</key><string>${TEAM_ID}</string>
+            <key>signingStyle</key><string>automatic</string>
+            <key>manageAppVersionAndBuildNumber</key><false/>
+            <key>uploadSymbols</key><true/>
+          </dict>
+          </plist>
+          EOF
+          xcodebuild -exportArchive \
+            -archivePath "$RUNNER_TEMP/Expenses.xcarchive" \
+            -exportOptionsPlist "$RUNNER_TEMP/ExportOptions.plist" \
+            -exportPath "$RUNNER_TEMP/export" \
+            -allowProvisioningUpdates \
+            -authenticationKeyPath "$RUNNER_TEMP/keys/AuthKey.p8" \
+            -authenticationKeyID "$ASC_KEY_ID" \
+            -authenticationKeyIssuerID "$ASC_ISSUER_ID"
+          echo "::notice::Build $BUILD_NUMBER uploaded. It appears in TestFlight after Apple finishes processing (usually 5–30 minutes)."
+
+      - name: Remove API key
+        if: always()
+        run: rm -rf "$RUNNER_TEMP/keys"

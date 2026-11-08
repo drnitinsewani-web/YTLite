@@ -1,0 +1,6 @@
+www/
+Expenses.xcodeproj/
+Config/
+build/
+*.xcarchive
+__pycache__/
